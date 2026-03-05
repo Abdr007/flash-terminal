@@ -167,7 +167,8 @@ export class FStatsClient implements IDataClient {
   }
 
   async getOpenPositions(): Promise<RawOpenPosition[]> {
-    return fetchWithRetry<RawOpenPosition[]>('/positions/open');
+    const raw = await fetchWithRetry<RawOpenPosition[] | Record<string, unknown>>('/positions/open');
+    return Array.isArray(raw) ? raw : [];
   }
 
   async getFees(days = 30): Promise<FeeData> {

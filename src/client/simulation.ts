@@ -41,9 +41,10 @@ export class SimulatedFlashClient implements IFlashClient {
   private async refreshPrices(): Promise<void> {
     const logger = getLogger();
     try {
-      const positions = await this.fstats.getOpenPositions();
+      const raw = await this.fstats.getOpenPositions();
+      const positions = Array.isArray(raw) ? raw : [];
       const priceMap = new Map<string, number[]>();
-      for (const p of positions ?? []) {
+      for (const p of positions) {
         const sym = p.market_symbol ?? p.market;
         const price = p.mark_price ?? p.entry_price;
         if (sym && price && typeof price === 'number' && price > 0) {
