@@ -680,17 +680,26 @@ export const walletImport: ToolDefinition = {
         context.walletAddress = result.address;
       }
 
+      const canSign = wm?.isConnected ?? false;
+      const lines = [
+        '',
+        chalk.green('  Wallet Imported'),
+        chalk.dim('  ─────────────────'),
+        `  Name:    ${chalk.bold(name)}`,
+        `  Address: ${chalk.cyan(result.address)}`,
+        `  Set as default wallet.`,
+        '',
+      ];
+
+      if (canSign) {
+        lines.push(chalk.bgRed.white.bold('  LIVE TRADING ENABLED '));
+        lines.push('');
+      }
+
       return {
         success: true,
-        message: [
-          '',
-          chalk.green('  Wallet Imported'),
-          chalk.dim('  ─────────────────'),
-          `  Name:    ${chalk.bold(name)}`,
-          `  Address: ${chalk.cyan(result.address)}`,
-          `  Set as default wallet.`,
-          '',
-        ].join('\n'),
+        message: lines.join('\n'),
+        data: canSign ? { walletConnected: true } : undefined,
       };
     } catch (error: unknown) {
       return { success: false, message: chalk.red(`  Failed to import wallet: ${getErrorMessage(error)}`) };
@@ -760,14 +769,23 @@ export const walletUse: ToolDefinition = {
         const result = wm.loadFromFile(walletPath);
         context.walletAddress = result.address;
 
+        const lines = [
+          '',
+          chalk.green(`  Switched to wallet: ${chalk.bold(name)}`),
+          `  Address: ${chalk.cyan(result.address)}`,
+          '',
+        ];
+
+        // Signal live mode switch if wallet can sign
+        if (wm.isConnected) {
+          lines.push(chalk.bgRed.white.bold('  LIVE TRADING ENABLED '));
+          lines.push('');
+        }
+
         return {
           success: true,
-          message: [
-            '',
-            chalk.green(`  Switched to wallet: ${chalk.bold(name)}`),
-            `  Address: ${chalk.cyan(result.address)}`,
-            '',
-          ].join('\n'),
+          message: lines.join('\n'),
+          data: wm.isConnected ? { walletConnected: true } : undefined,
         };
       }
 
@@ -997,15 +1015,25 @@ export const walletConnect: ToolDefinition = {
     try {
       const { address } = wm.loadFromFile(path);
       context.walletAddress = address;
+
+      const canSign = wm.isConnected;
+      const lines = [
+        '',
+        chalk.green('  Wallet Connected'),
+        chalk.dim('  ─────────────────'),
+        `  Address: ${chalk.cyan(address)}`,
+        '',
+      ];
+
+      if (canSign) {
+        lines.push(chalk.bgRed.white.bold('  LIVE TRADING ENABLED '));
+        lines.push('');
+      }
+
       return {
         success: true,
-        message: [
-          '',
-          chalk.green('  Wallet Connected'),
-          chalk.dim('  ─────────────────'),
-          `  Address: ${chalk.cyan(address)}`,
-          '',
-        ].join('\n'),
+        message: lines.join('\n'),
+        data: canSign ? { walletConnected: true } : undefined,
       };
     } catch (error: unknown) {
       return { success: false, message: `  Failed to connect wallet: ${getErrorMessage(error)}` };

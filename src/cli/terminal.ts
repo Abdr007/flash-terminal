@@ -552,6 +552,35 @@ export class FlashTerminal {
     this.updatePrompt();
   }
 
+  /** Handle wallet connected: switch to live mode, reinitialize client, update prompt. */
+  private async handleWalletConnected(): Promise<void> {
+    // Already live — just rebuild the client with the new wallet
+    // Or switching from sim to live
+    this.config.simulationMode = false;
+    this.context.simulationMode = false;
+
+    const connection = createConnection(this.config.rpcUrl);
+
+    try {
+      const { FlashClient } = await import('../client/flash-client.js');
+      this.flashClient = new FlashClient(connection, this.walletManager, this.config);
+      this.context.flashClient = this.flashClient;
+    } catch (error: unknown) {
+      // If live client fails to init, stay in simulation
+      console.log(chalk.red(`  Failed to initialize live client: ${getErrorMessage(error)}`));
+      console.log(chalk.yellow('  Remaining in simulation mode.'));
+      this.config.simulationMode = true;
+      this.context.simulationMode = true;
+      this.flashClient = new SimulatedFlashClient(10_000);
+      this.context.flashClient = this.flashClient;
+    }
+
+    // Rebuild tool engine with updated context
+    this.engine = new ToolEngine(this.context);
+
+    this.updatePrompt();
+  }
+
   /** Phase 2: Update prompt prefix based on current mode */
   private updatePrompt(): void {
     const prefix = this.config.simulationMode
@@ -675,6 +704,11 @@ export class FlashTerminal {
     // Handle wallet disconnect: stop autopilot, switch to simulation, update prompt
     if (result.data?.disconnected) {
       this.handleDisconnect();
+    }
+
+    // Handle wallet connected: switch to live mode, reinitialize client, update prompt
+    if (result.data?.walletConnected) {
+      await this.handleWalletConnected();
     }
 
     // Handle confirmation flow
