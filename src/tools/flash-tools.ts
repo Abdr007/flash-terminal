@@ -9,6 +9,7 @@ import {
   MarketOI,
   DailyVolume,
   LeaderboardEntry,
+  getLeverageLimits,
 } from '../types/index.js';
 import {
   formatUsd,
@@ -21,6 +22,37 @@ import {
 } from '../utils/format.js';
 import { getErrorMessage } from '../utils/retry.js';
 import chalk from 'chalk';
+
+// ─── Pre-Trade Validation ───────────────────────────────────────────────────
+
+function validateLiveTradeContext(context: ToolContext): string | null {
+  if (context.simulationMode) return null;
+  if (!context.walletManager || !context.walletManager.isConnected) {
+    return 'No wallet connected. Use "wallet connect <path>" first.';
+  }
+  return null;
+}
+
+function buildLiveTradeWarnings(market: string, leverage: number, collateral?: number): string[] {
+  const warnings: string[] = [];
+  const limits = getLeverageLimits(market);
+
+  if (leverage < limits.min) warnings.push(`Leverage ${leverage}x is below minimum ${limits.min}x for ${market}`);
+  if (leverage > limits.max) warnings.push(`Leverage ${leverage}x exceeds maximum ${limits.max}x for ${market}`);
+  if (leverage >= 20) warnings.push(`High leverage (${leverage}x) — liquidation risk is significant`);
+  if (leverage >= 50) warnings.push('Extreme leverage — small price moves can liquidate');
+
+  const liqDistance = (1 / leverage) * 100;
+  if (liqDistance < 5) {
+    warnings.push(`Liquidation within ${liqDistance.toFixed(1)}% price move`);
+  }
+
+  if (collateral !== undefined && collateral > 1000) {
+    warnings.push(`Large collateral amount: ${formatUsd(collateral)}`);
+  }
+
+  return warnings;
+}
 
 // ─── flash_open_position ─────────────────────────────────────────────────────
 
@@ -42,24 +74,45 @@ export const flashOpenPosition: ToolDefinition = {
       leverage: number;
       collateral_token?: string;
     };
-    const sizeUsd = collateral * leverage;
 
-    const prompt = [
+    // Pre-trade validation for live mode
+    const validationError = validateLiveTradeContext(context);
+    if (validationError) {
+      return { success: false, message: chalk.red(`  ${validationError}`) };
+    }
+
+    const sizeUsd = collateral * leverage;
+    const isLive = !context.simulationMode;
+
+    const lines = [
       '',
-      chalk.yellow('  Opening Position'),
+      isLive ? chalk.red.bold('  LIVE TRADE — Opening Position') : chalk.yellow('  Opening Position'),
       chalk.dim('  ─────────────────'),
       `  Market:     ${chalk.bold(market)} ${colorSide(side)}`,
       `  Leverage:   ${chalk.bold(leverage + 'x')}`,
-      `  Collateral: ${chalk.bold(formatUsd(collateral))}`,
+      `  Collateral: ${chalk.bold(formatUsd(collateral))} ${chalk.dim('USDC')}`,
       `  Size:       ${chalk.bold(formatUsd(sizeUsd))}`,
-      '',
-    ].join('\n');
+    ];
+
+    if (isLive) {
+      const warnings = buildLiveTradeWarnings(market, leverage, collateral);
+      if (warnings.length > 0) {
+        lines.push('');
+        for (const w of warnings) {
+          lines.push(`  ${chalk.yellow('⚠')} ${chalk.yellow(w)}`);
+        }
+      }
+      lines.push('');
+      lines.push(chalk.red('  This will execute a REAL on-chain transaction.'));
+    }
+
+    lines.push('');
 
     return {
       success: true,
-      message: prompt,
+      message: lines.join('\n'),
       requiresConfirmation: true,
-      confirmationPrompt: 'Execute trade?',
+      confirmationPrompt: isLive ? 'Execute LIVE trade?' : 'Execute trade?',
       data: {
         executeAction: async (): Promise<ToolResult> => {
           try {
@@ -83,7 +136,7 @@ export const flashOpenPosition: ToolDefinition = {
               txSignature: result.txSignature,
             };
           } catch (error: unknown) {
-            return { success: false, message: `Failed to open position: ${getErrorMessage(error)}` };
+            return { success: false, message: `  Failed to open position: ${getErrorMessage(error)}` };
           }
         },
       },
@@ -103,17 +156,25 @@ export const flashClosePosition: ToolDefinition = {
   execute: async (params, context): Promise<ToolResult> => {
     const { market, side } = params as { market: string; side: TradeSide };
 
+    const validationError = validateLiveTradeContext(context);
+    if (validationError) {
+      return { success: false, message: chalk.red(`  ${validationError}`) };
+    }
+
+    const isLive = !context.simulationMode;
+
     return {
       success: true,
       message: [
         '',
-        chalk.yellow('  Closing Position'),
+        isLive ? chalk.red.bold('  LIVE TRADE — Closing Position') : chalk.yellow('  Closing Position'),
         chalk.dim('  ─────────────────'),
         `  Market: ${chalk.bold(market)} ${colorSide(side)}`,
+        isLive ? `\n${chalk.red('  This will execute a REAL on-chain transaction.')}` : '',
         '',
       ].join('\n'),
       requiresConfirmation: true,
-      confirmationPrompt: 'Confirm close?',
+      confirmationPrompt: isLive ? 'Execute LIVE close?' : 'Confirm close?',
       data: {
         executeAction: async (): Promise<ToolResult> => {
           try {
@@ -136,7 +197,7 @@ export const flashClosePosition: ToolDefinition = {
               txSignature: result.txSignature,
             };
           } catch (error: unknown) {
-            return { success: false, message: `Failed to close position: ${getErrorMessage(error)}` };
+            return { success: false, message: `  Failed to close position: ${getErrorMessage(error)}` };
           }
         },
       },
@@ -157,29 +218,39 @@ export const flashAddCollateral: ToolDefinition = {
   execute: async (params, context): Promise<ToolResult> => {
     const { market, side, amount } = params as { market: string; side: TradeSide; amount: number };
 
+    const validationError = validateLiveTradeContext(context);
+    if (validationError) {
+      return { success: false, message: chalk.red(`  ${validationError}`) };
+    }
+
+    const isLive = !context.simulationMode;
+
     return {
       success: true,
       message: [
         '',
-        chalk.yellow('  Adding Collateral'),
+        isLive ? chalk.red.bold('  LIVE — Adding Collateral') : chalk.yellow('  Adding Collateral'),
         chalk.dim('  ─────────────────'),
         `  Market: ${chalk.bold(market)} ${colorSide(side)}`,
-        `  Amount: ${formatUsd(amount)}`,
+        `  Amount: ${formatUsd(amount)} ${chalk.dim('USDC')}`,
         '',
       ].join('\n'),
       requiresConfirmation: true,
-      confirmationPrompt: 'Confirm?',
+      confirmationPrompt: isLive ? 'Execute LIVE transaction?' : 'Confirm?',
       data: {
         executeAction: async (): Promise<ToolResult> => {
           try {
             const result = await context.flashClient.addCollateral(market, side, amount);
+            const txDisplay = context.simulationMode
+              ? result.txSignature
+              : `https://solscan.io/tx/${result.txSignature}`;
             return {
               success: true,
-              message: chalk.green(`  Collateral added. TX: ${chalk.dim(result.txSignature)}`),
+              message: chalk.green(`  Collateral added. TX: ${chalk.dim(txDisplay)}`),
               txSignature: result.txSignature,
             };
           } catch (error: unknown) {
-            return { success: false, message: `Failed: ${getErrorMessage(error)}` };
+            return { success: false, message: `  Failed: ${getErrorMessage(error)}` };
           }
         },
       },
@@ -200,29 +271,39 @@ export const flashRemoveCollateral: ToolDefinition = {
   execute: async (params, context): Promise<ToolResult> => {
     const { market, side, amount } = params as { market: string; side: TradeSide; amount: number };
 
+    const validationError = validateLiveTradeContext(context);
+    if (validationError) {
+      return { success: false, message: chalk.red(`  ${validationError}`) };
+    }
+
+    const isLive = !context.simulationMode;
+
     return {
       success: true,
       message: [
         '',
-        chalk.yellow('  Removing Collateral'),
+        isLive ? chalk.red.bold('  LIVE — Removing Collateral') : chalk.yellow('  Removing Collateral'),
         chalk.dim('  ─────────────────'),
         `  Market: ${chalk.bold(market)} ${colorSide(side)}`,
         `  Amount: ${formatUsd(amount)}`,
         '',
       ].join('\n'),
       requiresConfirmation: true,
-      confirmationPrompt: 'Confirm?',
+      confirmationPrompt: isLive ? 'Execute LIVE transaction?' : 'Confirm?',
       data: {
         executeAction: async (): Promise<ToolResult> => {
           try {
             const result = await context.flashClient.removeCollateral(market, side, amount);
+            const txDisplay = context.simulationMode
+              ? result.txSignature
+              : `https://solscan.io/tx/${result.txSignature}`;
             return {
               success: true,
-              message: chalk.green(`  Collateral removed. TX: ${chalk.dim(result.txSignature)}`),
+              message: chalk.green(`  Collateral removed. TX: ${chalk.dim(txDisplay)}`),
               txSignature: result.txSignature,
             };
           } catch (error: unknown) {
-            return { success: false, message: `Failed: ${getErrorMessage(error)}` };
+            return { success: false, message: `  Failed: ${getErrorMessage(error)}` };
           }
         },
       },
@@ -322,6 +403,7 @@ export const flashGetPortfolio: ToolDefinition = {
       chalk.dim('  ─────────────────────'),
       `  Wallet:         ${shortAddress(portfolio.walletAddress)}`,
       `  ${portfolio.balanceLabel}`,
+      portfolio.usdcBalance !== undefined ? `  USDC Available: ${chalk.green('$' + portfolio.usdcBalance.toFixed(2))}` : '',
       `  Collateral:     ${formatUsd(portfolio.totalCollateralUsd)}`,
       `  Position Value: ${formatUsd(portfolio.totalPositionValue)}`,
       `  Unrealized PnL: ${colorPnl(portfolio.totalUnrealizedPnl)}`,
@@ -525,6 +607,87 @@ export const flashGetTraderProfile: ToolDefinition = {
   },
 };
 
+// ─── Wallet Tools ───────────────────────────────────────────────────────────
+
+export const walletAddress: ToolDefinition = {
+  name: 'wallet_address',
+  description: 'Show connected wallet address',
+  parameters: z.object({}),
+  execute: async (_params, context): Promise<ToolResult> => {
+    const wm = context.walletManager;
+    if (!wm || !wm.isConnected) {
+      return { success: true, message: chalk.dim('  No wallet connected. Use "wallet connect <path>" to connect.') };
+    }
+    return {
+      success: true,
+      message: `  Wallet: ${chalk.cyan(wm.address)}`,
+    };
+  },
+};
+
+export const walletBalance: ToolDefinition = {
+  name: 'wallet_balance',
+  description: 'Fetch SOL and token balances for connected wallet',
+  parameters: z.object({}),
+  execute: async (_params, context): Promise<ToolResult> => {
+    const wm = context.walletManager;
+    if (!wm || !wm.isConnected) {
+      return { success: true, message: chalk.dim('  No wallet connected. Use "wallet connect <path>" to connect.') };
+    }
+    try {
+      const { sol, tokens } = await wm.getTokenBalances();
+      const lines = [
+        '',
+        chalk.bold('  Wallet Balance'),
+        chalk.dim('  ─────────────────'),
+        `  Address: ${chalk.cyan(wm.address)}`,
+        `  SOL:     ${chalk.green(sol.toFixed(4))} SOL`,
+      ];
+      for (const t of tokens) {
+        lines.push(`  ${t.symbol.padEnd(7)}${chalk.green(t.amount.toFixed(t.symbol === 'USDC' || t.symbol === 'USDT' ? 2 : 4))} ${t.symbol}`);
+      }
+      if (tokens.length === 0) {
+        lines.push(chalk.dim('  No SPL tokens found'));
+      }
+      lines.push('');
+      return { success: true, message: lines.join('\n') };
+    } catch (error: unknown) {
+      return { success: false, message: `  Failed to fetch balance: ${getErrorMessage(error)}` };
+    }
+  },
+};
+
+export const walletConnect: ToolDefinition = {
+  name: 'wallet_connect',
+  description: 'Connect a wallet from a keypair file',
+  parameters: z.object({
+    path: z.string(),
+  }),
+  execute: async (params, context): Promise<ToolResult> => {
+    const { path } = params as { path: string };
+    const wm = context.walletManager;
+    if (!wm) {
+      return { success: false, message: chalk.red('  Wallet manager not available') };
+    }
+    try {
+      const { address } = wm.loadFromFile(path);
+      context.walletAddress = address;
+      return {
+        success: true,
+        message: [
+          '',
+          chalk.green('  Wallet Connected'),
+          chalk.dim('  ─────────────────'),
+          `  Address: ${chalk.cyan(address)}`,
+          '',
+        ].join('\n'),
+      };
+    } catch (error: unknown) {
+      return { success: false, message: `  Failed to connect wallet: ${getErrorMessage(error)}` };
+    }
+  },
+};
+
 // ─── Export all tools ────────────────────────────────────────────────────────
 
 export const allFlashTools: ToolDefinition[] = [
@@ -540,4 +703,7 @@ export const allFlashTools: ToolDefinition[] = [
   flashGetLeaderboard,
   flashGetFees,
   flashGetTraderProfile,
+  walletAddress,
+  walletBalance,
+  walletConnect,
 ];

@@ -4,6 +4,7 @@ import { Command } from 'commander';
 import { loadConfig } from './config/index.js';
 import { FlashTerminal } from './cli/terminal.js';
 import { getErrorMessage } from './utils/retry.js';
+import { getLogger } from './utils/logger.js';
 import chalk from 'chalk';
 
 // Global error handlers
@@ -12,6 +13,28 @@ process.on('unhandledRejection', (reason) => {
   process.exit(1);
 });
 
+// Safe shutdown: stop autopilot before exiting
+// Import at top level — safe since clawd-tools has no circular dependency with index
+import { getAutopilotIfExists } from './clawd/clawd-tools.js';
+
+function gracefulShutdown(signal: string): void {
+  console.log(chalk.dim(`\n  Shutting down (${signal})...`));
+  try {
+    const autopilot = getAutopilotIfExists();
+    if (autopilot?.state?.active) {
+      autopilot.stop();
+      getLogger().info('SHUTDOWN', `Autopilot stopped via ${signal}`);
+    }
+  } catch {
+    // Best-effort cleanup — don't block exit
+  }
+  console.log(chalk.dim('  Goodbye.\n'));
+  process.exit(0);
+}
+
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+
 const program = new Command();
 
 program
@@ -19,19 +42,25 @@ program
   .description('Flash AI Terminal — AI-powered CLI for Flash Trade on Solana')
   .version('1.0.0');
 
+// Default command: launch the interactive terminal
 program
   .command('start', { isDefault: true })
   .description('Start the interactive Flash AI Terminal')
-  .option('-s, --simulate', 'Run in simulation mode (default)', true)
+  .option('-s, --simulate', 'Run in simulation mode')
   .option('-l, --live', 'Run in live mode (real transactions)')
-  .option('-p, --pool <name>', 'Default pool name', 'Crypto.1')
+  .option('-p, --pool <name>', 'Default pool name')
   .option('--rpc <url>', 'Solana RPC URL')
   .action(async (opts: { live?: boolean; simulate?: boolean; pool?: string; rpc?: string }) => {
     const config = loadConfig();
 
-    // CLI overrides
-    if (opts.live) config.simulationMode = false;
-    if (opts.simulate) config.simulationMode = true;
+    // Phase 4: Default to simulation mode for safety (--live must be explicit)
+    if (opts.live) {
+      config.simulationMode = false;
+    } else if (opts.simulate) {
+      config.simulationMode = true;
+    }
+    // If neither flag: keep config.simulationMode from loadConfig() (defaults to true)
+
     if (opts.pool) config.defaultPool = opts.pool;
     if (opts.rpc) config.rpcUrl = opts.rpc;
 

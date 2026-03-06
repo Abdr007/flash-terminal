@@ -1,4 +1,4 @@
-import { appendFileSync, mkdirSync, existsSync } from 'fs';
+import { appendFileSync, mkdirSync, existsSync, writeFileSync, chmodSync } from 'fs';
 import { join, dirname } from 'path';
 import chalk from 'chalk';
 
@@ -48,7 +48,16 @@ export class Logger {
     if (this.logFilePath) {
       const dir = dirname(this.logFilePath);
       if (!existsSync(dir)) {
-        mkdirSync(dir, { recursive: true });
+        mkdirSync(dir, { recursive: true, mode: 0o700 });
+      }
+      // Create file with restricted permissions (owner-only read/write)
+      if (!existsSync(this.logFilePath)) {
+        writeFileSync(this.logFilePath, '', { mode: 0o600 });
+      }
+      try {
+        chmodSync(this.logFilePath, 0o600);
+      } catch {
+        // Best-effort permission setting
       }
     }
   }

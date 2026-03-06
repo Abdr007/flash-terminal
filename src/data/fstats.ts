@@ -8,6 +8,7 @@ import {
   TraderProfile,
   FeeData,
   IDataClient,
+  RawActivityRecord,
 } from '../types/index.js';
 import { FSTATS_BASE_URL } from '../config/index.js';
 import { getLogger } from '../utils/logger.js';
@@ -76,12 +77,9 @@ interface RawDailyFee {
   team_share?: number;
 }
 
-interface RawOpenPosition {
-  market_symbol?: string;
-  market?: string;
-  mark_price?: number;
-  entry_price?: number;
-}
+// RawOpenPosition is now a subset of the exported RawActivityRecord type.
+// We alias it here for backward compatibility with existing parsing logic.
+type RawOpenPosition = RawActivityRecord;
 
 /**
  * Safe fetch with timeout and JSON validation.

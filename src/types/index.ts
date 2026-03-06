@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { WalletManager } from '../wallet/walletManager.js';
 
 // ─── Trading Enums ───────────────────────────────────────────────────────────
 
@@ -20,7 +21,30 @@ export enum ActionType {
   GetLeaderboard = 'get_leaderboard',
   GetTraderProfile = 'get_trader_profile',
   GetFees = 'get_fees',
+  WalletConnect = 'wallet_connect',
+  WalletAddress = 'wallet_address',
+  WalletBalance = 'wallet_balance',
   Help = 'help',
+
+  // Clawd AI Agent
+  Analyze = 'analyze',
+  SuggestTrade = 'suggest_trade',
+  RiskReport = 'risk_report',
+  Dashboard = 'dashboard',
+  WhaleActivity = 'whale_activity',
+
+  // Autopilot
+  AutopilotStart = 'autopilot_start',
+  AutopilotStop = 'autopilot_stop',
+  AutopilotStatus = 'autopilot_status',
+
+  // Market Scanner
+  ScanMarkets = 'scan_markets',
+
+  // Portfolio Intelligence
+  PortfolioState = 'portfolio_state',
+  PortfolioExposure = 'portfolio_exposure',
+  PortfolioRebalance = 'portfolio_rebalance',
 }
 
 // ─── Zod Schemas for Intent Parsing ──────────────────────────────────────────
@@ -97,6 +121,74 @@ export const HelpSchema = z.object({
   action: z.literal(ActionType.Help),
 });
 
+export const WalletConnectSchema = z.object({
+  action: z.literal(ActionType.WalletConnect),
+  path: z.string(),
+});
+
+export const WalletAddressSchema = z.object({
+  action: z.literal(ActionType.WalletAddress),
+});
+
+export const WalletBalanceSchema = z.object({
+  action: z.literal(ActionType.WalletBalance),
+});
+
+// Clawd AI Agent Schemas
+export const AnalyzeSchema = z.object({
+  action: z.literal(ActionType.Analyze),
+  market: z.string(),
+});
+
+export const SuggestTradeSchema = z.object({
+  action: z.literal(ActionType.SuggestTrade),
+  market: z.string().optional(),
+});
+
+export const RiskReportSchema = z.object({
+  action: z.literal(ActionType.RiskReport),
+});
+
+export const DashboardSchema = z.object({
+  action: z.literal(ActionType.Dashboard),
+});
+
+export const WhaleActivitySchema = z.object({
+  action: z.literal(ActionType.WhaleActivity),
+  market: z.string().optional(),
+});
+
+// Autopilot Schemas
+export const AutopilotStartSchema = z.object({
+  action: z.literal(ActionType.AutopilotStart),
+});
+
+export const AutopilotStopSchema = z.object({
+  action: z.literal(ActionType.AutopilotStop),
+});
+
+export const AutopilotStatusSchema = z.object({
+  action: z.literal(ActionType.AutopilotStatus),
+});
+
+// Market Scanner Schema
+export const ScanMarketsSchema = z.object({
+  action: z.literal(ActionType.ScanMarkets),
+});
+
+// Portfolio Intelligence Schemas
+export const PortfolioStateSchema = z.object({
+  action: z.literal(ActionType.PortfolioState),
+});
+
+export const PortfolioExposureSchema = z.object({
+  action: z.literal(ActionType.PortfolioExposure),
+});
+
+export const PortfolioRebalanceSchema = z.object({
+  action: z.literal(ActionType.PortfolioRebalance),
+});
+
 export const ParsedIntentSchema = z.discriminatedUnion('action', [
   OpenPositionSchema,
   ClosePositionSchema,
@@ -110,7 +202,22 @@ export const ParsedIntentSchema = z.discriminatedUnion('action', [
   GetLeaderboardSchema,
   GetTraderProfileSchema,
   GetFeesSchema,
+  WalletConnectSchema,
+  WalletAddressSchema,
+  WalletBalanceSchema,
   HelpSchema,
+  AnalyzeSchema,
+  SuggestTradeSchema,
+  RiskReportSchema,
+  DashboardSchema,
+  WhaleActivitySchema,
+  AutopilotStartSchema,
+  AutopilotStopSchema,
+  AutopilotStatusSchema,
+  ScanMarketsSchema,
+  PortfolioStateSchema,
+  PortfolioExposureSchema,
+  PortfolioRebalanceSchema,
 ]);
 
 export type ParsedIntent = z.infer<typeof ParsedIntentSchema>;
@@ -174,6 +281,7 @@ export interface Portfolio {
   totalUnrealizedPnl: number;
   positions: Position[];
   totalPositionValue: number;
+  usdcBalance?: number;
 }
 
 export interface VolumeData {
@@ -243,6 +351,113 @@ export interface OverviewStats {
   uniqueTraders: number;
 }
 
+// ─── Clawd AI Agent Domain Types ─────────────────────────────────────────────
+
+export interface StrategySignal {
+  name: string;
+  signal: 'bullish' | 'bearish' | 'neutral';
+  confidence: number; // 0-1
+  reasoning: string;
+}
+
+export interface RiskAssessment {
+  market: string;
+  side: TradeSide;
+  leverage: number;
+  distanceToLiquidation: number; // percentage
+  riskLevel: 'healthy' | 'warning' | 'critical';
+  message: string;
+}
+
+export interface MarketAnalysis {
+  market: string;
+  price: number;
+  priceChange24h: number;
+  openInterestLong: number;
+  openInterestShort: number;
+  volume24h: number;
+  signals: StrategySignal[];
+  summary: string;
+}
+
+export interface TradeSuggestion {
+  market: string;
+  side: TradeSide;
+  leverage: number;
+  collateral: number;
+  reasoning: string;
+  confidence: number; // 0-1
+  risks: string[];
+}
+
+export interface ExposureSummary {
+  totalLongExposure: number;
+  totalShortExposure: number;
+  netExposure: number;
+  totalCollateral: number;
+  collateralUtilization: number; // percentage
+  concentrationRisk: { market: string; percentage: number }[];
+}
+
+// ─── Autopilot Types ─────────────────────────────────────────────────────────
+
+export interface AutopilotConfig {
+  maxPositionSize: number;
+  maxExposure: number;
+  maxLeverage: number;
+  intervalMs: number;
+  markets: string[];
+}
+
+export interface AutopilotState {
+  active: boolean;
+  startedAt: number | null;
+  cycleCount: number;
+  lastCycleAt: number | null;
+  lastSuggestion: TradeSuggestion | null;
+  lastSignals: StrategySignal[];
+}
+
+export interface AggregatedSignal {
+  market: string;
+  direction: TradeSide;
+  recommendedLeverage: number;
+  confidenceScore: number;
+  confidenceLabel: 'high' | 'medium' | 'low';
+  signalBreakdown: StrategySignal[];
+  source: 'claude' | 'strategy_engine';
+}
+
+// ─── Market Scanner Types ───────────────────────────────────────────────────
+
+export interface Opportunity {
+  market: string;
+  direction: TradeSide;
+  confidence: number;
+  volumeScore: number;
+  oiScore: number;
+  whaleScore: number;
+  totalScore: number;
+  recommendedLeverage: number;
+  recommendedCollateral: number;
+  signals: StrategySignal[];
+  reasoning: string;
+  regime?: string;
+}
+
+// ─── Raw Data Types (from fstats API) ────────────────────────────────────────
+
+export interface RawActivityRecord {
+  market_symbol?: string;
+  market?: string;
+  side?: string;
+  size_usd?: number;
+  mark_price?: number;
+  entry_price?: number;
+  timestamp?: number;
+  [key: string]: unknown;
+}
+
 // ─── Client Interfaces ───────────────────────────────────────────────────────
 
 export interface IFlashClient {
@@ -287,6 +502,8 @@ export interface IDataClient {
   getLeaderboard(metric?: 'pnl' | 'volume', days?: number, limit?: number): Promise<LeaderboardEntry[]>;
   getTraderProfile(address: string): Promise<TraderProfile>;
   getFees(days?: number): Promise<FeeData>;
+  getRecentActivity?(limit?: number): Promise<RawActivityRecord[]>;
+  getOpenPositions?(): Promise<RawActivityRecord[]>;
 }
 
 // ─── Tool System Types ───────────────────────────────────────────────────────
@@ -301,6 +518,13 @@ export interface ToolExecutionData {
   leaderboard?: LeaderboardEntry[];
   traderProfile?: TraderProfile;
   fees?: FeeData;
+  analysis?: MarketAnalysis;
+  suggestion?: TradeSuggestion;
+  riskAssessments?: RiskAssessment[];
+  exposure?: ExposureSummary;
+  opportunities?: Opportunity[];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  [key: string]: any;
 }
 
 export interface ToolResult {
@@ -317,6 +541,7 @@ export interface ToolContext {
   dataClient: IDataClient;
   simulationMode: boolean;
   walletAddress: string;
+  walletManager?: WalletManager;
 }
 
 export interface ToolDefinition<TParams = Record<string, unknown>> {

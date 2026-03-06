@@ -6,8 +6,10 @@ import {
   Signer,
   ComputeBudgetProgram,
   AddressLookupTableAccount,
+  LAMPORTS_PER_SOL,
 } from '@solana/web3.js';
-import { AnchorProvider, BN, Wallet } from '@coral-xyz/anchor';
+import { AnchorProvider, Wallet } from '@coral-xyz/anchor';
+import BN from 'bn.js';
 import {
   PerpetualsClient,
   PoolConfig,
@@ -17,8 +19,8 @@ import {
   Token,
   uiDecimalsToNative,
   BN_ZERO,
+  OraclePrice,
 } from 'flash-sdk';
-import { readFileSync, existsSync } from 'fs';
 import {
   Position,
   TradeSide,
@@ -29,14 +31,16 @@ import {
   OpenPositionResult,
   ClosePositionResult,
   CollateralResult,
+  getLeverageLimits,
 } from '../types/index.js';
-import { OraclePrice } from 'flash-sdk';
 import { PythHttpClient, getPythProgramKeyForCluster, PriceData } from '@pythnetwork/client';
 import { getPoolForMarket } from '../config/index.js';
 import { getLogger } from '../utils/logger.js';
 import { getErrorMessage, withRetry } from '../utils/retry.js';
+import type { WalletManager } from '../wallet/walletManager.js';
 
-/** Pyth-based price data used by the live client for SDK interactions */
+// ─── Pyth Price Service ──────────────────────────────────────────────────────
+
 interface LiveTokenPrice {
   price: OraclePrice;
   emaPrice: OraclePrice;
@@ -44,13 +48,26 @@ interface LiveTokenPrice {
   timestamp: number;
 }
 
-/** Pyth price service used only by the live FlashClient */
 class PythPriceService {
   private pythClient: PythHttpClient;
   private cache: Map<string, { data: LiveTokenPrice; expiry: number }> = new Map();
   private cacheTtlMs = 5_000;
 
   constructor(pythnetUrl: string) {
+    // Validate Pythnet URL: must be HTTPS (or localhost for dev)
+    try {
+      const parsed = new URL(pythnetUrl);
+      const isLocal = parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1';
+      if (parsed.protocol !== 'https:' && !(parsed.protocol === 'http:' && isLocal)) {
+        throw new Error(`Pythnet URL must use HTTPS: ${pythnetUrl}`);
+      }
+      if (parsed.username || parsed.password) {
+        throw new Error('Pythnet URL must not contain embedded credentials');
+      }
+    } catch (e) {
+      if (e instanceof Error && e.message.includes('Pythnet')) throw e;
+      throw new Error(`Invalid Pythnet URL: ${pythnetUrl}`);
+    }
     const conn = new Connection(pythnetUrl);
     this.pythClient = new PythHttpClient(conn, getPythProgramKeyForCluster('pythnet'));
   }
@@ -83,20 +100,24 @@ class PythPriceService {
 
       const priceComponent = priceData.aggregate.priceComponent;
       const emaPriceComponent = priceData.emaPrice.valueComponent;
-      const confidence = priceData.confidence ?? 0;
-      const emaConfidence = priceData.emaConfidence?.valueComponent ?? 0;
+      // confidence from Pyth can be a float — convert to integer at the oracle's exponent scale
+      const rawConfidence = priceData.confidence ?? 0;
+      const confidenceInt = typeof rawConfidence === 'number'
+        ? Math.round(rawConfidence * Math.pow(10, Math.abs(priceData.exponent)))
+        : rawConfidence;
+      const rawEmaConfidence = priceData.emaConfidence?.valueComponent ?? 0;
 
       const price = new OraclePrice({
         price: new BN(priceComponent.toString()),
-        exponent: new BN(priceData.exponent),
-        confidence: new BN(confidence.toString()),
+        exponent: new BN(priceData.exponent.toString()),
+        confidence: new BN(confidenceInt.toString()),
         timestamp: new BN(priceData.timestamp.toString()),
       });
 
       const emaPrice = new OraclePrice({
         price: new BN(emaPriceComponent.toString()),
-        exponent: new BN(priceData.exponent),
-        confidence: new BN(emaConfidence.toString()),
+        exponent: new BN(priceData.exponent.toString()),
+        confidence: new BN(rawEmaConfidence.toString()),
         timestamp: new BN(priceData.timestamp.toString()),
       });
 
@@ -115,9 +136,22 @@ class PythPriceService {
   }
 }
 
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
 function toSdkSide(side: TradeSide): typeof Side.Long | typeof Side.Short {
   return side === TradeSide.Long ? Side.Long : Side.Short;
 }
+
+// Minimum SOL balance required to cover transaction fees
+const MIN_SOL_FOR_FEES = 0.01;
+
+// Flash perpetual pools use USDC as the default collateral token
+const DEFAULT_COLLATERAL_TOKEN = 'USDC';
+
+// Well-known USDC mint on Solana mainnet
+const USDC_MINT = new PublicKey('EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v');
+
+// ─── FlashClient ─────────────────────────────────────────────────────────────
 
 export class FlashClient implements IFlashClient {
   private connection: Connection;
@@ -127,33 +161,20 @@ export class FlashClient implements IFlashClient {
   private poolConfig: PoolConfig;
   private priceService: PythPriceService;
   private config: FlashConfig;
+  private walletMgr: WalletManager;
   private altCache: AddressLookupTableAccount[] | null = null;
-  private solBalance = 0;
+  private cachedSolBalance = 0;
 
-  constructor(config: FlashConfig) {
+  constructor(connection: Connection, walletManager: WalletManager, config: FlashConfig) {
     this.config = config;
-    this.connection = new Connection(config.rpcUrl, { commitment: 'processed' });
+    this.connection = connection;
+    this.walletMgr = walletManager;
 
-    // Load wallet with error handling
-    if (!existsSync(config.walletPath)) {
-      throw new Error(
-        `Wallet file not found: ${config.walletPath}\n` +
-        `Run 'solana-keygen new' to create one, or set WALLET_PATH in .env`
-      );
+    const keypair = walletManager.getKeypair();
+    if (!keypair) {
+      throw new Error('No wallet connected. Use "wallet connect <path>" or ensure ~/.config/solana/id.json exists.');
     }
-
-    let secretKeyData: unknown;
-    try {
-      secretKeyData = JSON.parse(readFileSync(config.walletPath, 'utf-8'));
-    } catch {
-      throw new Error(`Invalid wallet file at ${config.walletPath} — must be a JSON array of numbers`);
-    }
-
-    if (!Array.isArray(secretKeyData) || secretKeyData.length !== 64) {
-      throw new Error(`Wallet file must contain a 64-byte secret key array`);
-    }
-
-    this.wallet = Keypair.fromSecretKey(Uint8Array.from(secretKeyData as number[]));
+    this.wallet = keypair;
 
     const walletAdapter = new Wallet(this.wallet);
     this.provider = new AnchorProvider(this.connection, walletAdapter, {
@@ -186,7 +207,34 @@ export class FlashClient implements IFlashClient {
     return this.wallet.publicKey.toBase58();
   }
 
-  // ─── Pool Management ─────────────────────────────────────────────────────
+  // ─── Pre-Trade Validation ─────────────────────────────────────────────────
+
+  private async ensureSufficientSol(): Promise<void> {
+    const lamports = await withRetry(
+      () => this.connection.getBalance(this.wallet.publicKey),
+      'sol-balance-check',
+      { maxAttempts: 2 },
+    );
+    this.cachedSolBalance = lamports / LAMPORTS_PER_SOL;
+    if (this.cachedSolBalance < MIN_SOL_FOR_FEES) {
+      throw new Error(
+        `Insufficient SOL for transaction fees. Balance: ${this.cachedSolBalance.toFixed(4)} SOL. ` +
+        `Minimum required: ${MIN_SOL_FOR_FEES} SOL.`
+      );
+    }
+  }
+
+  private validateLeverage(market: string, leverage: number): void {
+    const limits = getLeverageLimits(market);
+    if (leverage < limits.min) {
+      throw new Error(`Minimum leverage for ${market}: ${limits.min}x`);
+    }
+    if (leverage > limits.max) {
+      throw new Error(`Maximum leverage for ${market}: ${limits.max}x`);
+    }
+  }
+
+  // ─── Pool Management ──────────────────────────────────────────────────────
 
   private getPoolConfigForMarket(market: string): PoolConfig {
     const poolName = getPoolForMarket(market);
@@ -233,11 +281,16 @@ export class FlashClient implements IFlashClient {
     poolConfig: PoolConfig,
     market: string,
     side: TradeSide
-  ): Promise<{ position: { pubkey: PublicKey; market: PublicKey }; marketConfig: { marketAccount: PublicKey; targetMint: PublicKey; collateralMint: PublicKey; side: typeof Side.Long | typeof Side.Short } }> {
+  ): Promise<{
+    position: { pubkey: PublicKey; market: PublicKey };
+    marketConfig: { marketAccount: PublicKey; targetMint: PublicKey; collateralMint: PublicKey; side: typeof Side.Long | typeof Side.Short };
+  }> {
     const sdkSide = toSdkSide(side);
     const positions = await this.perpClient.getUserPositions(this.wallet.publicKey, poolConfig);
     const token = this.findToken(poolConfig, market);
-    const markets = poolConfig.markets as unknown as Array<{ marketAccount: PublicKey; targetMint: PublicKey; collateralMint: PublicKey; side: typeof Side.Long | typeof Side.Short }>;
+    const markets = poolConfig.markets as unknown as Array<{
+      marketAccount: PublicKey; targetMint: PublicKey; collateralMint: PublicKey; side: typeof Side.Long | typeof Side.Short;
+    }>;
 
     const marketConfig = markets.find(
       (m) => m.targetMint.equals(token.mintKey) && m.side === sdkSide
@@ -261,10 +314,37 @@ export class FlashClient implements IFlashClient {
     const cuPriceIx = ComputeBudgetProgram.setComputeUnitPrice({ microLamports: this.config.computeUnitPrice });
     const alts = await this.getALTs(poolConfig);
 
-    return this.perpClient.sendTransaction([cuLimitIx, cuPriceIx, ...instructions], {
+    const signature = await this.perpClient.sendTransaction([cuLimitIx, cuPriceIx, ...instructions], {
       alts,
       additionalSigners,
     });
+
+    // Confirm transaction on-chain (retry once — tx may already be in-flight)
+    const logger = getLogger();
+    try {
+      const latestBlockhash = await withRetry(
+        () => this.connection.getLatestBlockhash(),
+        'get-blockhash',
+        { maxAttempts: 2 },
+      );
+      const confirmation = await this.connection.confirmTransaction({
+        signature,
+        blockhash: latestBlockhash.blockhash,
+        lastValidBlockHeight: latestBlockhash.lastValidBlockHeight,
+      }, 'confirmed');
+
+      if (confirmation.value.err) {
+        logger.error('CLIENT', `Transaction failed on-chain: ${JSON.stringify(confirmation.value.err)}`);
+        throw new Error(`Transaction failed on-chain (${signature}): ${JSON.stringify(confirmation.value.err)}`);
+      }
+    } catch (error: unknown) {
+      // Re-throw ALL confirmation failures — never report unconfirmed tx as successful
+      const msg = getErrorMessage(error);
+      logger.error('CLIENT', `Transaction confirmation failed: ${msg}`);
+      throw new Error(`Transaction sent (${signature}) but confirmation failed: ${msg}. Check "positions" to verify status.`);
+    }
+
+    return signature;
   }
 
   // ─── Open Position ────────────────────────────────────────────────────────
@@ -277,18 +357,28 @@ export class FlashClient implements IFlashClient {
     collateralToken?: string
   ): Promise<OpenPositionResult> {
     const logger = getLogger();
+
+    // Pre-trade validation
+    await this.ensureSufficientSol();
+    this.validateLeverage(market, leverage);
+
     const poolConfig = this.getPoolConfigForMarket(market);
     const sdkSide = toSdkSide(side);
 
     const targetToken = this.findToken(poolConfig, market);
-    const inputToken = collateralToken
-      ? this.findToken(poolConfig, collateralToken)
-      : targetToken;
+    const collateralSymbol = collateralToken ?? DEFAULT_COLLATERAL_TOKEN;
+    const inputToken = this.findToken(poolConfig, collateralSymbol);
+
+    logger.debug('TRADE', 'Trade Request', {
+      market, side, collateralToken: inputToken.symbol,
+      collateralAmount, leverage, size: collateralAmount * leverage,
+    });
 
     const priceMap = await this.getPriceMap(poolConfig);
     const targetPrice = priceMap.get(targetToken.symbol);
     const inputPrice = priceMap.get(inputToken.symbol);
-    if (!targetPrice || !inputPrice) throw new Error('Could not fetch prices');
+    if (!targetPrice) throw new Error(`Oracle unavailable for ${targetToken.symbol}. Try again later.`);
+    if (!inputPrice) throw new Error(`Oracle unavailable for ${inputToken.symbol}. Try again later.`);
 
     const priceAfterSlippage = this.perpClient.getPriceAfterSlippage(
       true, new BN(this.config.defaultSlippageBps), targetPrice.price, sdkSide
@@ -298,9 +388,13 @@ export class FlashClient implements IFlashClient {
     const inputCustody = this.findCustody(poolConfig, inputToken.symbol);
     const outputCustody = this.findCustody(poolConfig, targetToken.symbol);
 
-    const custodyAccounts = await this.perpClient.program.account.custody.fetchMultiple([
-      inputCustody.custodyAccount, outputCustody.custodyAccount,
-    ]);
+    const custodyAccounts = await withRetry(
+      () => this.perpClient.program.account.custody.fetchMultiple([
+        inputCustody.custodyAccount, outputCustody.custodyAccount,
+      ]),
+      'custody-fetch',
+      { maxAttempts: 2 },
+    );
 
     if (!custodyAccounts[0] || !custodyAccounts[1]) {
       throw new Error('Failed to fetch custody accounts from chain');
@@ -339,7 +433,7 @@ export class FlashClient implements IFlashClient {
     return {
       txSignature,
       entryPrice: targetPrice.uiPrice,
-      liquidationPrice: 0, // TODO: call getLiquidationPriceView post-open
+      liquidationPrice: 0,
       sizeUsd: collateralAmount * leverage,
     };
   }
@@ -348,15 +442,20 @@ export class FlashClient implements IFlashClient {
 
   async closePosition(market: string, side: TradeSide, receiveToken?: string): Promise<ClosePositionResult> {
     const logger = getLogger();
+
+    await this.ensureSufficientSol();
+
     const poolConfig = this.getPoolConfigForMarket(market);
     const sdkSide = toSdkSide(side);
 
     const targetToken = this.findToken(poolConfig, market);
-    const receivingToken = receiveToken ? this.findToken(poolConfig, receiveToken) : targetToken;
+    const receivingToken = receiveToken
+      ? this.findToken(poolConfig, receiveToken)
+      : this.findToken(poolConfig, DEFAULT_COLLATERAL_TOKEN);
 
     const priceMap = await this.getPriceMap(poolConfig);
     const targetPrice = priceMap.get(targetToken.symbol);
-    if (!targetPrice) throw new Error('Could not fetch price');
+    if (!targetPrice) throw new Error(`Oracle unavailable for ${targetToken.symbol}. Try again later.`);
 
     const priceAfterSlippage = this.perpClient.getPriceAfterSlippage(
       false, new BN(this.config.defaultSlippageBps), targetPrice.price, sdkSide
@@ -384,8 +483,10 @@ export class FlashClient implements IFlashClient {
   // ─── Collateral Management ────────────────────────────────────────────────
 
   async addCollateral(market: string, side: TradeSide, amount: number): Promise<CollateralResult> {
+    await this.ensureSufficientSol();
+
     const poolConfig = this.getPoolConfigForMarket(market);
-    const token = this.findToken(poolConfig, market);
+    const token = this.findToken(poolConfig, DEFAULT_COLLATERAL_TOKEN);
     const amountNative = uiDecimalsToNative(amount.toString(), token.decimals);
     const { position } = await this.findUserPosition(poolConfig, market, side);
 
@@ -399,8 +500,10 @@ export class FlashClient implements IFlashClient {
   }
 
   async removeCollateral(market: string, side: TradeSide, amount: number): Promise<CollateralResult> {
+    await this.ensureSufficientSol();
+
     const poolConfig = this.getPoolConfigForMarket(market);
-    const token = this.findToken(poolConfig, market);
+    const token = this.findToken(poolConfig, DEFAULT_COLLATERAL_TOKEN);
     const amountNative = uiDecimalsToNative(amount.toString(), token.decimals);
     const { position } = await this.findUserPosition(poolConfig, market, side);
 
@@ -427,9 +530,9 @@ export class FlashClient implements IFlashClient {
     }>;
     const tokens = this.poolConfig.tokens as Array<{ symbol: string; mintKey: PublicKey }>;
 
-    for (const raw of rawPositions as Array<{
+    for (const raw of rawPositions as unknown as Array<{
       pubkey: PublicKey; market: PublicKey;
-      entryPrice?: BN; sizeUsd?: BN; collateralUsd?: BN; openTime?: BN;
+      entryPrice?: { price: BN } | BN; sizeUsd?: BN; collateralUsd?: BN; openTime?: BN;
     }>) {
       try {
         const marketConfig = markets.find((m) => m.marketAccount.equals(raw.market));
@@ -441,17 +544,33 @@ export class FlashClient implements IFlashClient {
         const tokenPrice = priceMap.get(targetToken.symbol);
         if (!tokenPrice) continue;
 
-        const entryPrice = raw.entryPrice ? parseFloat(raw.entryPrice.toString()) / 1e6 : 0;
-        const sizeUsd = raw.sizeUsd ? parseFloat(raw.sizeUsd.toString()) / 1e6 : 0;
-        const collateralUsd = raw.collateralUsd ? parseFloat(raw.collateralUsd.toString()) / 1e6 : 0;
-        const currentPrice = tokenPrice.uiPrice;
-        const leverage = collateralUsd > 0 ? sizeUsd / collateralUsd : 0;
+        const rawEntryField = raw.entryPrice;
+        const entryPriceBn = rawEntryField
+          ? (typeof rawEntryField === 'object' && 'price' in rawEntryField ? rawEntryField.price : rawEntryField as BN)
+          : null;
+        const parsedEntry = entryPriceBn ? parseFloat(entryPriceBn.toString()) / 1e6 : 0;
+        const parsedSize = raw.sizeUsd ? parseFloat(raw.sizeUsd.toString()) / 1e6 : 0;
+        const parsedCollateral = raw.collateralUsd ? parseFloat(raw.collateralUsd.toString()) / 1e6 : 0;
+        const parsedCurrentPrice = tokenPrice.uiPrice;
+
+        // NaN/Infinity guard: skip corrupt positions
+        const entryPrice = Number.isFinite(parsedEntry) ? parsedEntry : 0;
+        const sizeUsd = Number.isFinite(parsedSize) ? parsedSize : 0;
+        const collateralUsd = Number.isFinite(parsedCollateral) ? parsedCollateral : 0;
+        const currentPrice = Number.isFinite(parsedCurrentPrice) ? parsedCurrentPrice : 0;
+
+        if (entryPrice <= 0 || sizeUsd <= 0 || collateralUsd <= 0) {
+          getLogger().warn('CLIENT', `Skipping position with invalid values: entry=${entryPrice} size=${sizeUsd} collateral=${collateralUsd}`);
+          continue;
+        }
+
+        const leverage = sizeUsd / collateralUsd;
         const side = marketConfig.side === Side.Long ? TradeSide.Long : TradeSide.Short;
         const priceDelta = currentPrice - entryPrice;
         const pnlMult = side === TradeSide.Long ? 1 : -1;
-        const unrealizedPnl = entryPrice > 0 ? (priceDelta / entryPrice) * sizeUsd * pnlMult : 0;
+        const unrealizedPnl = (priceDelta / entryPrice) * sizeUsd * pnlMult;
+        const safeUnrealizedPnl = Number.isFinite(unrealizedPnl) ? unrealizedPnl : 0;
 
-        // Approximate liquidation price
         const liqDist = leverage > 0 ? (1 / leverage) * 0.9 : 0;
         const liquidationPrice = side === TradeSide.Long
           ? entryPrice * (1 - liqDist)
@@ -466,8 +585,8 @@ export class FlashClient implements IFlashClient {
           sizeUsd,
           collateralUsd,
           leverage,
-          unrealizedPnl,
-          unrealizedPnlPercent: collateralUsd > 0 ? (unrealizedPnl / collateralUsd) * 100 : 0,
+          unrealizedPnl: safeUnrealizedPnl,
+          unrealizedPnlPercent: (safeUnrealizedPnl / collateralUsd) * 100,
           liquidationPrice,
           timestamp: raw.openTime ? Number(raw.openTime.toString()) : Date.now() / 1000,
         });
@@ -501,24 +620,51 @@ export class FlashClient implements IFlashClient {
   }
 
   async getPortfolio(): Promise<Portfolio> {
-    const [solBalance, positions] = await Promise.all([
-      this.connection.getBalance(this.wallet.publicKey),
-      this.getPositions(),
-    ]);
+    const [solBalance, usdcBalance, positions] = await withRetry(
+      () => Promise.all([
+        this.connection.getBalance(this.wallet.publicKey),
+        this.getUsdcBalance(),
+        this.getPositions(),
+      ]),
+      'portfolio-fetch',
+      { maxAttempts: 2 },
+    );
 
-    const solBal = solBalance / 1e9;
+    const solBal = solBalance / LAMPORTS_PER_SOL;
+    this.cachedSolBalance = solBal;
+
     return {
       walletAddress: this.wallet.publicKey.toBase58(),
       balance: solBal,
-      balanceLabel: `SOL Balance: ${solBal.toFixed(4)} SOL`,
+      balanceLabel: `SOL: ${solBal.toFixed(4)} | USDC: ${usdcBalance.toFixed(2)}`,
       totalCollateralUsd: positions.reduce((s, p) => s + p.collateralUsd, 0),
       totalUnrealizedPnl: positions.reduce((s, p) => s + p.unrealizedPnl, 0),
       positions,
       totalPositionValue: positions.reduce((s, p) => s + p.sizeUsd, 0),
+      usdcBalance,
     };
   }
 
+  private async getUsdcBalance(): Promise<number> {
+    try {
+      const accounts = await withRetry(
+        () => this.connection.getParsedTokenAccountsByOwner(
+          this.wallet.publicKey,
+          { mint: USDC_MINT }
+        ),
+        'usdc-balance',
+        { maxAttempts: 2 },
+      );
+      if (accounts.value.length === 0) return 0;
+      const info = accounts.value[0].account.data.parsed?.info;
+      return info?.tokenAmount?.uiAmount ?? 0;
+    } catch (error: unknown) {
+      getLogger().warn('CLIENT', `USDC balance fetch failed: ${getErrorMessage(error)}`);
+      return 0;
+    }
+  }
+
   getBalance(): number {
-    return this.solBalance;
+    return this.cachedSolBalance;
   }
 }

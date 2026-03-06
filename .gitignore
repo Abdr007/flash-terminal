@@ -1,7 +1,43 @@
+# Dependencies
 node_modules/
+
+# Build output
 dist/
+
+# Environment & secrets
 .env
+.env.local
+.env.*.local
+
+# Wallet & keys — NEVER commit
+*.key
+*.pem
+wallet.json
+id.json
+*-keypair.json
+
+# Logs
+*.log
+flash-*.log
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# TypeScript
 *.js.map
 *.d.ts
 !src/**/*.d.ts
-.DS_Store
+*.tsbuildinfo
+
+# Test coverage
+coverage/
+
+# Command history
+.flash_terminal_history

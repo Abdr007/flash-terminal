@@ -5,16 +5,24 @@
   "type": "module",
   "main": "dist/index.js",
   "bin": {
-    "flash": "dist/index.js"
+    "flash": "./dist/index.js"
   },
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && chmod +x dist/index.js",
     "dev": "tsx src/index.ts",
     "start": "node dist/index.js",
+    "prepack": "npm run build",
     "test": "vitest run",
     "test:watch": "vitest"
   },
-  "keywords": ["flash-trade", "solana", "perpetuals", "ai", "cli", "trading"],
+  "keywords": [
+    "flash-trade",
+    "solana",
+    "perpetuals",
+    "ai",
+    "cli",
+    "trading"
+  ],
   "license": "MIT",
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",
@@ -30,6 +38,7 @@
     "zod": "^3.24.2"
   },
   "devDependencies": {
+    "@types/bn.js": "^5.2.0",
     "@types/node": "^22.13.0",
     "tsx": "^4.19.2",
     "typescript": "^5.7.3",

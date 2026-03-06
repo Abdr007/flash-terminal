@@ -1,9 +1,22 @@
 import dotenv from 'dotenv';
 import { FlashConfig, VALID_NETWORKS, Network } from '../types/index.js';
 import { homedir } from 'os';
-import { resolve } from 'path';
+import { resolve, dirname } from 'path';
+import { fileURLToPath } from 'url';
+import { existsSync } from 'fs';
 
-dotenv.config();
+// Load .env from multiple locations (first match wins):
+// 1. Current working directory (local dev)
+// 2. ~/.flash/.env (user config for global install)
+// 3. Package install directory (bundled fallback)
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const envPaths = [
+  resolve(process.cwd(), '.env'),
+  resolve(homedir(), '.flash', '.env'),
+  resolve(__dirname, '..', '.env'),
+];
+const envFile = envPaths.find((p) => existsSync(p));
+dotenv.config({ path: envFile });
 
 function resolveHome(filepath: string): string {
   if (filepath.startsWith('~/')) {
@@ -37,7 +50,7 @@ export function loadConfig(): FlashConfig {
     defaultPool: process.env.DEFAULT_POOL || 'Crypto.1',
     network: parseNetwork(process.env.NETWORK),
     simulationMode: process.env.SIMULATION_MODE !== 'false',
-    defaultSlippageBps: parseIntSafe(process.env.DEFAULT_SLIPPAGE_BPS, 800),
+    defaultSlippageBps: parseIntSafe(process.env.DEFAULT_SLIPPAGE_BPS, 150),
     computeUnitLimit: parseIntSafe(process.env.COMPUTE_UNIT_LIMIT, 600000),
     computeUnitPrice: parseIntSafe(process.env.COMPUTE_UNIT_PRICE, 50000),
     logFile: process.env.LOG_FILE || null,

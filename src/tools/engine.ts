@@ -6,6 +6,7 @@ import {
 } from '../types/index.js';
 import { ToolRegistry } from './registry.js';
 import { allFlashTools } from './flash-tools.js';
+import { allClawdTools } from '../clawd/clawd-tools.js';
 import chalk from 'chalk';
 
 /**
@@ -21,6 +22,9 @@ export class ToolEngine {
     this.registry = new ToolRegistry();
 
     for (const tool of allFlashTools) {
+      this.registry.register(tool);
+    }
+    for (const tool of allClawdTools) {
       this.registry.register(tool);
     }
   }
@@ -123,8 +127,69 @@ export class ToolEngine {
           params: { period: intent.period },
         };
 
+      case ActionType.WalletConnect:
+        return {
+          toolName: 'wallet_connect',
+          params: { path: intent.path },
+        };
+
+      case ActionType.WalletAddress:
+        return { toolName: 'wallet_address', params: {} };
+
+      case ActionType.WalletBalance:
+        return { toolName: 'wallet_balance', params: {} };
+
       case ActionType.Help:
         return null;
+
+      // Clawd AI Agent
+      case ActionType.Analyze:
+        return {
+          toolName: 'clawd_analyze',
+          params: { market: intent.market },
+        };
+
+      case ActionType.SuggestTrade:
+        return {
+          toolName: 'clawd_suggest_trade',
+          params: { market: intent.market },
+        };
+
+      case ActionType.RiskReport:
+        return { toolName: 'clawd_risk_report', params: {} };
+
+      case ActionType.Dashboard:
+        return { toolName: 'clawd_dashboard', params: {} };
+
+      case ActionType.WhaleActivity:
+        return {
+          toolName: 'clawd_whale_activity',
+          params: { market: intent.market },
+        };
+
+      // Autopilot
+      case ActionType.AutopilotStart:
+        return { toolName: 'autopilot_start', params: {} };
+
+      case ActionType.AutopilotStop:
+        return { toolName: 'autopilot_stop', params: {} };
+
+      case ActionType.AutopilotStatus:
+        return { toolName: 'autopilot_status', params: {} };
+
+      // Market Scanner
+      case ActionType.ScanMarkets:
+        return { toolName: 'clawd_scan_markets', params: {} };
+
+      // Portfolio Intelligence
+      case ActionType.PortfolioState:
+        return { toolName: 'portfolio_state', params: {} };
+
+      case ActionType.PortfolioExposure:
+        return { toolName: 'portfolio_exposure', params: {} };
+
+      case ActionType.PortfolioRebalance:
+        return { toolName: 'portfolio_rebalance', params: {} };
 
       default:
         return null;
@@ -154,6 +219,29 @@ export class ToolEngine {
       `    ${chalk.cyan('open interest')} Open interest data`,
       `    ${chalk.cyan('leaderboard')}   Top traders`,
       `    ${chalk.cyan('fees')}          Fee data`,
+      '',
+      chalk.bold('  AI Agent:'),
+      `    ${chalk.cyan('analyze SOL')}         Market analysis with strategy signals`,
+      `    ${chalk.cyan('suggest trade')}       AI-powered trade suggestion`,
+      `    ${chalk.cyan('scan')}                Scan all markets for opportunities`,
+      `    ${chalk.cyan('risk report')}         Position risk & exposure summary`,
+      `    ${chalk.cyan('dashboard')}           Combined portfolio/market/stats`,
+      `    ${chalk.cyan('whale activity')}      Recent large positions`,
+      '',
+      chalk.bold('  Portfolio Intelligence:'),
+      `    ${chalk.cyan('portfolio state')}     Capital allocation & positions`,
+      `    ${chalk.cyan('portfolio exposure')}  Exposure breakdown by market`,
+      `    ${chalk.cyan('rebalance')}           Analyze portfolio balance`,
+      '',
+      chalk.bold('  Autopilot:'),
+      `    ${chalk.cyan('autopilot start')}     Start automated trading mode`,
+      `    ${chalk.cyan('autopilot stop')}      Stop autopilot`,
+      `    ${chalk.cyan('autopilot status')}    Show autopilot status & signals`,
+      '',
+      chalk.bold('  Wallet:'),
+      `    ${chalk.cyan('wallet address')}            Show wallet address`,
+      `    ${chalk.cyan('wallet balance')}            Show SOL balance`,
+      `    ${chalk.cyan('wallet connect <path>')}     Connect wallet from file`,
       '',
       chalk.bold('  System:'),
       `    ${chalk.cyan('help')}          Show this help`,

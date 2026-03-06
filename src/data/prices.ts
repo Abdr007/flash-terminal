@@ -5,6 +5,7 @@ export interface TokenPrice {
   symbol: string;
   price: number;
   timestamp: number;
+  isFallback: boolean;
 }
 
 // CoinGecko symbol → ID mapping
@@ -25,32 +26,8 @@ const COINGECKO_IDS: Record<string, string> = {
   HYPE: 'hyperliquid',
 };
 
-// Fallback prices used when all APIs fail
-const FALLBACK_PRICES: Record<string, number> = {
-  SOL: 150,
-  BTC: 65000,
-  ETH: 3000,
-  BNB: 600,
-  ZEC: 30,
-  JTO: 3,
-  JUP: 1.2,
-  PYTH: 0.4,
-  RAY: 2,
-  BONK: 0.00003,
-  WIF: 2,
-  PENGU: 0.01,
-  ORE: 1.5,
-  HYPE: 20,
-  FARTCOIN: 0.5,
-  PUMP: 0.01,
-  XAU: 2400,
-  XAG: 30,
-  CRUDEOIL: 75,
-  EUR: 1.08,
-  GBP: 1.27,
-  KMNO: 0.1,
-  MET: 0.5,
-};
+// SECURITY: No hardcoded fallback prices. If CoinGecko fails, the market is
+// excluded from analysis. Trading decisions must NEVER rely on stale prices.
 
 const FETCH_TIMEOUT_MS = 8_000;
 
@@ -60,7 +37,7 @@ export class PriceService {
 
   /**
    * Fetch prices for the given symbols.
-   * Strategy: CoinGecko API → fallback hardcoded prices.
+   * Strategy: CoinGecko API only. No fallback prices — missing markets are excluded.
    */
   async getPrices(symbols: string[]): Promise<Map<string, TokenPrice>> {
     const priceMap = new Map<string, TokenPrice>();
@@ -94,18 +71,10 @@ export class PriceService {
       logger.warn('PRICE', `CoinGecko fetch failed: ${getErrorMessage(error)}`);
     }
 
-    // Fill missing symbols with fallback prices
+    // Log missing symbols — no fallback prices used
     for (const sym of uncached) {
       if (!priceMap.has(sym)) {
-        const fallback = FALLBACK_PRICES[sym];
-        if (fallback) {
-          const tp: TokenPrice = { symbol: sym, price: fallback, timestamp: now };
-          priceMap.set(sym, tp);
-          this.cache.set(sym, { data: tp, expiry: now + this.cacheTtlMs });
-          logger.debug('PRICE', `Using fallback price for ${sym}: $${fallback}`);
-        } else {
-          logger.warn('PRICE', `No price available for ${sym}`);
-        }
+        logger.warn('PRICE', `No live price available for ${sym} — market will be excluded from analysis`);
       }
     }
 
@@ -152,7 +121,7 @@ export class PriceService {
       for (const [id, priceData] of Object.entries(data)) {
         const sym = idToSymbol.get(id);
         if (sym && priceData?.usd && priceData.usd > 0) {
-          results.push({ symbol: sym, price: priceData.usd, timestamp: now });
+          results.push({ symbol: sym, price: priceData.usd, timestamp: now, isFallback: false });
         }
       }
 

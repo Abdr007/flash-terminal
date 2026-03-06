@@ -18,9 +18,11 @@ import { FStatsClient } from '../data/fstats.js';
 import { getLogger } from '../utils/logger.js';
 import { getErrorMessage } from '../utils/retry.js';
 
+const MAX_TRADE_HISTORY = 500;
+
 /**
  * SimulatedFlashClient implements IFlashClient for paper trading.
- * Uses CoinGecko prices as primary, fstats as enrichment, and hardcoded fallbacks.
+ * Uses CoinGecko prices as primary, fstats as enrichment. No hardcoded fallbacks.
  * No real transactions are ever submitted.
  */
 export class SimulatedFlashClient implements IFlashClient {
@@ -39,26 +41,9 @@ export class SimulatedFlashClient implements IFlashClient {
     };
     this.priceService = new PriceService();
     this.fstats = new FStatsClient();
-
-    // Seed with fallback prices immediately so trading always works
-    this.livePrices.set('SOL', 150);
-    this.livePrices.set('BTC', 65000);
-    this.livePrices.set('ETH', 3000);
-    this.livePrices.set('BNB', 600);
-    this.livePrices.set('ZEC', 30);
-    this.livePrices.set('JTO', 3);
-    this.livePrices.set('JUP', 1.2);
-    this.livePrices.set('PYTH', 0.4);
-    this.livePrices.set('RAY', 2);
-    this.livePrices.set('BONK', 0.00003);
-    this.livePrices.set('WIF', 2);
-    this.livePrices.set('PENGU', 0.01);
-    this.livePrices.set('ORE', 1.5);
-    this.livePrices.set('FARTCOIN', 0.5);
-    this.livePrices.set('PUMP', 0.01);
-    this.livePrices.set('HYPE', 20);
-    this.livePrices.set('MET', 0.5);
-    this.livePrices.set('KMNO', 0.1);
+    // SECURITY: No hardcoded seed prices. Live prices are fetched on first
+    // trade or market data request via refreshPrices(). If all APIs fail,
+    // getPrice() throws an error — preventing trades at stale prices.
   }
 
   private async refreshPrices(): Promise<void> {
@@ -66,7 +51,10 @@ export class SimulatedFlashClient implements IFlashClient {
 
     // Primary: CoinGecko via PriceService
     try {
-      const symbols = Array.from(this.livePrices.keys());
+      const defaultSymbols = ['SOL', 'BTC', 'ETH', 'BNB', 'JUP', 'PYTH', 'RAY', 'BONK', 'WIF'];
+      const symbols = this.livePrices.size > 0
+        ? Array.from(this.livePrices.keys())
+        : defaultSymbols;
       const prices = await this.priceService.getPrices(symbols);
       let updated = 0;
       for (const [sym, tp] of prices) {
@@ -117,6 +105,9 @@ export class SimulatedFlashClient implements IFlashClient {
   }
 
   private calcLiquidationPrice(entryPrice: number, leverage: number, side: TradeSide): number {
+    if (!Number.isFinite(leverage) || leverage <= 0 || !Number.isFinite(entryPrice) || entryPrice <= 0) {
+      return 0;
+    }
     const liqDistance = (1 / leverage) * 0.9;
     return side === TradeSide.Long
       ? entryPrice * (1 - liqDistance)
@@ -166,6 +157,7 @@ export class SimulatedFlashClient implements IFlashClient {
       price,
       timestamp: Date.now(),
     });
+    this.trimHistory();
 
     const txSig = `SIM_${position.id}`;
     logger.trade('OPEN', { market, side, collateral: collateralAmount, leverage, price, tx: txSig });
@@ -205,6 +197,7 @@ export class SimulatedFlashClient implements IFlashClient {
       pnl,
       timestamp: Date.now(),
     });
+    this.trimHistory();
 
     const txSig = `SIM_CLOSE_${position.id}`;
     logger.trade('CLOSE', { market, side, pnl, price, tx: txSig });
@@ -274,6 +267,20 @@ export class SimulatedFlashClient implements IFlashClient {
 
   async getMarketData(market?: string): Promise<MarketData[]> {
     await this.refreshPrices();
+
+    // If no live prices available yet, request common markets
+    if (this.livePrices.size === 0) {
+      const defaultSymbols = ['SOL', 'BTC', 'ETH', 'BNB', 'JUP', 'PYTH', 'RAY', 'BONK', 'WIF'];
+      try {
+        const prices = await this.priceService.getPrices(defaultSymbols);
+        for (const [sym, tp] of prices) {
+          if (tp.price > 0) this.livePrices.set(sym, tp.price);
+        }
+      } catch {
+        // If all APIs fail, return empty — no fabricated data
+      }
+    }
+
     const symbols = market
       ? [market.toUpperCase()]
       : Array.from(this.livePrices.keys());
@@ -314,5 +321,12 @@ export class SimulatedFlashClient implements IFlashClient {
 
   getTradeHistory(): SimulatedTrade[] {
     return [...this.state.tradeHistory];
+  }
+
+  /** Trim trade history to prevent unbounded memory growth. */
+  private trimHistory(): void {
+    if (this.state.tradeHistory.length > MAX_TRADE_HISTORY) {
+      this.state.tradeHistory = this.state.tradeHistory.slice(-MAX_TRADE_HISTORY);
+    }
   }
 }

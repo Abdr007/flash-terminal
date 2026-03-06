@@ -2,6 +2,7 @@ import chalk from 'chalk';
 import { TradeSide, Position, MarketData, ToolResult } from '../types/index.js';
 
 export function formatUsd(value: number): string {
+  if (!Number.isFinite(value)) return 'N/A';
   const abs = Math.abs(value);
   if (abs >= 1_000_000) return `$${(value / 1_000_000).toFixed(2)}M`;
   if (abs >= 1_000) return `$${(value / 1_000).toFixed(2)}K`;
@@ -9,12 +10,14 @@ export function formatUsd(value: number): string {
 }
 
 export function formatPrice(value: number): string {
+  if (!Number.isFinite(value)) return 'N/A';
   if (value >= 1000) return `$${value.toFixed(2)}`;
   if (value >= 1) return `$${value.toFixed(4)}`;
   return `$${value.toFixed(6)}`;
 }
 
 export function formatPercent(value: number): string {
+  if (!Number.isFinite(value)) return 'N/A';
   const sign = value >= 0 ? '+' : '';
   return `${sign}${value.toFixed(2)}%`;
 }

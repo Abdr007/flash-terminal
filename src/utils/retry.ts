@@ -28,7 +28,8 @@ export async function withRetry<T>(
     } catch (err: unknown) {
       lastError = err instanceof Error ? err : new Error(String(err));
       if (attempt < maxAttempts) {
-        const delay = Math.min(baseDelayMs * 2 ** (attempt - 1), maxDelayMs);
+        const jitter = Math.random() * baseDelayMs * 0.5;
+        const delay = Math.min(baseDelayMs * 2 ** (attempt - 1) + jitter, maxDelayMs);
         logger.warn('RETRY', `${label} failed (attempt ${attempt}/${maxAttempts}), retrying in ${delay}ms`, {
           error: lastError.message,
         });

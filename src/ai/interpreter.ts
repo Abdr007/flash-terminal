@@ -21,7 +21,22 @@ Available actions:
 - get_leaderboard: Get trader leaderboard
 - get_trader_profile: Get a trader's profile
 - get_fees: Get fee data
+- wallet_connect: Connect a wallet from file path
+- wallet_address: Show connected wallet address
+- wallet_balance: Show wallet SOL balance
 - help: Show help
+- analyze: Analyze a market with strategy signals
+- suggest_trade: Get AI trade suggestion
+- risk_report: Show position risk assessment
+- dashboard: Combined portfolio/market/stats view
+- whale_activity: Show recent large positions
+- autopilot_start: Start autopilot trading mode
+- autopilot_stop: Stop autopilot trading mode
+- autopilot_status: Show autopilot status
+- scan_markets: Scan all markets for trade opportunities
+- portfolio_state: Show portfolio capital allocation state
+- portfolio_exposure: Show portfolio exposure breakdown
+- portfolio_rebalance: Analyze and suggest portfolio rebalancing
 
 Available markets: ${getAllMarkets().join(', ')}
 
@@ -37,7 +52,27 @@ Examples:
 - "portfolio" -> {"action":"get_portfolio"}
 - "volume" -> {"action":"get_volume"}
 - "leaderboard" -> {"action":"get_leaderboard"}
+- "wallet connect /path/to/key.json" -> {"action":"wallet_connect","path":"/path/to/key.json"}
+- "wallet address" -> {"action":"wallet_address"}
+- "wallet balance" -> {"action":"wallet_balance"}
 - "help" -> {"action":"help"}
+- "analyze SOL" -> {"action":"analyze","market":"SOL"}
+- "suggest trade" -> {"action":"suggest_trade"}
+- "suggest trade BTC" -> {"action":"suggest_trade","market":"BTC"}
+- "risk report" -> {"action":"risk_report"}
+- "dashboard" -> {"action":"dashboard"}
+- "whale activity" -> {"action":"whale_activity"}
+- "whale activity SOL" -> {"action":"whale_activity","market":"SOL"}
+- "autopilot start" -> {"action":"autopilot_start"}
+- "autopilot stop" -> {"action":"autopilot_stop"}
+- "autopilot status" -> {"action":"autopilot_status"}
+- "scan" -> {"action":"scan_markets"}
+- "scan markets" -> {"action":"scan_markets"}
+- "portfolio state" -> {"action":"portfolio_state"}
+- "portfolio exposure" -> {"action":"portfolio_exposure"}
+- "exposure" -> {"action":"portfolio_exposure"}
+- "rebalance" -> {"action":"portfolio_rebalance"}
+- "portfolio rebalance" -> {"action":"portfolio_rebalance"}
 
 Rules:
 - Market symbols are UPPERCASE
@@ -65,8 +100,20 @@ export function localParse(input: string): ParsedIntent | null {
     return { action: ActionType.Help };
   }
 
+  // Wallet commands
+  const walletConnectMatch = lower.match(/^wallet\s+connect\s+(.+)$/);
+  if (walletConnectMatch) {
+    return { action: ActionType.WalletConnect, path: walletConnectMatch[1].trim() };
+  }
+  if (/^wallet\s+(address|addr)$/.test(lower)) {
+    return { action: ActionType.WalletAddress };
+  }
+  if (/^wallet\s+(balance|bal)$/.test(lower)) {
+    return { action: ActionType.WalletBalance };
+  }
+
   // Portfolio / balance
-  if (/^(portfolio|balance|wallet|account)$/.test(lower)) {
+  if (/^(portfolio|balance|account)$/.test(lower)) {
     return { action: ActionType.GetPortfolio };
   }
 
@@ -188,6 +235,75 @@ export function localParse(input: string): ParsedIntent | null {
     }
   }
 
+  // ─── Clawd AI Agent Commands ─────────────────────────────────────────────
+
+  // Analyze: "analyze SOL", "analyze BTC"
+  const analyzeMatch = lower.match(/^analyze\s+([a-z]+)$/);
+  if (analyzeMatch) {
+    return { action: ActionType.Analyze, market: analyzeMatch[1].toUpperCase() };
+  }
+
+  // Suggest trade: "suggest trade", "suggest trade SOL"
+  const suggestMatch = lower.match(/^suggest\s+trade(?:\s+([a-z]+))?$/);
+  if (suggestMatch) {
+    return {
+      action: ActionType.SuggestTrade,
+      ...(suggestMatch[1] ? { market: suggestMatch[1].toUpperCase() } : {}),
+    };
+  }
+
+  // Risk report: "risk report", "risk"
+  if (/^(risk report|risk)$/.test(lower)) {
+    return { action: ActionType.RiskReport };
+  }
+
+  // Dashboard: "dashboard", "dash"
+  if (/^(dashboard|dash)$/.test(lower)) {
+    return { action: ActionType.Dashboard };
+  }
+
+  // Whale activity: "whale activity", "whales", "whale activity SOL"
+  const whaleMatch = lower.match(/^(?:whale\s+activity|whales?)(?:\s+([a-z]+))?$/);
+  if (whaleMatch) {
+    return {
+      action: ActionType.WhaleActivity,
+      ...(whaleMatch[1] ? { market: whaleMatch[1].toUpperCase() } : {}),
+    };
+  }
+
+  // ─── Autopilot Commands ─────────────────────────────────────────────────
+
+  if (/^autopilot\s+start$/.test(lower)) {
+    return { action: ActionType.AutopilotStart };
+  }
+
+  if (/^autopilot\s+stop$/.test(lower)) {
+    return { action: ActionType.AutopilotStop };
+  }
+
+  if (/^autopilot\s+(status|info)$/.test(lower)) {
+    return { action: ActionType.AutopilotStatus };
+  }
+
+  // Market Scanner
+  if (/^(?:scan|scan\s+markets?|scan\s+opportunities?)$/.test(lower)) {
+    return { action: ActionType.ScanMarkets };
+  }
+
+  // ─── Portfolio Intelligence Commands ──────────────────────────────────────
+
+  if (/^(?:portfolio\s+state|portfolio\s+status|capital)$/.test(lower)) {
+    return { action: ActionType.PortfolioState };
+  }
+
+  if (/^(?:portfolio\s+exposure|exposure)$/.test(lower)) {
+    return { action: ActionType.PortfolioExposure };
+  }
+
+  if (/^(?:portfolio\s+rebalance|rebalance)$/.test(lower)) {
+    return { action: ActionType.PortfolioRebalance };
+  }
+
   return null;
 }
 
@@ -197,6 +313,9 @@ export class AIInterpreter {
   constructor(apiKey: string) {
     this.client = new Anthropic({ apiKey });
   }
+
+  private static readonly MAX_INPUT_LENGTH = 500;
+  private static readonly API_TIMEOUT_MS = 15_000;
 
   async parseIntent(userInput: string): Promise<ParsedIntent> {
     const logger = getLogger();
@@ -208,16 +327,30 @@ export class AIInterpreter {
       return localResult;
     }
 
+    // Input length limit before sending to Claude
+    if (userInput.length > AIInterpreter.MAX_INPUT_LENGTH) {
+      logger.warn('AI', `Input too long (${userInput.length} chars, max ${AIInterpreter.MAX_INPUT_LENGTH})`);
+      return { action: ActionType.Help };
+    }
+
     // Fall back to Claude for complex inputs
     logger.debug('AI', 'Calling Claude API', { input: userInput });
 
     try {
-      const response = await this.client.messages.create({
-        model: 'claude-haiku-4-5-20251001',
-        max_tokens: 256,
-        system: SYSTEM_PROMPT,
-        messages: [{ role: 'user', content: userInput }],
-      });
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), AIInterpreter.API_TIMEOUT_MS);
+
+      let response;
+      try {
+        response = await this.client.messages.create({
+          model: 'claude-haiku-4-5-20251001',
+          max_tokens: 256,
+          system: SYSTEM_PROMPT,
+          messages: [{ role: 'user', content: userInput }],
+        }, { signal: controller.signal });
+      } finally {
+        clearTimeout(timeout);
+      }
 
       if (response.content.length === 0 || response.content[0].type !== 'text') {
         logger.warn('AI', 'Empty response from Claude');
@@ -246,7 +379,7 @@ export class AIInterpreter {
     } catch (error: unknown) {
       const msg = getErrorMessage(error);
       // Graceful fallback on API errors (billing, network, auth)
-      if (msg.includes('credit balance') || msg.includes('401') || msg.includes('403') || msg.includes('429')) {
+      if (msg.includes('credit balance') || msg.includes('401') || msg.includes('403') || msg.includes('429') || msg.includes('abort') || msg.includes('timeout')) {
         logger.warn('AI', `Claude API unavailable (${msg}). Using local parsing only.`);
       } else {
         logger.error('AI', `Parse failed: ${msg}`);
