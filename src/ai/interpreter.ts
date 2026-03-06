@@ -22,6 +22,11 @@ Available actions:
 - get_trader_profile: Get a trader's profile
 - get_fees: Get fee data
 - wallet_connect: Connect a wallet from file path
+- wallet_import: Import and store a wallet (needs name and path)
+- wallet_list: List stored wallets
+- wallet_use: Switch to a stored wallet (needs name)
+- wallet_remove: Remove a stored wallet (needs name)
+- wallet_status: Show wallet connection status
 - wallet_address: Show connected wallet address
 - wallet_balance: Show wallet SOL balance
 - help: Show help
@@ -53,6 +58,11 @@ Examples:
 - "volume" -> {"action":"get_volume"}
 - "leaderboard" -> {"action":"get_leaderboard"}
 - "wallet connect /path/to/key.json" -> {"action":"wallet_connect","path":"/path/to/key.json"}
+- "wallet import main /path/to/key.json" -> {"action":"wallet_import","name":"main","path":"/path/to/key.json"}
+- "wallet list" -> {"action":"wallet_list"}
+- "wallet use main" -> {"action":"wallet_use","name":"main"}
+- "wallet remove old" -> {"action":"wallet_remove","name":"old"}
+- "wallet" -> {"action":"wallet_status"}
 - "wallet address" -> {"action":"wallet_address"}
 - "wallet balance" -> {"action":"wallet_balance"}
 - "help" -> {"action":"help"}
@@ -101,6 +111,21 @@ export function localParse(input: string): ParsedIntent | null {
   }
 
   // Wallet commands
+  const walletImportMatch = lower.match(/^wallet\s+import\s+(\S+)\s+(.+)$/);
+  if (walletImportMatch) {
+    return { action: ActionType.WalletImport, name: walletImportMatch[1], path: walletImportMatch[2].trim() };
+  }
+  if (/^wallet\s+list$/.test(lower)) {
+    return { action: ActionType.WalletList };
+  }
+  const walletUseMatch = lower.match(/^wallet\s+use\s+(\S+)$/);
+  if (walletUseMatch) {
+    return { action: ActionType.WalletUse, name: walletUseMatch[1] };
+  }
+  const walletRemoveMatch = lower.match(/^wallet\s+remove\s+(\S+)$/);
+  if (walletRemoveMatch) {
+    return { action: ActionType.WalletRemove, name: walletRemoveMatch[1] };
+  }
   const walletConnectMatch = lower.match(/^wallet\s+connect\s+(.+)$/);
   if (walletConnectMatch) {
     return { action: ActionType.WalletConnect, path: walletConnectMatch[1].trim() };
@@ -110,6 +135,13 @@ export function localParse(input: string): ParsedIntent | null {
   }
   if (/^wallet\s+(balance|bal)$/.test(lower)) {
     return { action: ActionType.WalletBalance };
+  }
+  if (/^wallet\s+tokens?$/.test(lower)) {
+    return { action: ActionType.WalletTokens };
+  }
+  // Bare "wallet" → wallet status
+  if (/^wallet$/.test(lower)) {
+    return { action: ActionType.WalletStatus };
   }
 
   // Portfolio / balance
@@ -142,8 +174,13 @@ export function localParse(input: string): ParsedIntent | null {
     return { action: ActionType.GetFees };
   }
 
-  // Market data: "SOL price", "price of BTC", "markets"
-  if (/^(markets?|all markets)$/.test(lower)) {
+  // Flash markets list
+  if (/^(?:flash\s+)?markets$/.test(lower)) {
+    return { action: ActionType.FlashMarkets };
+  }
+
+  // Market data: "SOL price", "price of BTC", "all markets"
+  if (/^(all markets)$/.test(lower)) {
     return { action: ActionType.GetMarketData };
   }
   const priceMatch = lower.match(/^(?:price of\s+)?([a-z]+)\s*(?:price)?$/);

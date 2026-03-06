@@ -46,17 +46,26 @@ program
 program
   .command('start', { isDefault: true })
   .description('Start the interactive Flash AI Terminal')
-  .option('-s, --simulate', 'Run in simulation mode')
-  .option('-l, --live', 'Run in live mode (real transactions)')
+  .option('--sim', 'Run in simulation mode (default)')
+  .option('--live', 'Run in live trading mode (real transactions)')
   .option('-p, --pool <name>', 'Default pool name')
   .option('--rpc <url>', 'Solana RPC URL')
-  .action(async (opts: { live?: boolean; simulate?: boolean; pool?: string; rpc?: string }) => {
+  .action(async (opts: { live?: boolean; sim?: boolean; pool?: string; rpc?: string }) => {
+    // Conflicting flags guard
+    if (opts.sim && opts.live) {
+      console.error(chalk.red('\n  Cannot run both --sim and --live modes.\n'));
+      console.log(chalk.dim('  Usage:'));
+      console.log(chalk.dim('    flash --sim     Simulation mode (paper trading)'));
+      console.log(chalk.dim('    flash --live    Live trading mode (real transactions)\n'));
+      process.exit(1);
+    }
+
     const config = loadConfig();
 
-    // Phase 4: Default to simulation mode for safety (--live must be explicit)
+    // CLI flags override env var. Default to simulation for safety.
     if (opts.live) {
       config.simulationMode = false;
-    } else if (opts.simulate) {
+    } else if (opts.sim) {
       config.simulationMode = true;
     }
     // If neither flag: keep config.simulationMode from loadConfig() (defaults to true)

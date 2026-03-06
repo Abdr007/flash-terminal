@@ -30,6 +30,7 @@ export class SimulatedFlashClient implements IFlashClient {
   private priceService: PriceService;
   private fstats: FStatsClient;
   private livePrices: Map<string, number> = new Map();
+  private priceChanges24h: Map<string, number> = new Map();
   readonly walletAddress: string;
 
   constructor(initialBalance = 10_000) {
@@ -60,6 +61,7 @@ export class SimulatedFlashClient implements IFlashClient {
       for (const [sym, tp] of prices) {
         if (tp.price > 0) {
           this.livePrices.set(sym, tp.price);
+          this.priceChanges24h.set(sym, tp.priceChange24h);
           updated++;
         }
       }
@@ -290,7 +292,7 @@ export class SimulatedFlashClient implements IFlashClient {
       .map((symbol) => ({
         symbol,
         price: this.livePrices.get(symbol)!,
-        priceChange24h: 0,
+        priceChange24h: this.priceChanges24h.get(symbol) ?? 0,
         openInterestLong: 0,
         openInterestShort: 0,
         maxLeverage: 100,

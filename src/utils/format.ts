@@ -88,12 +88,29 @@ function stripAnsi(str: string): string {
   return str.replace(/\u001b\[[0-9;]*m/g, '');
 }
 
-export function banner(): string {
-  return chalk.yellow(`
-  ⚡ FLASH AI TERMINAL ⚡
-  ━━━━━━━━━━━━━━━━━━━━━
-  AI-Powered Trading on Flash Trade
-  `);
+export function banner(simulationMode = true): string {
+  if (simulationMode) {
+    return [
+      '',
+      chalk.yellow('  ⚡ FLASH AI TERMINAL'),
+      chalk.yellow('  ━━━━━━━━━━━━━━━━━━━━━'),
+      chalk.bgYellow.black(' SIMULATION MODE '),
+      '',
+      chalk.green('  Autopilot Available'),
+      chalk.dim('  Trades are simulated'),
+      '',
+    ].join('\n');
+  }
+  return [
+    '',
+    chalk.red.bold('  ⚡ FLASH AI TERMINAL'),
+    chalk.red('  ━━━━━━━━━━━━━━━━━━━━━'),
+    chalk.bgRed.white.bold(' LIVE TRADING MODE '),
+    '',
+    chalk.yellow('  Autopilot Disabled'),
+    chalk.dim('  Manual trading only'),
+    '',
+  ].join('\n');
 }
 
 export function shortAddress(address: string): string {

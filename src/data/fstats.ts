@@ -122,9 +122,12 @@ async function safeFetchJson<T>(path: string): Promise<T | null> {
  */
 function safeArray<T>(raw: unknown): T[] {
   if (Array.isArray(raw)) return raw as T[];
-  if (raw && typeof raw === 'object' && 'data' in raw) {
-    const inner = (raw as Record<string, unknown>).data;
-    if (Array.isArray(inner)) return inner as T[];
+  if (raw && typeof raw === 'object') {
+    const obj = raw as Record<string, unknown>;
+    // Handle common API wrapper patterns: { data: [...] }, { markets: [...] }, etc.
+    for (const key of ['data', 'markets', 'items', 'results', 'entries']) {
+      if (key in obj && Array.isArray(obj[key])) return obj[key] as T[];
+    }
   }
   return [];
 }

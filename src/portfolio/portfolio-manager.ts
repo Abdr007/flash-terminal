@@ -60,10 +60,11 @@ export class PortfolioManager {
 
     for (const pos of positions) {
       const key = pos.market.toUpperCase();
-      const notional = pos.sizeUsd;
+      const notional = Number.isFinite(pos.sizeUsd) ? pos.sizeUsd : 0;
+      const collateral = Number.isFinite(pos.collateralUsd) ? pos.collateralUsd : 0;
 
       exposureByMarket[key] = (exposureByMarket[key] ?? 0) + notional;
-      allocatedCapital += pos.collateralUsd;
+      allocatedCapital += collateral;
 
       if (pos.side === TradeSide.Long) {
         exposureLong += notional;
@@ -74,17 +75,18 @@ export class PortfolioManager {
       portfolioPositions.push({
         market: pos.market,
         side: pos.side,
-        entryPrice: pos.entryPrice,
-        leverage: pos.leverage,
-        collateral: pos.collateralUsd,
+        entryPrice: Number.isFinite(pos.entryPrice) ? pos.entryPrice : 0,
+        leverage: Number.isFinite(pos.leverage) ? pos.leverage : 0,
+        collateral,
         notional,
         timestamp: pos.timestamp,
-        pnlPct: pos.unrealizedPnlPercent,
+        pnlPct: Number.isFinite(pos.unrealizedPnlPercent) ? pos.unrealizedPnlPercent : 0,
       });
     }
 
-    const totalCapital = balance + allocatedCapital;
-    const freeCapital = Math.max(0, balance);
+    const safeBalance = Number.isFinite(balance) ? balance : 0;
+    const totalCapital = safeBalance + allocatedCapital;
+    const freeCapital = Math.max(0, safeBalance);
     const utilizationPct = totalCapital > 0 ? (allocatedCapital / totalCapital) * 100 : 0;
 
     return {

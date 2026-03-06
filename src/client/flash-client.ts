@@ -532,7 +532,8 @@ export class FlashClient implements IFlashClient {
 
     for (const raw of rawPositions as unknown as Array<{
       pubkey: PublicKey; market: PublicKey;
-      entryPrice?: { price: BN } | BN; sizeUsd?: BN; collateralUsd?: BN; openTime?: BN;
+      entryPrice?: { price: BN; exponent: number } | BN; sizeUsd?: BN; collateralUsd?: BN; openTime?: BN;
+      sizeDecimals?: number; collateralDecimals?: number;
     }>) {
       try {
         const marketConfig = markets.find((m) => m.marketAccount.equals(raw.market));
@@ -544,13 +545,23 @@ export class FlashClient implements IFlashClient {
         const tokenPrice = priceMap.get(targetToken.symbol);
         if (!tokenPrice) continue;
 
+        // Entry price is a ContractOraclePrice { price: BN, exponent: number }
+        // Compute: price * 10^exponent (exponent is typically negative, e.g. -8)
         const rawEntryField = raw.entryPrice;
-        const entryPriceBn = rawEntryField
-          ? (typeof rawEntryField === 'object' && 'price' in rawEntryField ? rawEntryField.price : rawEntryField as BN)
-          : null;
-        const parsedEntry = entryPriceBn ? parseFloat(entryPriceBn.toString()) / 1e6 : 0;
-        const parsedSize = raw.sizeUsd ? parseFloat(raw.sizeUsd.toString()) / 1e6 : 0;
-        const parsedCollateral = raw.collateralUsd ? parseFloat(raw.collateralUsd.toString()) / 1e6 : 0;
+        let parsedEntry = 0;
+        if (rawEntryField && typeof rawEntryField === 'object' && 'price' in rawEntryField && 'exponent' in rawEntryField) {
+          parsedEntry = parseFloat(rawEntryField.price.toString()) * Math.pow(10, rawEntryField.exponent);
+        } else if (rawEntryField && BN.isBN(rawEntryField)) {
+          // Fallback: bare BN — use oracle exponent from the current price
+          const oracleExp = Number(tokenPrice.price.exponent.toString());
+          parsedEntry = parseFloat(rawEntryField.toString()) * Math.pow(10, oracleExp);
+        }
+
+        // sizeUsd and collateralUsd use their respective decimal fields (default to 6 for USDC precision)
+        const sizeDec = raw.sizeDecimals ?? 6;
+        const collDec = raw.collateralDecimals ?? 6;
+        const parsedSize = raw.sizeUsd ? parseFloat(raw.sizeUsd.toString()) / Math.pow(10, sizeDec) : 0;
+        const parsedCollateral = raw.collateralUsd ? parseFloat(raw.collateralUsd.toString()) / Math.pow(10, collDec) : 0;
         const parsedCurrentPrice = tokenPrice.uiPrice;
 
         // NaN/Infinity guard: skip corrupt positions

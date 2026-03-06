@@ -70,6 +70,17 @@ export class Autopilot {
   }
 
   start(): string {
+    // Hard block: autopilot must never run in live mode
+    if (!this.context.simulationMode) {
+      return [
+        '',
+        chalk.red('  Autopilot disabled in LIVE mode.'),
+        chalk.yellow('  Run terminal with: flash --sim'),
+        chalk.dim('  to test automated trading.'),
+        '',
+      ].join('\n');
+    }
+
     if (this.state.active) {
       return chalk.yellow('  Autopilot is already running.');
     }
@@ -323,18 +334,21 @@ export class Autopilot {
       // Final active check before execution
       if (!this.state.active) return;
 
-      // 6. Execute or prompt
+      // Execution safety: block any autopilot trading in live mode
+      if (!this.context.simulationMode) {
+        logger.error('AUTOPILOT', 'Autopilot execution blocked in live mode');
+        this.stop();
+        return;
+      }
+
+      // 6. Execute in simulation mode
       const sideColor = suggestion.side === 'long' ? chalk.green : chalk.red;
       const msg = `  [Autopilot] Signal: ${sideColor(suggestion.side.toUpperCase())} ${suggestion.market} ${suggestion.leverage}x ${formatUsd(suggestion.collateral)} (${(suggestion.confidence * 100).toFixed(0)}%)`;
 
-      if (this.context.simulationMode && this.onTrade) {
-        // Auto-execute in simulation
+      if (this.onTrade) {
         this.log(chalk.cyan(msg + ' — auto-executing in simulation'));
         await this.onTrade(suggestion);
         this.lastTradeAt = Date.now();
-      } else if (this.onTrade) {
-        // In live mode, just log the signal (user confirms via suggest trade)
-        this.log(chalk.cyan(msg + ' — run "suggest trade" to review'));
       } else {
         this.log(chalk.cyan(msg));
       }

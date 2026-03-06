@@ -712,28 +712,39 @@ export const autopilotStart: ToolDefinition = {
   description: 'Start automated trading mode with strategy signals and risk controls',
   parameters: z.object({}),
   execute: async (_params: Record<string, unknown>, context: ToolContext): Promise<ToolResult> => {
+    // Guard: autopilot only allowed in simulation mode
+    if (!context.simulationMode) {
+      return {
+        success: false,
+        message: [
+          '',
+          chalk.red('  Autopilot disabled in LIVE mode.'),
+          chalk.yellow('  Run terminal with: flash --sim'),
+          chalk.dim('  to test automated trading.'),
+          '',
+        ].join('\n'),
+      };
+    }
+
     const autopilot = getAutopilot(context);
 
     autopilot.setLogHandler((msg) => {
       console.log(msg);
     });
 
-    // In simulation mode, auto-execute trades
-    if (context.simulationMode) {
-      autopilot.setTradeHandler(async (suggestion) => {
-        try {
-          await context.flashClient.openPosition(
-            suggestion.market,
-            suggestion.side,
-            suggestion.collateral,
-            suggestion.leverage,
-          );
-          console.log(chalk.green(`  [Autopilot] Executed: ${suggestion.side} ${suggestion.market} $${suggestion.collateral} ${suggestion.leverage}x`));
-        } catch {
-          console.log(chalk.red(`  [Autopilot] Trade execution failed`));
-        }
-      });
-    }
+    autopilot.setTradeHandler(async (suggestion) => {
+      try {
+        await context.flashClient.openPosition(
+          suggestion.market,
+          suggestion.side,
+          suggestion.collateral,
+          suggestion.leverage,
+        );
+        console.log(chalk.green(`  [Autopilot] Executed: ${suggestion.side} ${suggestion.market} $${suggestion.collateral} ${suggestion.leverage}x`));
+      } catch {
+        console.log(chalk.red(`  [Autopilot] Trade execution failed`));
+      }
+    });
 
     const message = autopilot.start();
     return { success: true, message };
@@ -745,6 +756,18 @@ export const autopilotStop: ToolDefinition = {
   description: 'Stop automated trading mode',
   parameters: z.object({}),
   execute: async (_params: Record<string, unknown>, context: ToolContext): Promise<ToolResult> => {
+    if (!context.simulationMode) {
+      return {
+        success: false,
+        message: [
+          '',
+          chalk.red('  Autopilot disabled in LIVE mode.'),
+          chalk.yellow('  Run terminal with: flash --sim'),
+          chalk.dim('  to test automated trading.'),
+          '',
+        ].join('\n'),
+      };
+    }
     const autopilot = getAutopilot(context);
     const message = autopilot.stop();
     return { success: true, message };
@@ -756,6 +779,18 @@ export const autopilotStatus: ToolDefinition = {
   description: 'Show current autopilot status, signals, and last suggestion',
   parameters: z.object({}),
   execute: async (_params: Record<string, unknown>, context: ToolContext): Promise<ToolResult> => {
+    if (!context.simulationMode) {
+      return {
+        success: false,
+        message: [
+          '',
+          chalk.red('  Autopilot disabled in LIVE mode.'),
+          chalk.yellow('  Run terminal with: flash --sim'),
+          chalk.dim('  to test automated trading.'),
+          '',
+        ].join('\n'),
+      };
+    }
     const autopilot = getAutopilot(context);
     const message = autopilot.getStatus();
     return { success: true, message };

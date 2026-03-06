@@ -22,9 +22,16 @@ export enum ActionType {
   GetTraderProfile = 'get_trader_profile',
   GetFees = 'get_fees',
   WalletConnect = 'wallet_connect',
+  WalletImport = 'wallet_import',
+  WalletList = 'wallet_list',
+  WalletUse = 'wallet_use',
+  WalletRemove = 'wallet_remove',
+  WalletStatus = 'wallet_status',
   WalletAddress = 'wallet_address',
   WalletBalance = 'wallet_balance',
+  WalletTokens = 'wallet_tokens',
   Help = 'help',
+  FlashMarkets = 'flash_markets',
 
   // Clawd AI Agent
   Analyze = 'analyze',
@@ -126,12 +133,44 @@ export const WalletConnectSchema = z.object({
   path: z.string(),
 });
 
+export const WalletImportSchema = z.object({
+  action: z.literal(ActionType.WalletImport),
+  name: z.string(),
+  path: z.string(),
+});
+
+export const WalletListSchema = z.object({
+  action: z.literal(ActionType.WalletList),
+});
+
+export const WalletUseSchema = z.object({
+  action: z.literal(ActionType.WalletUse),
+  name: z.string(),
+});
+
+export const WalletRemoveSchema = z.object({
+  action: z.literal(ActionType.WalletRemove),
+  name: z.string(),
+});
+
+export const WalletStatusSchema = z.object({
+  action: z.literal(ActionType.WalletStatus),
+});
+
 export const WalletAddressSchema = z.object({
   action: z.literal(ActionType.WalletAddress),
 });
 
 export const WalletBalanceSchema = z.object({
   action: z.literal(ActionType.WalletBalance),
+});
+
+export const WalletTokensSchema = z.object({
+  action: z.literal(ActionType.WalletTokens),
+});
+
+export const FlashMarketsSchema = z.object({
+  action: z.literal(ActionType.FlashMarkets),
 });
 
 // Clawd AI Agent Schemas
@@ -203,9 +242,16 @@ export const ParsedIntentSchema = z.discriminatedUnion('action', [
   GetTraderProfileSchema,
   GetFeesSchema,
   WalletConnectSchema,
+  WalletImportSchema,
+  WalletListSchema,
+  WalletUseSchema,
+  WalletRemoveSchema,
+  WalletStatusSchema,
   WalletAddressSchema,
   WalletBalanceSchema,
+  WalletTokensSchema,
   HelpSchema,
+  FlashMarketsSchema,
   AnalyzeSchema,
   SuggestTradeSchema,
   RiskReportSchema,

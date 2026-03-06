@@ -4,6 +4,7 @@ import { getErrorMessage } from '../utils/retry.js';
 export interface TokenPrice {
   symbol: string;
   price: number;
+  priceChange24h: number;
   timestamp: number;
   isFallback: boolean;
 }
@@ -99,7 +100,7 @@ export class PriceService {
 
     if (ids.length === 0) return [];
 
-    const url = `https://api.coingecko.com/api/v3/simple/price?ids=${ids.join(',')}&vs_currencies=usd`;
+    const url = `https://api.coingecko.com/api/v3/simple/price?ids=${ids.join(',')}&vs_currencies=usd&include_24hr_change=true`;
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
 
@@ -113,14 +114,20 @@ export class PriceService {
         throw new Error(`CoinGecko ${res.status}: ${res.statusText}`);
       }
 
-      const data = await res.json() as Record<string, { usd?: number }>;
+      const data = await res.json() as Record<string, { usd?: number; usd_24h_change?: number }>;
       const results: TokenPrice[] = [];
       const now = Date.now();
 
       for (const [id, priceData] of Object.entries(data)) {
         const sym = idToSymbol.get(id);
         if (sym && priceData?.usd && priceData.usd > 0) {
-          results.push({ symbol: sym, price: priceData.usd, timestamp: now, isFallback: false });
+          results.push({
+            symbol: sym,
+            price: priceData.usd,
+            priceChange24h: priceData.usd_24h_change ?? 0,
+            timestamp: now,
+            isFallback: false,
+          });
         }
       }
 

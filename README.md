@@ -122,7 +122,7 @@ src/
 ├── automation/     Autopilot trading loop with risk gating
 ├── clawd/          AI agent tools and Solana data inspector
 ├── client/         Flash Trade protocol client + simulation client
-├── wallet/         Wallet management and Solana connection
+├── wallet/         Wallet manager, wallet store (~/.flash/wallets/)
 ├── config/         Configuration loader and risk parameters
 ├── data/           Price service (CoinGecko) and fstats.io client
 ├── types/          TypeScript types, Zod schemas, interfaces
@@ -159,15 +159,26 @@ npm run build
 npm start
 ```
 
+### Global Install
+
+```bash
+npm run build
+npm link
+
+# Now available globally:
+flash --sim       # Simulation mode
+flash --live      # Live trading mode
+```
+
 ### Quick Start (Simulation Mode)
 
 No wallet or API keys needed — simulation mode works out of the box:
 
 ```bash
-npm run build && npm start
+flash --sim
 ```
 
-The terminal starts in simulation mode by default with $10,000 paper balance.
+The terminal starts in simulation mode with $10,000 paper balance.
 
 ---
 
@@ -178,8 +189,6 @@ Edit `.env` to configure the terminal:
 | Variable | Description | Default |
 |---|---|---|
 | `RPC_URL` | Solana RPC endpoint | `https://api.mainnet-beta.solana.com` |
-| `WALLET_PATH` | Path to Solana keypair JSON | `~/.config/solana/id.json` |
-| `SIMULATION_MODE` | Paper trading mode | `true` |
 | `ANTHROPIC_API_KEY` | Claude API key for AI features | _(empty — local parsing only)_ |
 | `DEFAULT_POOL` | Flash Trade pool | `Crypto.1` |
 | `NETWORK` | Solana network | `mainnet-beta` |
@@ -188,6 +197,13 @@ Edit `.env` to configure the terminal:
 | `COMPUTE_UNIT_PRICE` | Priority fee (microLamports) | `50000` |
 
 **AI features are optional.** All commands work without an API key using local regex parsing. The AI interpreter adds natural language understanding for ambiguous inputs.
+
+**Mode selection** is via CLI flags, not environment variables:
+
+```bash
+flash --sim       # Simulation mode (default)
+flash --live      # Live trading mode (requires wallet)
+```
 
 ---
 
@@ -207,7 +223,7 @@ Edit `.env` to configure the terminal:
 
 | Command | Description |
 |---|---|
-| `markets` | Show all market prices |
+| `markets` | Show all Flash Trade markets with pool mapping |
 | `SOL price` | Get a specific market price |
 | `volume` | Trading volume data |
 | `open interest` | Open interest across markets |
@@ -243,21 +259,79 @@ Edit `.env` to configure the terminal:
 | `autopilot stop` | Stop autopilot |
 | `autopilot status` | Show autopilot state and recent signals |
 
-### Wallet
+### Wallet Management
 
 | Command | Description |
 |---|---|
+| `wallet` | Show wallet connection status |
+| `wallet import <name> <path>` | Import and store a wallet from keypair file |
+| `wallet list` | List all stored wallets |
+| `wallet use <name>` | Switch to a stored wallet |
+| `wallet remove <name>` | Remove a stored wallet |
+| `wallet connect <path>` | Connect a wallet (one-time, not stored) |
 | `wallet address` | Show connected wallet address |
 | `wallet balance` | Show SOL balance |
-| `wallet connect <path>` | Connect a wallet keypair file |
+| `wallet tokens` | Detect all tokens in wallet |
+
+---
+
+## Runtime Modes
+
+Flash AI Terminal uses explicit CLI flags for mode selection. No environment variable guessing.
+
+```bash
+flash --sim       # Simulation mode (paper trading, $10,000 balance)
+flash --live      # Live trading (requires wallet)
+flash             # Defaults to simulation
+```
+
+| Flag | Behavior |
+|---|---|
+| `--sim` | Uses `SimulatedFlashClient` — paper trading with live market prices |
+| `--live` | Uses `FlashClient` — real on-chain transactions (requires wallet) |
+| _(none)_ | Defaults to `--sim` |
+
+### Live Mode Wallet Gate
+
+Running `flash --live` without a wallet **never silently falls back** to simulation. Instead, an interactive menu appears:
+
+```
+LIVE TRADING MODE
+
+No wallet connected.
+
+Choose an option:
+
+  1  wallet import
+  2  wallet connect <path>
+  3  continue in simulation
+  4  exit
+```
+
+The user must explicitly choose. This prevents accidental mode switches.
+
+### Wallet Storage
+
+Imported wallets are stored at `~/.flash/wallets/<name>.json` with `0600` permissions. The last-used wallet auto-loads on startup.
+
+```bash
+# Import a wallet (private key input is hidden — never echoed)
+flash [live] > wallet import main ~/.config/solana/id.json
+
+# List stored wallets
+flash [live] > wallet list
+
+# Switch wallets
+flash [live] > wallet use trading-wallet
+```
 
 ---
 
 ## Example Workflow
 
 ```bash
-# Start the terminal (simulation mode by default)
-npm start
+# Start the terminal (simulation mode)
+flash --sim
 
 # Check what's available
 flash [sim] > help
@@ -311,7 +385,10 @@ If any data source is unavailable, the system degrades gracefully — it will ne
 
 Built-in safety measures:
 
-- **Simulation by default** — starts in paper trading mode unless `--live` is explicitly passed
+- **Simulation by default** — `flash --sim` is the default; live trading requires explicit `flash --live` plus a connected wallet
+- **No silent mode switches** — `flash --live` without a wallet shows an interactive menu, never auto-falls back
+- **5-layer autopilot guard** — autopilot is blocked in live mode at dispatch, tool mapping, tool execute, engine start, and engine cycle levels
+- **Secure key handling** — private key input is hidden (no echo), keys are zeroed from memory after use, wallet files stored with `0600` permissions
 - **Risk gating** — every trade (manual or autopilot) passes position sizing, leverage, and exposure checks
 - **Liquidation monitoring** — continuous distance-to-liquidation tracking
 - **Autopilot limits** — max $1,000/position, max $2,000 total exposure, max 5x leverage, 60s cooldown

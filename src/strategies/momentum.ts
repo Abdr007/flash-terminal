@@ -29,10 +29,11 @@ export function computeMomentumSignal({ market, volume }: MomentumInput): Strate
   const prevAvg = prev3.reduce((s, d) => s + d.volumeUsd, 0) / 3;
   const rawGrowth = prevAvg > 0 ? (recentAvg - prevAvg) / prevAvg : 0;
   const volumeGrowth = Number.isFinite(rawGrowth) ? rawGrowth : 0;
+  const safePriceChange = Number.isFinite(market.priceChange24h) ? market.priceChange24h : 0;
 
-  const priceUp = market.priceChange24h > 0;
-  const priceDown = market.priceChange24h < 0;
-  const priceFlat = market.priceChange24h === 0;
+  const priceUp = safePriceChange > 0;
+  const priceDown = safePriceChange < 0;
+  const priceFlat = safePriceChange === 0;
   const volumeUp = volumeGrowth > 0.1; // 10% growth threshold
   const volumeDown = volumeGrowth < -0.1;
 
@@ -48,11 +49,11 @@ export function computeMomentumSignal({ market, volume }: MomentumInput): Strate
   } else if (priceUp && volumeUp) {
     signal = 'bullish';
     confidence = Math.min(0.85, 0.5 + Math.abs(volumeGrowth) * 0.5);
-    reasoning = `Price rising (+${market.priceChange24h.toFixed(2)}%) with increasing volume (+${(volumeGrowth * 100).toFixed(1)}%). Strong upward momentum.`;
+    reasoning = `Price rising (+${safePriceChange.toFixed(2)}%) with increasing volume (+${(volumeGrowth * 100).toFixed(1)}%). Strong upward momentum.`;
   } else if (priceDown && volumeUp) {
     signal = 'bearish';
     confidence = Math.min(0.8, 0.5 + Math.abs(volumeGrowth) * 0.4);
-    reasoning = `Price falling (${market.priceChange24h.toFixed(2)}%) with increasing volume (+${(volumeGrowth * 100).toFixed(1)}%). Selling pressure intensifying.`;
+    reasoning = `Price falling (${safePriceChange.toFixed(2)}%) with increasing volume (+${(volumeGrowth * 100).toFixed(1)}%). Selling pressure intensifying.`;
   } else if (priceUp && volumeDown) {
     signal = 'neutral';
     confidence = 0.4;

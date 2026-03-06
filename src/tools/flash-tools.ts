@@ -28,7 +28,7 @@ import chalk from 'chalk';
 function validateLiveTradeContext(context: ToolContext): string | null {
   if (context.simulationMode) return null;
   if (!context.walletManager || !context.walletManager.isConnected) {
-    return 'No wallet connected. Use "wallet connect <path>" first.';
+    return 'No wallet connected. Use "wallet import <name> <path>" or "wallet connect <path>".';
   }
   return null;
 }
@@ -81,6 +81,17 @@ export const flashOpenPosition: ToolDefinition = {
       return { success: false, message: chalk.red(`  ${validationError}`) };
     }
 
+    // Resolve pool for this market
+    const { getPoolForMarket } = await import('../config/index.js');
+    const pool = getPoolForMarket(market);
+    if (!pool) {
+      return { success: false, message: chalk.red(`  Market not supported on Flash Trade: ${market}`) };
+    }
+
+    if (!Number.isFinite(collateral) || !Number.isFinite(leverage) || collateral <= 0 || leverage <= 0) {
+      return { success: false, message: chalk.red('  Invalid trade parameters: collateral and leverage must be positive numbers.') };
+    }
+
     const sizeUsd = collateral * leverage;
     const isLive = !context.simulationMode;
 
@@ -89,6 +100,7 @@ export const flashOpenPosition: ToolDefinition = {
       isLive ? chalk.red.bold('  LIVE TRADE — Opening Position') : chalk.yellow('  Opening Position'),
       chalk.dim('  ─────────────────'),
       `  Market:     ${chalk.bold(market)} ${colorSide(side)}`,
+      `  Pool:       ${chalk.cyan(pool)}`,
       `  Leverage:   ${chalk.bold(leverage + 'x')}`,
       `  Collateral: ${chalk.bold(formatUsd(collateral))} ${chalk.dim('USDC')}`,
       `  Size:       ${chalk.bold(formatUsd(sizeUsd))}`,
@@ -161,6 +173,12 @@ export const flashClosePosition: ToolDefinition = {
       return { success: false, message: chalk.red(`  ${validationError}`) };
     }
 
+    const { getPoolForMarket } = await import('../config/index.js');
+    const pool = getPoolForMarket(market);
+    if (!pool) {
+      return { success: false, message: chalk.red(`  Market not supported on Flash Trade: ${market}`) };
+    }
+
     const isLive = !context.simulationMode;
 
     return {
@@ -170,6 +188,7 @@ export const flashClosePosition: ToolDefinition = {
         isLive ? chalk.red.bold('  LIVE TRADE — Closing Position') : chalk.yellow('  Closing Position'),
         chalk.dim('  ─────────────────'),
         `  Market: ${chalk.bold(market)} ${colorSide(side)}`,
+        `  Pool:   ${chalk.cyan(pool)}`,
         isLive ? `\n${chalk.red('  This will execute a REAL on-chain transaction.')}` : '',
         '',
       ].join('\n'),
@@ -223,6 +242,12 @@ export const flashAddCollateral: ToolDefinition = {
       return { success: false, message: chalk.red(`  ${validationError}`) };
     }
 
+    const { getPoolForMarket } = await import('../config/index.js');
+    const pool = getPoolForMarket(market);
+    if (!pool) {
+      return { success: false, message: chalk.red(`  Market not supported on Flash Trade: ${market}`) };
+    }
+
     const isLive = !context.simulationMode;
 
     return {
@@ -274,6 +299,12 @@ export const flashRemoveCollateral: ToolDefinition = {
     const validationError = validateLiveTradeContext(context);
     if (validationError) {
       return { success: false, message: chalk.red(`  ${validationError}`) };
+    }
+
+    const { getPoolForMarket } = await import('../config/index.js');
+    const pool = getPoolForMarket(market);
+    if (!pool) {
+      return { success: false, message: chalk.red(`  Market not supported on Flash Trade: ${market}`) };
     }
 
     const isLive = !context.simulationMode;
@@ -357,9 +388,14 @@ export const flashGetMarketData: ToolDefinition = {
       return { success: true, message: chalk.dim('  No market data available') };
     }
 
-    // Enrich with fstats OI data if available
+    // Enrich with fstats OI data and CoinGecko 24h change
     try {
-      const oi = await context.dataClient.getOpenInterest();
+      const { PriceService } = await import('../data/prices.js');
+      const priceSvc = new PriceService();
+      const [oi, cgPrices] = await Promise.all([
+        context.dataClient.getOpenInterest().catch(() => ({ markets: [] as MarketOI[] })),
+        priceSvc.getPrices(markets.map(m => m.symbol)).catch(() => new Map()),
+      ]);
       for (const m of markets) {
         const oiData = oi.markets.find(
           (o: MarketOI) => o.market.includes(m.symbol)
@@ -368,13 +404,18 @@ export const flashGetMarketData: ToolDefinition = {
           m.openInterestLong = oiData.longOi;
           m.openInterestShort = oiData.shortOi;
         }
+        const cgPrice = cgPrices.get(m.symbol);
+        if (cgPrice && m.priceChange24h === 0) {
+          m.priceChange24h = cgPrice.priceChange24h;
+        }
       }
-    } catch { /* ignore fstats errors */ }
+    } catch { /* ignore enrichment errors */ }
 
-    const headers = ['Market', 'Price', 'OI Long', 'OI Short', 'Max Lev'];
+    const headers = ['Market', 'Price', '24h Change', 'OI Long', 'OI Short', 'Max Lev'];
     const rows = markets.map((m: MarketData) => [
       chalk.bold(m.symbol),
       formatPrice(m.price),
+      colorPercent(m.priceChange24h),
       formatUsd(m.openInterestLong),
       formatUsd(m.openInterestShort),
       `${m.maxLeverage}x`,
@@ -609,6 +650,195 @@ export const flashGetTraderProfile: ToolDefinition = {
 
 // ─── Wallet Tools ───────────────────────────────────────────────────────────
 
+import { WalletStore } from '../wallet/wallet-store.js';
+import { readFileSync } from 'fs';
+
+const walletStore = new WalletStore();
+
+export const walletImport: ToolDefinition = {
+  name: 'wallet_import',
+  description: 'Import a wallet from a keypair JSON file and store it locally',
+  parameters: z.object({
+    name: z.string(),
+    path: z.string(),
+  }),
+  execute: async (params, context): Promise<ToolResult> => {
+    const { name, path } = params as { name: string; path: string };
+    let secretKey: number[] | undefined;
+    try {
+      const raw = readFileSync(path, 'utf-8');
+      secretKey = JSON.parse(raw);
+      const result = walletStore.importWallet(name, secretKey!);
+
+      // Auto-set as default
+      walletStore.setDefault(name);
+
+      // Auto-connect the wallet
+      const wm = context.walletManager;
+      if (wm) {
+        wm.loadFromFile(result.path);
+        context.walletAddress = result.address;
+      }
+
+      return {
+        success: true,
+        message: [
+          '',
+          chalk.green('  Wallet Imported'),
+          chalk.dim('  ─────────────────'),
+          `  Name:    ${chalk.bold(name)}`,
+          `  Address: ${chalk.cyan(result.address)}`,
+          `  Set as default wallet.`,
+          '',
+        ].join('\n'),
+      };
+    } catch (error: unknown) {
+      return { success: false, message: chalk.red(`  Failed to import wallet: ${getErrorMessage(error)}`) };
+    } finally {
+      // Zero sensitive data from memory
+      if (Array.isArray(secretKey)) {
+        secretKey.fill(0);
+      }
+    }
+  },
+};
+
+export const walletList: ToolDefinition = {
+  name: 'wallet_list',
+  description: 'List all stored wallets',
+  parameters: z.object({}),
+  execute: async (): Promise<ToolResult> => {
+    const wallets = walletStore.listWallets();
+    const defaultName = walletStore.getDefault();
+
+    if (wallets.length === 0) {
+      return {
+        success: true,
+        message: [
+          '',
+          chalk.dim('  No wallets stored.'),
+          chalk.dim('  Use "wallet import <name> <path>" to import a wallet.'),
+          '',
+        ].join('\n'),
+      };
+    }
+
+    const lines = [
+      '',
+      chalk.bold('  Stored Wallets'),
+      chalk.dim('  ─────────────────'),
+    ];
+
+    for (const name of wallets) {
+      const isDefault = name === defaultName;
+      const addr = walletStore.getAddress(name);
+      const tag = isDefault ? chalk.green(' (default)') : '';
+      lines.push(`  ${chalk.bold(name)}${tag}`);
+      lines.push(`    ${chalk.cyan(addr)}`);
+    }
+
+    lines.push('');
+    return { success: true, message: lines.join('\n') };
+  },
+};
+
+export const walletUse: ToolDefinition = {
+  name: 'wallet_use',
+  description: 'Switch to a stored wallet and set it as default',
+  parameters: z.object({
+    name: z.string(),
+  }),
+  execute: async (params, context): Promise<ToolResult> => {
+    const { name } = params as { name: string };
+    try {
+      const walletPath = walletStore.getWalletPath(name);
+      walletStore.setDefault(name);
+
+      // Connect the wallet
+      const wm = context.walletManager;
+      if (wm) {
+        const result = wm.loadFromFile(walletPath);
+        context.walletAddress = result.address;
+
+        return {
+          success: true,
+          message: [
+            '',
+            chalk.green(`  Switched to wallet: ${chalk.bold(name)}`),
+            `  Address: ${chalk.cyan(result.address)}`,
+            '',
+          ].join('\n'),
+        };
+      }
+
+      return { success: false, message: chalk.red('  Wallet manager not available') };
+    } catch (error: unknown) {
+      return { success: false, message: chalk.red(`  Failed to switch wallet: ${getErrorMessage(error)}`) };
+    }
+  },
+};
+
+export const walletRemove: ToolDefinition = {
+  name: 'wallet_remove',
+  description: 'Remove a stored wallet',
+  parameters: z.object({
+    name: z.string(),
+  }),
+  execute: async (params): Promise<ToolResult> => {
+    const { name } = params as { name: string };
+    try {
+      walletStore.removeWallet(name);
+      return {
+        success: true,
+        message: chalk.green(`  Wallet "${name}" removed.`),
+      };
+    } catch (error: unknown) {
+      return { success: false, message: chalk.red(`  Failed to remove wallet: ${getErrorMessage(error)}`) };
+    }
+  },
+};
+
+export const walletStatus: ToolDefinition = {
+  name: 'wallet_status',
+  description: 'Show current wallet connection status',
+  parameters: z.object({}),
+  execute: async (_params, context): Promise<ToolResult> => {
+    const wm = context.walletManager;
+    const defaultName = walletStore.getDefault();
+    const storedCount = walletStore.listWallets().length;
+
+    const lines = [
+      '',
+      chalk.bold('  Wallet Status'),
+      chalk.dim('  ─────────────────'),
+    ];
+
+    if (wm && wm.isConnected) {
+      lines.push(`  Connected: ${chalk.green('Yes')}`);
+      lines.push(`  Address:   ${chalk.cyan(wm.address)}`);
+    } else if (wm && wm.hasAddress) {
+      lines.push(`  Connected: ${chalk.yellow('Read-only')}`);
+      lines.push(`  Address:   ${chalk.cyan(wm.address)}`);
+    } else {
+      lines.push(`  Connected: ${chalk.red('No')}`);
+    }
+
+    if (defaultName) {
+      lines.push(`  Default:   ${chalk.bold(defaultName)}`);
+    }
+
+    lines.push(`  Stored:    ${storedCount} wallet(s)`);
+    lines.push('');
+
+    if (!wm?.isConnected && storedCount === 0) {
+      lines.push(chalk.dim('  Use "wallet import <name> <path>" to add a wallet.'));
+      lines.push('');
+    }
+
+    return { success: true, message: lines.join('\n') };
+  },
+};
+
 export const walletAddress: ToolDefinition = {
   name: 'wallet_address',
   description: 'Show connected wallet address',
@@ -616,7 +846,7 @@ export const walletAddress: ToolDefinition = {
   execute: async (_params, context): Promise<ToolResult> => {
     const wm = context.walletManager;
     if (!wm || !wm.isConnected) {
-      return { success: true, message: chalk.dim('  No wallet connected. Use "wallet connect <path>" to connect.') };
+      return { success: true, message: chalk.dim('  No wallet connected. Use "wallet import <name> <path>" or "wallet connect <path>".') };
     }
     return {
       success: true,
@@ -632,7 +862,7 @@ export const walletBalance: ToolDefinition = {
   execute: async (_params, context): Promise<ToolResult> => {
     const wm = context.walletManager;
     if (!wm || !wm.isConnected) {
-      return { success: true, message: chalk.dim('  No wallet connected. Use "wallet connect <path>" to connect.') };
+      return { success: true, message: chalk.dim('  No wallet connected. Use "wallet import <name> <path>" or "wallet connect <path>".') };
     }
     try {
       const { sol, tokens } = await wm.getTokenBalances();
@@ -654,6 +884,59 @@ export const walletBalance: ToolDefinition = {
     } catch (error: unknown) {
       return { success: false, message: `  Failed to fetch balance: ${getErrorMessage(error)}` };
     }
+  },
+};
+
+export const walletTokens: ToolDefinition = {
+  name: 'wallet_tokens',
+  description: 'Detect all tokens in the connected wallet',
+  parameters: z.object({}),
+  execute: async (_params, context): Promise<ToolResult> => {
+    const wm = context.walletManager;
+    if (!wm || (!wm.isConnected && !wm.hasAddress)) {
+      return { success: true, message: chalk.dim('  No wallet connected. Use "wallet import <name> <path>" or "wallet connect <path>".') };
+    }
+    try {
+      const { sol, tokens } = await wm.getTokenBalances();
+      const lines = [
+        '',
+        chalk.bold('  TOKENS IN WALLET'),
+        chalk.dim('  ─────────────────'),
+        `  SOL     ${chalk.green(sol.toFixed(4))}`,
+      ];
+      for (const t of tokens) {
+        const decimals = t.symbol === 'USDC' || t.symbol === 'USDT' ? 2 : 4;
+        lines.push(`  ${t.symbol.padEnd(8)}${chalk.green(t.amount.toFixed(decimals))}`);
+      }
+      if (tokens.length === 0) {
+        lines.push(chalk.dim('  No SPL tokens found'));
+      }
+      lines.push('');
+      return { success: true, message: lines.join('\n') };
+    } catch (error: unknown) {
+      return { success: false, message: `  Failed to fetch wallet tokens: ${getErrorMessage(error)}` };
+    }
+  },
+};
+
+export const flashMarkets: ToolDefinition = {
+  name: 'flash_markets_list',
+  description: 'List all Flash Trade markets with pool mapping',
+  parameters: z.object({}),
+  execute: async (_params, _context): Promise<ToolResult> => {
+    const { POOL_MARKETS } = await import('../config/index.js');
+    const lines = [
+      '',
+      chalk.bold('  FLASH TRADE MARKETS'),
+      chalk.dim('  ─────────────────────'),
+    ];
+    for (const [pool, markets] of Object.entries(POOL_MARKETS)) {
+      for (const market of markets) {
+        lines.push(`  ${market.padEnd(12)} → ${chalk.yellow(pool)}`);
+      }
+    }
+    lines.push('');
+    return { success: true, message: lines.join('\n') };
   },
 };
 
@@ -703,7 +986,14 @@ export const allFlashTools: ToolDefinition[] = [
   flashGetLeaderboard,
   flashGetFees,
   flashGetTraderProfile,
+  walletImport,
+  walletList,
+  walletUse,
+  walletRemove,
+  walletStatus,
   walletAddress,
   walletBalance,
+  walletTokens,
   walletConnect,
+  flashMarkets,
 ];

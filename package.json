@@ -11,6 +11,8 @@
     "build": "tsc && chmod +x dist/index.js",
     "dev": "tsx src/index.ts",
     "start": "node dist/index.js",
+    "start:sim": "node dist/index.js --sim",
+    "start:live": "node dist/index.js --live",
     "prepack": "npm run build",
     "test": "vitest run",
     "test:watch": "vitest"

@@ -11,6 +11,8 @@ export class WalletManager {
   private connection: Connection;
   private keypair: Keypair | null = null;
   private publicKey: PublicKey | null = null;
+  private tokenBalancesCache: { data: { sol: number; tokens: Array<{ symbol: string; mint: string; amount: number }> }; expiry: number } | null = null;
+  private static readonly TOKEN_CACHE_TTL = 30_000;
 
   constructor(connection: Connection) {
     this.connection = connection;
@@ -84,8 +86,11 @@ export class WalletManager {
     try {
       secretKey = JSON.parse(raw);
     } catch {
-      throw new Error(`Invalid wallet file format: ${path}`);
+      throw new Error('Invalid wallet file format.');
     }
+
+    // Clear the raw string reference — secretKey holds the parsed data now
+    raw = '';
 
     if (!Array.isArray(secretKey) || secretKey.length !== 64) {
       throw new Error(`Invalid keypair: expected 64-byte array, got ${Array.isArray(secretKey) ? secretKey.length : typeof secretKey}`);
@@ -99,11 +104,18 @@ export class WalletManager {
       }
     }
 
-    this.keypair = Keypair.fromSecretKey(Uint8Array.from(secretKey));
+    const keyBytes = Uint8Array.from(secretKey);
+    // Zero the parsed array immediately — Keypair holds its own copy
+    secretKey.fill(0);
+
+    this.keypair = Keypair.fromSecretKey(keyBytes);
+    // Zero the intermediate Uint8Array — Keypair has made its own internal copy
+    keyBytes.fill(0);
+
     this.publicKey = this.keypair.publicKey;
 
     const address = this.publicKey.toBase58();
-    logger.debug('Wallet', `Loaded keypair: ${address}`);
+    logger.debug('Wallet', `Loaded wallet: ${address}`);
 
     return { address, keypair: this.keypair };
   }
@@ -171,6 +183,11 @@ export class WalletManager {
       throw new Error('No wallet connected');
     }
 
+    const now = Date.now();
+    if (this.tokenBalancesCache && this.tokenBalancesCache.expiry > now) {
+      return this.tokenBalancesCache.data;
+    }
+
     const USDC_MINT = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
     const KNOWN_MINTS: Record<string, string> = {
       [USDC_MINT]: 'USDC',
@@ -201,6 +218,8 @@ export class WalletManager {
       tokens.push({ symbol, mint, amount: uiAmount });
     }
 
-    return { sol: solBalance / LAMPORTS_PER_SOL, tokens };
+    const result = { sol: solBalance / LAMPORTS_PER_SOL, tokens };
+    this.tokenBalancesCache = { data: result, expiry: Date.now() + WalletManager.TOKEN_CACHE_TTL };
+    return result;
   }
 }

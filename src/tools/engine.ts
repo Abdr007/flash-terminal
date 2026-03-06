@@ -33,6 +33,20 @@ export class ToolEngine {
    * Route a parsed intent to the appropriate tool and execute it.
    */
   async dispatch(intent: ParsedIntent): Promise<ToolResult> {
+    // Autopilot commands blocked in live mode
+    if (this.isAutopilotAction(intent.action) && !this.context.simulationMode) {
+      return {
+        success: false,
+        message: [
+          '',
+          chalk.red('  Autopilot disabled in LIVE mode.'),
+          chalk.yellow('  Run terminal with: flash --sim'),
+          chalk.dim('  to test automated trading.'),
+          '',
+        ].join('\n'),
+      };
+    }
+
     const mapping = this.getToolMapping(intent);
     if (!mapping) {
       return this.handleHelp();
@@ -40,6 +54,12 @@ export class ToolEngine {
 
     const { toolName, params } = mapping;
     return this.registry.execute(toolName, params, this.context);
+  }
+
+  private isAutopilotAction(action: ActionType): boolean {
+    return action === ActionType.AutopilotStart
+      || action === ActionType.AutopilotStop
+      || action === ActionType.AutopilotStatus;
   }
 
   private getToolMapping(
@@ -133,11 +153,41 @@ export class ToolEngine {
           params: { path: intent.path },
         };
 
+      case ActionType.WalletImport:
+        return {
+          toolName: 'wallet_import',
+          params: { name: intent.name, path: intent.path },
+        };
+
+      case ActionType.WalletList:
+        return { toolName: 'wallet_list', params: {} };
+
+      case ActionType.WalletUse:
+        return {
+          toolName: 'wallet_use',
+          params: { name: intent.name },
+        };
+
+      case ActionType.WalletRemove:
+        return {
+          toolName: 'wallet_remove',
+          params: { name: intent.name },
+        };
+
+      case ActionType.WalletStatus:
+        return { toolName: 'wallet_status', params: {} };
+
       case ActionType.WalletAddress:
         return { toolName: 'wallet_address', params: {} };
 
       case ActionType.WalletBalance:
         return { toolName: 'wallet_balance', params: {} };
+
+      case ActionType.WalletTokens:
+        return { toolName: 'wallet_tokens', params: {} };
+
+      case ActionType.FlashMarkets:
+        return { toolName: 'flash_markets_list', params: {} };
 
       case ActionType.Help:
         return null;
@@ -167,14 +217,17 @@ export class ToolEngine {
           params: { market: intent.market },
         };
 
-      // Autopilot
+      // Autopilot — blocked in live mode
       case ActionType.AutopilotStart:
-        return { toolName: 'autopilot_start', params: {} };
-
       case ActionType.AutopilotStop:
-        return { toolName: 'autopilot_stop', params: {} };
-
       case ActionType.AutopilotStatus:
+        if (!this.context.simulationMode) {
+          return null; // Will be handled as blocked command
+        }
+        if (intent.action === ActionType.AutopilotStart)
+          return { toolName: 'autopilot_start', params: {} };
+        if (intent.action === ActionType.AutopilotStop)
+          return { toolName: 'autopilot_stop', params: {} };
         return { toolName: 'autopilot_status', params: {} };
 
       // Market Scanner
@@ -197,7 +250,7 @@ export class ToolEngine {
   }
 
   private handleHelp(): ToolResult {
-    const helpText = [
+    const lines = [
       '',
       chalk.bold.yellow('  Flash AI Terminal — Commands'),
       chalk.dim('  ═══════════════════════════════════════'),
@@ -212,7 +265,7 @@ export class ToolEngine {
       `    ${chalk.cyan('positions')}     View open positions`,
       `    ${chalk.cyan('portfolio')}     Portfolio summary`,
       `    ${chalk.cyan('SOL price')}     Get market price`,
-      `    ${chalk.cyan('markets')}       All market data`,
+      `    ${chalk.cyan('markets')}       Flash Trade markets & pools`,
       '',
       chalk.bold('  Analytics:'),
       `    ${chalk.cyan('volume')}        Trading volume`,
@@ -233,22 +286,37 @@ export class ToolEngine {
       `    ${chalk.cyan('portfolio exposure')}  Exposure breakdown by market`,
       `    ${chalk.cyan('rebalance')}           Analyze portfolio balance`,
       '',
-      chalk.bold('  Autopilot:'),
-      `    ${chalk.cyan('autopilot start')}     Start automated trading mode`,
-      `    ${chalk.cyan('autopilot stop')}      Stop autopilot`,
-      `    ${chalk.cyan('autopilot status')}    Show autopilot status & signals`,
-      '',
+    ];
+
+    // Autopilot section only shown in simulation mode
+    if (this.context.simulationMode) {
+      lines.push(
+        chalk.bold('  Autopilot:'),
+        `    ${chalk.cyan('autopilot start')}     Start automated trading mode`,
+        `    ${chalk.cyan('autopilot stop')}      Stop autopilot`,
+        `    ${chalk.cyan('autopilot status')}    Show autopilot status & signals`,
+        '',
+      );
+    }
+
+    lines.push(
       chalk.bold('  Wallet:'),
-      `    ${chalk.cyan('wallet address')}            Show wallet address`,
-      `    ${chalk.cyan('wallet balance')}            Show SOL balance`,
-      `    ${chalk.cyan('wallet connect <path>')}     Connect wallet from file`,
+      `    ${chalk.cyan('wallet')}                          Current wallet status`,
+      `    ${chalk.cyan('wallet import <name> <path>')}    Import & store a wallet`,
+      `    ${chalk.cyan('wallet list')}                    List stored wallets`,
+      `    ${chalk.cyan('wallet use <name>')}              Switch to a stored wallet`,
+      `    ${chalk.cyan('wallet remove <name>')}           Remove a stored wallet`,
+      `    ${chalk.cyan('wallet connect <path>')}          Connect wallet (one-time)`,
+      `    ${chalk.cyan('wallet address')}                 Show wallet address`,
+      `    ${chalk.cyan('wallet balance')}                 Show SOL balance`,
+      `    ${chalk.cyan('wallet tokens')}                  Detect all tokens`,
       '',
       chalk.bold('  System:'),
       `    ${chalk.cyan('help')}          Show this help`,
       `    ${chalk.cyan('exit')}          Quit terminal`,
       '',
-    ].join('\n');
+    );
 
-    return { success: true, message: helpText };
+    return { success: true, message: lines.join('\n') };
   }
 }
