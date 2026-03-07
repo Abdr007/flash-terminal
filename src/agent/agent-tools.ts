@@ -11,7 +11,7 @@ import {
 } from '../types/index.js';
 import { SolanaInspector } from './solana-inspector.js';
 import { MarketScanner } from '../scanner/market-scanner.js';
-import { ClawdAgent } from './clawd-agent.js';
+import { TradeAgent } from './agent-core.js';
 import { Autopilot } from '../automation/autopilot.js';
 import { DEFAULT_AUTOPILOT_CONFIG } from '../config/risk-config.js';
 import { computeMomentumSignal } from '../strategies/momentum.js';
@@ -35,18 +35,18 @@ import {
 let inspectorInstance: SolanaInspector | null = null;
 let scannerInstance: MarketScanner | null = null;
 let portfolioManagerInstance: PortfolioManager | null = null;
-let _clawdApiKey: string | undefined;
+let _aiApiKey: string | undefined;
 let _groqApiKey: string | undefined;
 
-/** Set AI API keys for Clawd tools. Called once at startup. */
-export function setClawdApiKey(apiKey: string | undefined, groqApiKey?: string): void {
-  _clawdApiKey = apiKey;
+/** Set AI API keys for agent tools. Called once at startup. */
+export function setAiApiKey(apiKey: string | undefined, groqApiKey?: string): void {
+  _aiApiKey = apiKey;
   _groqApiKey = groqApiKey;
 }
 
-/** Get the scoped Anthropic API key. */
-export function getClawdApiKey(): string | undefined {
-  return _clawdApiKey;
+/** Get the scoped AI API key. */
+export function getAiApiKey(): string | undefined {
+  return _aiApiKey;
 }
 
 /** Get the scoped Groq API key. */
@@ -105,8 +105,8 @@ function signalColor(signal: string): string {
 
 // ─── analyze <market> ──────────────────────────────────────────────────────────
 
-export const clawdAnalyze: ToolDefinition = {
-  name: 'clawd_analyze',
+export const aiAnalyze: ToolDefinition = {
+  name: 'ai_analyze',
   description: 'Analyze a market with strategy signals (momentum, mean reversion, whale follow)',
   parameters: z.object({
     market: z.string(),
@@ -191,7 +191,7 @@ export const clawdAnalyze: ToolDefinition = {
     const rd = getRegimeDetector();
     const regimeState = rd.detectRegime(market, volume, openInterest);
 
-    // Format output — structured sections with clear explanations
+    // Format output
     const lines = [
       '',
       chalk.bold(`  ${marketUpper} Market Analysis`),
@@ -234,7 +234,7 @@ export const clawdAnalyze: ToolDefinition = {
     }
     lines.push('');
 
-    // Strategy Signals — each signal explains WHY it exists
+    // Strategy Signals
     lines.push(chalk.bold('  Strategy Signals'));
     lines.push('');
 
@@ -260,15 +260,15 @@ export const clawdAnalyze: ToolDefinition = {
 
 // ─── suggest trade ─────────────────────────────────────────────────────────────
 
-export const clawdSuggestTrade: ToolDefinition = {
-  name: 'clawd_suggest_trade',
-  description: 'Get an AI-powered trade suggestion using Claude reasoning (falls back to strategy engine)',
+export const aiSuggestTrade: ToolDefinition = {
+  name: 'ai_suggest_trade',
+  description: 'Get an AI-powered trade suggestion (falls back to strategy engine)',
   parameters: z.object({
     market: z.string().optional(),
   }),
   execute: async (params: Record<string, unknown>, context: ToolContext): Promise<ToolResult> => {
     const inspector = getInspector(context);
-    const apiKey = getClawdApiKey();
+    const apiKey = getAiApiKey();
     const hasApiKey = apiKey && apiKey !== 'sk-ant-...';
 
     const [markets, positions, openInterest, volume, recentActivity, openPositions] = await Promise.all([
@@ -307,11 +307,11 @@ export const clawdSuggestTrade: ToolDefinition = {
 
     const balance = context.flashClient.getBalance();
     let suggestion;
-    let source: 'claude' | 'strategy_engine' = 'claude';
+    let source: 'ai' | 'strategy_engine' = 'ai';
 
     const groqKey = getGroqApiKey();
     if (hasApiKey || groqKey) {
-      const agent = new ClawdAgent(apiKey ?? '', groqKey);
+      const agent = new TradeAgent(apiKey ?? '', groqKey);
       suggestion = await agent.suggestTrade({
         markets: relevantMarkets,
         signals,
@@ -390,8 +390,8 @@ export const clawdSuggestTrade: ToolDefinition = {
 
 // ─── risk report ───────────────────────────────────────────────────────────────
 
-export const clawdRiskReport: ToolDefinition = {
-  name: 'clawd_risk_report',
+export const aiRiskReport: ToolDefinition = {
+  name: 'ai_risk_report',
   description: 'Show liquidation risk for all positions and portfolio exposure summary',
   parameters: z.object({}),
   execute: async (_params: Record<string, unknown>, context: ToolContext): Promise<ToolResult> => {
@@ -471,8 +471,8 @@ export const clawdRiskReport: ToolDefinition = {
 
 // ─── dashboard ─────────────────────────────────────────────────────────────────
 
-export const clawdDashboard: ToolDefinition = {
-  name: 'clawd_dashboard',
+export const aiDashboard: ToolDefinition = {
+  name: 'ai_dashboard',
   description: 'Combined portfolio, market, and platform stats view',
   parameters: z.object({}),
   execute: async (_params: Record<string, unknown>, context: ToolContext): Promise<ToolResult> => {
@@ -548,6 +548,23 @@ export const clawdDashboard: ToolDefinition = {
       lines.push(`  Directional Bias: ${bias}`);
       lines.push(`  Long: ${longPct}%  Short: ${shortPct}%`);
       lines.push(`  Unrealized PnL:  ${colorPnl(snapshot.portfolio.totalUnrealizedPnl)}`);
+      lines.push(`  Realized PnL:    ${colorPnl(snapshot.portfolio.totalRealizedPnl)}`);
+      if (snapshot.portfolio.totalFees > 0) {
+        lines.push(`  Fees Paid:       ${formatUsd(snapshot.portfolio.totalFees)}`);
+      }
+
+      // Largest position
+      const largest = snapshot.positions.reduce((max, p) => p.sizeUsd > max.sizeUsd ? p : max, snapshot.positions[0]);
+      lines.push(`  Largest:         ${largest.market} ${largest.side.toUpperCase()} ${formatUsd(largest.sizeUsd)}`);
+
+      // Funding rate info
+      const fundedPositions = snapshot.positions.filter(p => p.fundingRate !== 0);
+      if (fundedPositions.length > 0) {
+        const avgFunding = fundedPositions.reduce((s, p) => s + p.fundingRate, 0) / fundedPositions.length;
+        lines.push(`  Funding Rate:    ${formatPercent(avgFunding)}`);
+      } else {
+        lines.push(`  Funding Rate:    ${chalk.dim('unavailable')}`);
+      }
     } else {
       lines.push(`  Balance:         ${formatUsd(snapshot.portfolio.balance)}`);
     }
@@ -575,6 +592,12 @@ export const clawdDashboard: ToolDefinition = {
           alerts.push(`${c.market} concentration: ${c.percentage.toFixed(0)}% of exposure`);
         }
       }
+
+      // Overall risk level
+      const riskLevel = criticalRisks.length > 0 ? 'CRITICAL' : warningRisks.length > 0 ? 'ELEVATED' : 'HEALTHY';
+      const riskColor = riskLevel === 'CRITICAL' ? chalk.red.bold : riskLevel === 'ELEVATED' ? chalk.yellow : chalk.green;
+      lines.push(`  Risk Level:  ${riskColor(riskLevel)}`);
+      lines.push('');
 
       if (alerts.length > 0) {
         lines.push(chalk.bold('  Risk Alerts'));
@@ -608,8 +631,8 @@ export const clawdDashboard: ToolDefinition = {
 
 // ─── whale activity ────────────────────────────────────────────────────────────
 
-export const clawdWhaleActivity: ToolDefinition = {
-  name: 'clawd_whale_activity',
+export const aiWhaleActivity: ToolDefinition = {
+  name: 'ai_whale_activity',
   description: 'Show recent large positions from fstats',
   parameters: z.object({
     market: z.string().optional(),
@@ -689,8 +712,8 @@ export const clawdWhaleActivity: ToolDefinition = {
 
 // ─── Market Scanner ──────────────────────────────────────────────────────────
 
-export const clawdScanMarkets: ToolDefinition = {
-  name: 'clawd_scan_markets',
+export const aiScanMarkets: ToolDefinition = {
+  name: 'ai_scan_markets',
   description: 'Scan all markets for trade opportunities and rank them by score',
   parameters: z.object({}),
   execute: async (_params: Record<string, unknown>, context: ToolContext): Promise<ToolResult> => {
@@ -1037,13 +1060,13 @@ export const portfolioRebalanceTool: ToolDefinition = {
 
 // ─── Export all ─────────────────────────────────────────────────────────────────
 
-export const allClawdTools: ToolDefinition[] = [
-  clawdAnalyze,
-  clawdSuggestTrade,
-  clawdScanMarkets,
-  clawdRiskReport,
-  clawdDashboard,
-  clawdWhaleActivity,
+export const allAgentTools: ToolDefinition[] = [
+  aiAnalyze,
+  aiSuggestTrade,
+  aiScanMarkets,
+  aiRiskReport,
+  aiDashboard,
+  aiWhaleActivity,
   autopilotStart,
   autopilotStop,
   autopilotStatus,

@@ -14,7 +14,7 @@ src/
 │   └── terminal.ts          Interactive REPL, mode selection, command routing
 │
 ├── ai/
-│   ├── interpreter.ts       Natural language → ParsedIntent (Claude/Groq/regex)
+│   ├── interpreter.ts       Natural language → ParsedIntent (AI/Groq/regex)
 │   └── signal-aggregator.ts Strategy signal aggregation with regime weights
 │
 ├── tools/
@@ -22,9 +22,9 @@ src/
 │   ├── registry.ts          Tool registration and execution wrapper
 │   └── flash-tools.ts       All tool definitions (trading, wallet, market, data)
 │
-├── clawd/
-│   ├── clawd-agent.ts       Claude/Groq API client for AI reasoning
-│   ├── clawd-tools.ts       AI-powered tools (analyze, scan, dashboard, autopilot)
+├── agent/
+│   ├── agent-core.ts        AI API client for trade reasoning
+│   ├── agent-tools.ts       AI-powered tools (analyze, scan, dashboard, autopilot)
 │   └── solana-inspector.ts  Cached data aggregator with graceful degradation
 │
 ├── client/
@@ -93,7 +93,7 @@ The interactive REPL that accepts user input, displays output, and manages the s
 
 ### `src/ai/` — Intelligence Layer
 
-**Interpreter** parses natural language into structured intents using a three-tier fallback: fast dispatch (exact match) → local regex → Claude API → Groq API.
+**Interpreter** parses natural language into structured intents using a three-tier fallback: fast dispatch (exact match) → local regex → AI API → Groq API.
 
 **Signal Aggregator** combines strategy signals into a single confidence score using regime-adjusted weights.
 
@@ -101,7 +101,7 @@ The interactive REPL that accepts user input, displays output, and manages the s
 
 Maps parsed intents to tool implementations. Each tool is a self-contained function with Zod parameter validation, execution logic, and formatted output. The registry wraps all tool execution in try/catch.
 
-### `src/clawd/` — AI Agent Layer
+### `src/agent/` — AI Agent Layer
 
 Higher-level tools that combine multiple data sources: market analysis, portfolio dashboards, risk reports, whale activity displays. The Solana Inspector provides cached access to all data sources with graceful degradation when APIs fail.
 

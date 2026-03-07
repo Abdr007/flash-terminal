@@ -17,7 +17,7 @@ Flash AI Terminal is a layered system that transforms natural language commands 
 ┌─────────────────────────────────────────────────────────┐
 │                   AI Layer                              │
 │  Fast dispatch (exact match) → Local regex parser       │
-│  → Claude API → Groq API → fallback                    │
+│  → AI API → Groq API → fallback                        │
 │  Zod schema validation on all parsed intents            │
 └──────────────────────┬──────────────────────────────────┘
                        │ ParsedIntent
@@ -130,7 +130,7 @@ Terminal.handleInput()
 Interpreter.parse()
   │
   ├── 1. Local regex match ── match found
-  │   (or Claude API → Groq API → fallback)
+  │   (or AI API → Groq API → fallback)
   │
   ▼
 ParsedIntent { action: OpenPosition, market: "SOL", side: "long", leverage: 2, collateral: 50 }

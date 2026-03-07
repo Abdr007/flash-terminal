@@ -6,7 +6,7 @@ import {
   ToolContext,
   StrategySignal,
 } from '../types/index.js';
-import { SolanaInspector } from '../clawd/solana-inspector.js';
+import { SolanaInspector } from '../agent/solana-inspector.js';
 import { MarketScanner } from '../scanner/market-scanner.js';
 import { computeExposure } from '../risk/exposure.js';
 import { assessAllPositions } from '../risk/liquidation-risk.js';

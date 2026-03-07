@@ -6,12 +6,12 @@ import {
 } from '../types/index.js';
 import { ToolRegistry } from './registry.js';
 import { allFlashTools } from './flash-tools.js';
-import { allClawdTools } from '../clawd/clawd-tools.js';
+import { allAgentTools } from '../agent/agent-tools.js';
 import chalk from 'chalk';
 
 /**
  * ToolEngine maps parsed intents to tool invocations.
- * This follows the Clawd agent pattern: intent → tool name → execute.
+ * Maps parsed intents to tool invocations: intent → tool name → execute.
  */
 export class ToolEngine {
   private registry: ToolRegistry;
@@ -24,7 +24,7 @@ export class ToolEngine {
     for (const tool of allFlashTools) {
       this.registry.register(tool);
     }
-    for (const tool of allClawdTools) {
+    for (const tool of allAgentTools) {
       this.registry.register(tool);
     }
   }
@@ -194,28 +194,28 @@ export class ToolEngine {
       case ActionType.Help:
         return null;
 
-      // Clawd AI Agent
+      // AI Agent
       case ActionType.Analyze:
         return {
-          toolName: 'clawd_analyze',
+          toolName: 'ai_analyze',
           params: { market: intent.market },
         };
 
       case ActionType.SuggestTrade:
         return {
-          toolName: 'clawd_suggest_trade',
+          toolName: 'ai_suggest_trade',
           params: { market: intent.market },
         };
 
       case ActionType.RiskReport:
-        return { toolName: 'clawd_risk_report', params: {} };
+        return { toolName: 'ai_risk_report', params: {} };
 
       case ActionType.Dashboard:
-        return { toolName: 'clawd_dashboard', params: {} };
+        return { toolName: 'ai_dashboard', params: {} };
 
       case ActionType.WhaleActivity:
         return {
-          toolName: 'clawd_whale_activity',
+          toolName: 'ai_whale_activity',
           params: { market: intent.market },
         };
 
@@ -234,7 +234,7 @@ export class ToolEngine {
 
       // Market Scanner
       case ActionType.ScanMarkets:
-        return { toolName: 'clawd_scan_markets', params: {} };
+        return { toolName: 'ai_scan_markets', params: {} };
 
       // Portfolio Intelligence
       case ActionType.PortfolioState:

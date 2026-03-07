@@ -36,6 +36,7 @@ const COINGECKO_IDS: Record<string, string> = {
 
 const FETCH_TIMEOUT_MS = 8_000;
 const MAX_PRICE_CACHE_ENTRIES = 100;
+const MAX_RESPONSE_BYTES = 1024 * 1024; // 1MB max for price data
 
 export class PriceService {
   private cache: Map<string, { data: TokenPrice; expiry: number }> = new Map();
@@ -130,7 +131,18 @@ export class PriceService {
         throw new Error(`CoinGecko ${res.status}: ${res.statusText}`);
       }
 
-      const data = await res.json() as Record<string, { usd?: number; usd_24h_change?: number }>;
+      // Guard against oversized responses
+      const contentLength = res.headers.get('content-length');
+      if (contentLength && parseInt(contentLength, 10) > MAX_RESPONSE_BYTES) {
+        throw new Error(`CoinGecko response too large: ${contentLength} bytes`);
+      }
+
+      const text = await res.text();
+      if (text.length > MAX_RESPONSE_BYTES) {
+        throw new Error(`CoinGecko response body too large: ${text.length} bytes`);
+      }
+
+      const data = JSON.parse(text) as Record<string, { usd?: number; usd_24h_change?: number }>;
       const results: TokenPrice[] = [];
       const now = Date.now();
 

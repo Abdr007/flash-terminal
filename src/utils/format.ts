@@ -43,11 +43,12 @@ export function colorSide(side: TradeSide): string {
 export function formatPosition(pos: Position): string {
   const lines = [
     `  ${chalk.bold(pos.market)} ${colorSide(pos.side)} ${chalk.dim(`${pos.leverage.toFixed(1)}x`)}`,
-    `    Entry: ${formatPrice(pos.entryPrice)}  Current: ${formatPrice(pos.currentPrice)}`,
+    `    Entry: ${formatPrice(pos.entryPrice)}  Mark: ${formatPrice(pos.markPrice)}`,
     `    Size: ${formatUsd(pos.sizeUsd)}  Collateral: ${formatUsd(pos.collateralUsd)}`,
     `    PnL: ${colorPnl(pos.unrealizedPnl)} (${colorPercent(pos.unrealizedPnlPercent)})`,
+    pos.totalFees > 0 ? `    Fees: ${formatUsd(pos.totalFees)}` : '',
     `    Liq: ${formatPrice(pos.liquidationPrice)}`,
-  ];
+  ].filter(Boolean);
   return lines.join('\n');
 }
 

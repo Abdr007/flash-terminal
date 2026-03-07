@@ -41,9 +41,26 @@ function parseNetwork(value: string | undefined): Network {
   return 'mainnet-beta';
 }
 
+function validateRpcUrl(url: string): string {
+  try {
+    const parsed = new URL(url);
+    const isLocal = parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1';
+    if (parsed.protocol !== 'https:' && !(parsed.protocol === 'http:' && isLocal)) {
+      console.error(`  WARNING: RPC URL should use HTTPS: ${url}`);
+    }
+    if (parsed.username || parsed.password) {
+      throw new Error('RPC URL must not contain embedded credentials — use headers instead');
+    }
+  } catch (e) {
+    if (e instanceof Error && (e.message.includes('credentials') || e.message.includes('HTTPS'))) throw e;
+    // If URL is unparseable, let it fail later at connection time
+  }
+  return url;
+}
+
 export function loadConfig(): FlashConfig {
   return {
-    rpcUrl: process.env.RPC_URL || 'https://api.mainnet-beta.solana.com',
+    rpcUrl: validateRpcUrl(process.env.RPC_URL || 'https://api.mainnet-beta.solana.com'),
     pythnetUrl: process.env.PYTHNET_URL || 'https://pythnet.rpcpool.com',
     walletPath: resolveHome(process.env.WALLET_PATH || '~/.config/solana/id.json'),
     anthropicApiKey: process.env.ANTHROPIC_API_KEY || '',

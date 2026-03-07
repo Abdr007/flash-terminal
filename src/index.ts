@@ -200,12 +200,12 @@ program
     }
 
     // 5. AI provider
-    const hasAnthropic = !!config.anthropicApiKey && config.anthropicApiKey !== 'sk-ant-...';
+    const hasPrimaryAi = !!config.anthropicApiKey && config.anthropicApiKey !== 'sk-ant-...';
     const hasGroq = !!config.groqApiKey;
-    if (hasAnthropic && hasGroq) {
-      console.log(label('AI provider') + ok('Claude + Groq'));
-    } else if (hasAnthropic) {
-      console.log(label('AI provider') + ok('Claude'));
+    if (hasPrimaryAi && hasGroq) {
+      console.log(label('AI provider') + ok('Primary + Groq'));
+    } else if (hasPrimaryAi) {
+      console.log(label('AI provider') + ok('Primary'));
     } else if (hasGroq) {
       console.log(label('AI provider') + ok('Groq'));
     } else {

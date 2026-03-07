@@ -35,7 +35,7 @@ Flash AI Terminal interacts with the Solana blockchain and manages cryptographic
 The logger automatically scrubs sensitive patterns from all log output:
 
 - `api_key=...` → `api_key=***`
-- `sk-ant-...` (Anthropic keys) → `sk-ant-***`
+- `sk-ant-...` (AI provider keys) → `sk-ant-***`
 - `gsk_...` (Groq keys) → `gsk_***`
 
 ### Environment Variables
@@ -112,6 +112,6 @@ Key dependencies with security implications:
 | `@solana/web3.js` | Solana RPC and transaction signing | Solana Foundation |
 | `flash-sdk` | Flash Trade protocol interaction | Flash Trade team |
 | `@pythnetwork/client` | Oracle price feeds | Pyth Network |
-| `@anthropic-ai/sdk` | AI command parsing (optional) | Anthropic |
+| `@anthropic-ai/sdk` | AI command parsing (optional) | AI provider |
 | `openai` | Groq AI fallback (optional) | OpenAI SDK for Groq-compatible API |
 | `zod` | Input validation schemas | Community standard |

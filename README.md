@@ -54,7 +54,7 @@ how is my portfolio doing
 
 ## Key Features
 
-- **AI Natural Language Trading** — Parse commands like "open a 2x long sol with ten dollars" via Claude or Groq
+- **AI Natural Language Trading** — Parse commands like "open a 2x long sol with ten dollars" via AI or Groq
 - **Real-Time Market Scanning** — Scan all Flash Trade markets and rank opportunities by confidence score
 - **Portfolio Analytics** — Exposure analysis, directional bias detection, correlation-aware allocation
 - **Risk Management Engine** — Liquidation risk, position sizing limits, regime-adjusted leverage
@@ -134,7 +134,7 @@ User Command
      ▼
 ┌─────────────────────────────────────────────┐
 │           AI Interpreter                    │
-│  Fast dispatch → Regex parser → Groq/Claude │
+│  Fast dispatch → Regex parser → AI fallback  │
 └──────────────────┬──────────────────────────┘
                    │ ParsedIntent
                    ▼
@@ -176,7 +176,7 @@ User Command
 
 | Layer | Responsibility |
 |-------|---------------|
-| **AI Interpreter** | Converts user input to structured intents. Tries exact-match dispatch first, then regex parsing, then AI (Groq/Claude) for natural language. |
+| **AI Interpreter** | Converts user input to structured intents. Tries exact-match dispatch first, then regex parsing, then AI for natural language. |
 | **Tool Dispatcher** | Maps each `ActionType` to a registered tool function. Executes with error isolation and timeout protection. |
 | **Scanner** | Runs three strategies (momentum, mean reversion, whale follow) across all markets. Regime detection adjusts strategy weights dynamically. |
 | **Portfolio Engine** | Tracks exposure, directional bias, and capital allocation. Produces rebalance suggestions based on risk constraints. |
@@ -225,8 +225,8 @@ RPC_URL=https://api.mainnet-beta.solana.com
 **Optional (AI features):**
 
 ```env
-ANTHROPIC_API_KEY=sk-ant-...     # Claude — natural language parsing
-GROQ_API_KEY=gsk_...             # Groq — free AI fallback
+ANTHROPIC_API_KEY=sk-ant-...     # AI natural language parsing
+GROQ_API_KEY=gsk_...             # Groq — AI fallback
 ```
 
 **Trading defaults:**
@@ -399,7 +399,7 @@ Flash AI Terminal is designed for extension. Developers can:
 
 **Add Trading Strategies** — Implement the strategy interface in `src/strategies/` and register in the signal aggregator. Each strategy receives market data and returns a directional signal with confidence.
 
-**Add New Tools** — Define a tool in `src/tools/flash-tools.ts` or `src/clawd/clawd-tools.ts` with a Zod parameter schema, register it in the tool registry, and map a new `ActionType` in the engine.
+**Add New Tools** — Define a tool in `src/tools/flash-tools.ts` or `src/agent/agent-tools.ts` with a Zod parameter schema, register it in the tool registry, and map a new `ActionType` in the engine.
 
 **Extend the Risk Engine** — Add new risk checks in `src/config/risk-config.ts`. The `checkTradeRisk` function runs before every trade and can block execution with a reason.
 

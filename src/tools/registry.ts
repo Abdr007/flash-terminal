@@ -2,7 +2,7 @@ import { ToolDefinition, ToolContext, ToolResult } from '../types/index.js';
 import { getErrorMessage } from '../utils/retry.js';
 
 /**
- * Tool Registry following the Clawd agent architecture pattern.
+ * Tool Registry — tools are registered by name and dispatched by the engine.
  * Tools are registered by name and dispatched by the engine.
  */
 export class ToolRegistry {

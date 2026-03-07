@@ -1,6 +1,8 @@
-import { appendFile, mkdirSync, existsSync, writeFileSync, chmodSync } from 'fs';
+import { appendFile, mkdirSync, existsSync, writeFileSync, chmodSync, statSync, renameSync } from 'fs';
 import { join, dirname } from 'path';
 import chalk from 'chalk';
+
+const MAX_LOG_FILE_BYTES = 10 * 1024 * 1024; // 10MB max before rotation
 
 export enum LogLevel {
   Debug = 0,
@@ -121,11 +123,27 @@ export class Logger {
       .replace(/gsk_[^\s"]+/g, 'gsk_***');
   }
 
+  private logRotationChecked = 0;
+
   private writeToFile(entry: LogEntry): void {
     if (!this.logFilePath) return;
     const dataStr = entry.data ? ` ${JSON.stringify(entry.data)}` : '';
     const raw = `[${entry.timestamp}] ${LEVEL_LABELS[entry.level]} [${entry.category}] ${entry.message}${dataStr}\n`;
     const line = this.scrub(raw);
+
+    // Check log size periodically (every ~100 writes) and rotate if needed
+    if (++this.logRotationChecked % 100 === 0) {
+      try {
+        const size = statSync(this.logFilePath).size;
+        if (size > MAX_LOG_FILE_BYTES) {
+          const rotated = this.logFilePath + '.old';
+          try { renameSync(rotated, rotated + '.2'); } catch { /* ignore */ }
+          renameSync(this.logFilePath, rotated);
+          writeFileSync(this.logFilePath, '', { mode: 0o600 });
+        }
+      } catch { /* best-effort rotation */ }
+    }
+
     appendFile(this.logFilePath, line, () => {
       // Fire-and-forget — silently ignore write errors to avoid crashing the CLI
     });

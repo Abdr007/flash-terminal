@@ -14,7 +14,7 @@ import { WhaleActivity } from '../strategies/whale-follow.js';
 import { getLogger } from '../utils/logger.js';
 import { getErrorMessage } from '../utils/retry.js';
 
-const SYSTEM_PROMPT = `You are Clawd, an AI trading analyst for Flash Trade perpetuals on Solana.
+const SYSTEM_PROMPT = `You are an AI trading analyst for Flash Trade perpetuals on Solana.
 You analyze market data, strategy signals, and current positions to suggest a single trade.
 
 Rules:
@@ -51,9 +51,9 @@ export interface SuggestTradeContext {
 
 /**
  * AI reasoning agent for trade suggestions.
- * Tries Anthropic first, then Groq, then strategy engine fallback.
+ * Tries primary AI provider first, then Groq, then strategy engine fallback.
  */
-export class ClawdAgent {
+export class TradeAgent {
   private anthropic: Anthropic | null;
   private groq: OpenAI | null;
 
@@ -68,7 +68,7 @@ export class ClawdAgent {
     const logger = getLogger();
     const userMessage = this.buildPrompt(context);
 
-    // Try Anthropic first
+    // Try primary AI provider first
     if (this.anthropic) {
       const result = await this.tryAnthropic(userMessage);
       if (result) return result;
@@ -87,7 +87,7 @@ export class ClawdAgent {
   private async tryAnthropic(userMessage: string): Promise<TradeSuggestion | null> {
     const logger = getLogger();
     try {
-      logger.debug('CLAWD', 'Requesting trade suggestion from Claude');
+      logger.debug('AGENT', 'Requesting trade suggestion from primary AI');
 
       const controller = new AbortController();
       const apiTimeout = setTimeout(() => controller.abort(), 30_000);
@@ -105,17 +105,17 @@ export class ClawdAgent {
       }
 
       if (response.content.length === 0 || response.content[0].type !== 'text') {
-        logger.warn('CLAWD', 'Empty response from Claude');
+        logger.warn('AGENT', 'Empty response from primary AI');
         return null;
       }
 
-      return this.parseSuggestion(response.content[0].text, 'Claude');
+      return this.parseSuggestion(response.content[0].text, 'primary');
     } catch (error: unknown) {
       const msg = getErrorMessage(error);
       if (msg.includes('credit balance') || msg.includes('401') || msg.includes('403') || msg.includes('429')) {
-        logger.warn('CLAWD', `Claude unavailable: ${msg}. Trying fallback...`);
+        logger.warn('AGENT', `Primary AI unavailable: ${msg}. Trying fallback...`);
       } else {
-        logger.error('CLAWD', `Claude failed: ${msg}`);
+        logger.error('AGENT', `Primary AI failed: ${msg}`);
       }
       return null;
     }
@@ -124,7 +124,7 @@ export class ClawdAgent {
   private async tryGroq(userMessage: string): Promise<TradeSuggestion | null> {
     const logger = getLogger();
     try {
-      logger.debug('CLAWD', 'Requesting trade suggestion from Groq');
+      logger.debug('AGENT', 'Requesting trade suggestion from Groq');
 
       const response = await this.groq!.chat.completions.create({
         model: 'llama-3.3-70b-versatile',
@@ -138,13 +138,13 @@ export class ClawdAgent {
 
       const text = response.choices[0]?.message?.content;
       if (!text) {
-        logger.warn('CLAWD', 'Empty response from Groq');
+        logger.warn('AGENT', 'Empty response from Groq');
         return null;
       }
 
       return this.parseSuggestion(text, 'Groq');
     } catch (error: unknown) {
-      logger.warn('CLAWD', `Groq failed: ${getErrorMessage(error)}`);
+      logger.warn('AGENT', `Groq failed: ${getErrorMessage(error)}`);
       return null;
     }
   }
@@ -153,7 +153,7 @@ export class ClawdAgent {
     const logger = getLogger();
     const jsonMatch = text.match(/\{[\s\S]*\}/);
     if (!jsonMatch) {
-      logger.warn('CLAWD', `No JSON in ${source} response`);
+      logger.warn('AGENT', `No JSON in ${source} response`);
       return null;
     }
 
@@ -174,17 +174,17 @@ export class ClawdAgent {
         suggestion.risks.push('General market risk');
       }
 
-      logger.debug('CLAWD', `${source} suggestion: ${suggestion.side} ${suggestion.market} ${suggestion.leverage}x`);
+      logger.debug('AGENT', `${source} suggestion: ${suggestion.side} ${suggestion.market} ${suggestion.leverage}x`);
       return suggestion;
     } catch (error: unknown) {
-      logger.warn('CLAWD', `${source} JSON parse failed: ${getErrorMessage(error)}`);
+      logger.warn('AGENT', `${source} JSON parse failed: ${getErrorMessage(error)}`);
       return null;
     }
   }
 
   private fallback(context: SuggestTradeContext): TradeSuggestion | null {
     const logger = getLogger();
-    logger.info('CLAWD', 'Using strategy engine fallback for trade suggestion');
+    logger.info('AGENT', 'Using strategy engine fallback for trade suggestion');
 
     return generateFallbackSuggestion({
       markets: context.markets,

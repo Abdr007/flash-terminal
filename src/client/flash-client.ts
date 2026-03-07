@@ -690,6 +690,7 @@ export class FlashClient implements IFlashClient {
     for (const raw of rawPositions as unknown as Array<{
       pubkey: PublicKey; market: PublicKey;
       entryPrice?: { price: BN; exponent: number } | BN; sizeUsd?: BN; collateralUsd?: BN; openTime?: BN;
+      unsettledFeesUsd?: BN;
       sizeDecimals?: number; collateralDecimals?: number;
     }>) {
       try {
@@ -712,10 +713,11 @@ export class FlashClient implements IFlashClient {
           parsedEntry = parseFloat(rawEntryField.toString()) * Math.pow(10, oracleExp);
         }
 
-        const sizeDec = raw.sizeDecimals ?? 6;
-        const collDec = raw.collateralDecimals ?? 6;
-        const parsedSize = raw.sizeUsd ? parseFloat(raw.sizeUsd.toString()) / Math.pow(10, sizeDec) : 0;
-        const parsedCollateral = raw.collateralUsd ? parseFloat(raw.collateralUsd.toString()) / Math.pow(10, collDec) : 0;
+        // USD values in Flash Trade always use 6 decimal precision (USD_DECIMALS),
+        // NOT the token's native decimals (sizeDecimals/collateralDecimals are TOKEN decimals).
+        const USD_DECIMALS = 6;
+        const parsedSize = raw.sizeUsd ? parseFloat(raw.sizeUsd.toString()) / Math.pow(10, USD_DECIMALS) : 0;
+        const parsedCollateral = raw.collateralUsd ? parseFloat(raw.collateralUsd.toString()) / Math.pow(10, USD_DECIMALS) : 0;
         const parsedCurrentPrice = tokenPrice.uiPrice;
 
         // NaN/Infinity guard
@@ -741,18 +743,28 @@ export class FlashClient implements IFlashClient {
           ? entryPrice * (1 - liqDist)
           : entryPrice * (1 + liqDist);
 
+        // Accumulated fees from protocol (unsettledFeesUsd is in USD with 6 decimals)
+        const rawFees = raw.unsettledFeesUsd
+          ? parseFloat(raw.unsettledFeesUsd.toString()) / Math.pow(10, USD_DECIMALS)
+          : 0;
+        const totalFees = Number.isFinite(rawFees) ? rawFees : 0;
+
         positions.push({
           pubkey: raw.pubkey.toBase58(),
           market: targetToken.symbol,
           side,
           entryPrice,
           currentPrice,
+          markPrice: currentPrice,
           sizeUsd,
           collateralUsd,
           leverage,
           unrealizedPnl: safeUnrealizedPnl,
           unrealizedPnlPercent: (safeUnrealizedPnl / collateralUsd) * 100,
           liquidationPrice,
+          openFee: 0,
+          totalFees,
+          fundingRate: 0,
           timestamp: raw.openTime ? Number(raw.openTime.toString()) : Date.now() / 1000,
         });
       } catch (error: unknown) {
@@ -804,6 +816,8 @@ export class FlashClient implements IFlashClient {
       balanceLabel: `SOL: ${solBal.toFixed(4)} | USDC: ${usdcBalance.toFixed(2)}`,
       totalCollateralUsd: positions.reduce((s, p) => s + p.collateralUsd, 0),
       totalUnrealizedPnl: positions.reduce((s, p) => s + p.unrealizedPnl, 0),
+      totalRealizedPnl: 0,
+      totalFees: positions.reduce((s, p) => s + p.totalFees, 0),
       positions,
       totalPositionValue: positions.reduce((s, p) => s + p.sizeUsd, 0),
       usdcBalance,

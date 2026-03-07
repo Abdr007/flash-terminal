@@ -6,7 +6,7 @@ import {
   TradeSide,
   StrategySignal,
 } from '../types/index.js';
-import { SolanaInspector } from '../clawd/solana-inspector.js';
+import { SolanaInspector } from '../agent/solana-inspector.js';
 import { computeMomentumSignal } from '../strategies/momentum.js';
 import { computeMeanReversionSignal } from '../strategies/mean-reversion.js';
 import { computeWhaleFollowSignal, WhaleActivity } from '../strategies/whale-follow.js';

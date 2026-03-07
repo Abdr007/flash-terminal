@@ -290,7 +290,7 @@ export function localParse(input: string): ParsedIntent | null {
     }
   }
 
-  // ─── Clawd AI Agent Commands ─────────────────────────────────────────────
+  // ─── AI Agent Commands ──────────────────────────────────────────────────
 
   // Analyze: "analyze SOL", "analyze BTC"
   const analyzeMatch = lower.match(/^analyze\s+([a-z]+)$/);
@@ -392,7 +392,7 @@ export class AIInterpreter {
       return { action: ActionType.Help };
     }
 
-    // Try Anthropic first, then Groq as fallback
+    // Try primary AI provider first, then Groq as fallback
     if (this.anthropic) {
       const result = await this.tryAnthropic(userInput);
       if (result) return result;
@@ -409,7 +409,7 @@ export class AIInterpreter {
 
   private async tryAnthropic(userInput: string): Promise<ParsedIntent | null> {
     const logger = getLogger();
-    logger.debug('AI', 'Calling Claude API', { input: userInput });
+    logger.debug('AI', 'Calling primary AI API', { input: userInput });
 
     try {
       const controller = new AbortController();
@@ -428,17 +428,17 @@ export class AIInterpreter {
       }
 
       if (response.content.length === 0 || response.content[0].type !== 'text') {
-        logger.warn('AI', 'Empty response from Claude');
+        logger.warn('AI', 'Empty response from primary AI');
         return null;
       }
 
-      return this.parseJsonResponse(response.content[0].text, 'Claude');
+      return this.parseJsonResponse(response.content[0].text, 'primary');
     } catch (error: unknown) {
       const msg = getErrorMessage(error);
       if (msg.includes('credit balance') || msg.includes('401') || msg.includes('403') || msg.includes('429') || msg.includes('abort') || msg.includes('timeout')) {
-        logger.warn('AI', `Claude unavailable (${msg}). Trying fallback...`);
+        logger.warn('AI', `Primary AI unavailable (${msg}). Trying fallback...`);
       } else {
-        logger.error('AI', `Claude parse failed: ${msg}`);
+        logger.error('AI', `Primary AI parse failed: ${msg}`);
       }
       return null;
     }
@@ -449,15 +449,23 @@ export class AIInterpreter {
     logger.debug('AI', 'Calling Groq API', { input: userInput });
 
     try {
-      const response = await this.groq!.chat.completions.create({
-        model: 'llama-3.3-70b-versatile',
-        max_tokens: 256,
-        messages: [
-          { role: 'system', content: SYSTEM_PROMPT },
-          { role: 'user', content: userInput },
-        ],
-        temperature: 0,
-      });
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), AIInterpreter.API_TIMEOUT_MS);
+
+      let response;
+      try {
+        response = await this.groq!.chat.completions.create({
+          model: 'llama-3.3-70b-versatile',
+          max_tokens: 256,
+          messages: [
+            { role: 'system', content: SYSTEM_PROMPT },
+            { role: 'user', content: userInput },
+          ],
+          temperature: 0,
+        }, { signal: controller.signal });
+      } finally {
+        clearTimeout(timeout);
+      }
 
       const text = response.choices[0]?.message?.content;
       if (!text) {
@@ -508,7 +516,7 @@ export class OfflineInterpreter {
     const result = localParse(userInput);
     if (result) return result;
 
-    getLogger().warn('AI', 'Could not parse locally. Set ANTHROPIC_API_KEY for AI parsing.');
+    getLogger().warn('AI', 'Could not parse locally. Set an AI API key for AI-powered parsing.');
     return { action: ActionType.Help };
   }
 }

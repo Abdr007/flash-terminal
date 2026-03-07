@@ -35,7 +35,7 @@ const DEFAULT_WEIGHTS: RegimeWeights = {
 
 /**
  * Collect signals from all strategies, compute a unified confidence score,
- * and produce a deterministic trade suggestion without Claude.
+ * and produce a deterministic trade suggestion without an AI provider.
  *
  * When `regimeWeights` is provided, strategy contributions are modulated
  * by the detected market regime instead of using equal weighting.
@@ -135,7 +135,7 @@ export function aggregateSignals(
 
 /**
  * Generate a fallback TradeSuggestion from aggregated strategy signals.
- * Used when Claude API is unavailable.
+ * Used when AI API is unavailable.
  */
 export function generateFallbackSuggestion(input: AggregatorInput): TradeSuggestion | null {
   const logger = getLogger();

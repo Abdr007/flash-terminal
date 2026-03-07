@@ -34,7 +34,7 @@ export enum ActionType {
   Help = 'help',
   FlashMarkets = 'flash_markets',
 
-  // Clawd AI Agent
+  // AI Agent
   Analyze = 'analyze',
   SuggestTrade = 'suggest_trade',
   RiskReport = 'risk_report',
@@ -178,7 +178,7 @@ export const FlashMarketsSchema = z.object({
   action: z.literal(ActionType.FlashMarkets),
 });
 
-// Clawd AI Agent Schemas
+// AI Agent Schemas
 export const AnalyzeSchema = z.object({
   action: z.literal(ActionType.Analyze),
   market: z.string(),
@@ -306,12 +306,16 @@ export interface Position {
   side: TradeSide;
   entryPrice: number;
   currentPrice: number;
+  markPrice: number;
   sizeUsd: number;
   collateralUsd: number;
   leverage: number;
   unrealizedPnl: number;
   unrealizedPnlPercent: number;
   liquidationPrice: number;
+  openFee: number;
+  totalFees: number;
+  fundingRate: number;
   timestamp: number;
 }
 
@@ -331,6 +335,8 @@ export interface Portfolio {
   balanceLabel: string;
   totalCollateralUsd: number;
   totalUnrealizedPnl: number;
+  totalRealizedPnl: number;
+  totalFees: number;
   positions: Position[];
   totalPositionValue: number;
   usdcBalance?: number;
@@ -403,7 +409,7 @@ export interface OverviewStats {
   uniqueTraders: number;
 }
 
-// ─── Clawd AI Agent Domain Types ─────────────────────────────────────────────
+// ─── AI Agent Domain Types ───────────────────────────────────────────────────
 
 export interface StrategySignal {
   name: string;
@@ -477,7 +483,7 @@ export interface AggregatedSignal {
   confidenceScore: number;
   confidenceLabel: 'high' | 'medium' | 'low';
   signalBreakdown: StrategySignal[];
-  source: 'claude' | 'strategy_engine';
+  source: 'ai' | 'strategy_engine';
 }
 
 // ─── Market Scanner Types ───────────────────────────────────────────────────
@@ -634,6 +640,7 @@ export interface SimulatedPosition {
   sizeUsd: number;
   collateralUsd: number;
   leverage: number;
+  openFee: number;
   openedAt: number;
 }
 
@@ -641,6 +648,8 @@ export interface SimulationState {
   balance: number;
   positions: SimulatedPosition[];
   tradeHistory: SimulatedTrade[];
+  totalRealizedPnl: number;
+  totalFeesPaid: number;
 }
 
 export interface SimulatedTrade {

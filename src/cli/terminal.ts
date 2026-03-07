@@ -13,7 +13,7 @@ import { WalletStore } from '../wallet/wallet-store.js';
 import { shortAddress } from '../utils/format.js';
 import { getErrorMessage } from '../utils/retry.js';
 import { initLogger } from '../utils/logger.js';
-import { getAutopilot, setClawdApiKey, getInspector, getScanner, getRegimeDetector } from '../clawd/clawd-tools.js';
+import { getAutopilot, setAiApiKey, getInspector, getScanner, getRegimeDetector } from '../agent/agent-tools.js';
 import { formatUsd, colorPercent } from '../utils/format.js';
 import { MarketRegime } from '../regime/regime-types.js';
 
@@ -120,12 +120,12 @@ export class FlashTerminal {
 
     initLogger(config.logFile ? { logFile: config.logFile } : undefined);
 
-    const hasAnthropicKey = config.anthropicApiKey && config.anthropicApiKey !== 'sk-ant-...';
+    const hasAiKey = config.anthropicApiKey && config.anthropicApiKey !== 'sk-ant-...';
     const hasGroqKey = !!config.groqApiKey;
 
-    if (hasAnthropicKey || hasGroqKey) {
+    if (hasAiKey || hasGroqKey) {
       this.interpreter = new AIInterpreter(
-        hasAnthropicKey ? config.anthropicApiKey : '',
+        hasAiKey ? config.anthropicApiKey : '',
         hasGroqKey ? config.groqApiKey : undefined,
       );
     } else {
@@ -221,7 +221,7 @@ export class FlashTerminal {
       walletManager: this.walletManager,
     };
 
-    setClawdApiKey(this.config.anthropicApiKey, this.config.groqApiKey);
+    setAiApiKey(this.config.anthropicApiKey, this.config.groqApiKey);
     this.engine = new ToolEngine(this.context);
 
     // Set prompt based on mode
@@ -767,11 +767,31 @@ export class FlashTerminal {
         const expandedPath = trimmed.startsWith('~')
           ? join(homedir(), trimmed.slice(1))
           : resolve(trimmed);
-        if (existsSync(expandedPath)) {
-          const raw = readFileSync(expandedPath, 'utf-8');
-          const parsed: unknown = JSON.parse(raw);
-          if (Array.isArray(parsed)) {
-            secretKey = parsed as number[];
+
+        // Security: restrict file reads to home directory (same as walletManager)
+        const home = homedir();
+        const homePrefix = home.endsWith('/') ? home : home + '/';
+        if (expandedPath !== home && !expandedPath.startsWith(homePrefix)) {
+          console.log(chalk.red('  Wallet path must be within home directory.'));
+        } else if (existsSync(expandedPath)) {
+          // Resolve symlinks to prevent traversal
+          const { realpathSync: realpath } = await import('fs');
+          const realPath = realpath(expandedPath);
+          if (realPath !== home && !realPath.startsWith(homePrefix)) {
+            console.log(chalk.red('  Wallet path resolves outside home directory (symlink?).'));
+          } else {
+            // Reject suspiciously large files (keypair JSON should be < 1KB)
+            const { statSync: stat } = await import('fs');
+            const fileSize = stat(realPath).size;
+            if (fileSize > 1024) {
+              console.log(chalk.red(`  File too large (${fileSize} bytes). Expected a keypair JSON.`));
+            } else {
+              const raw = readFileSync(realPath, 'utf-8');
+              const parsed: unknown = JSON.parse(raw);
+              if (Array.isArray(parsed)) {
+                secretKey = parsed as number[];
+              }
+            }
           }
         }
       } catch {

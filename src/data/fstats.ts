@@ -89,6 +89,8 @@ type RawOpenPosition = RawActivityRecord;
  * Safe fetch with timeout and JSON validation.
  * Returns null on failure instead of throwing.
  */
+const MAX_RESPONSE_BYTES = 2 * 1024 * 1024; // 2MB max response body
+
 async function safeFetchJson<T>(path: string): Promise<T | null> {
   const url = `${FSTATS_BASE_URL}${path}`;
   const logger = getLogger();
@@ -111,7 +113,18 @@ async function safeFetchJson<T>(path: string): Promise<T | null> {
       logger.warn('ANALYTICS', `fstats returned non-JSON for ${path}: ${contentType}`);
       return null;
     }
-    return (await res.json()) as T;
+    // Guard against oversized responses (OOM protection)
+    const contentLength = res.headers.get('content-length');
+    if (contentLength && parseInt(contentLength, 10) > MAX_RESPONSE_BYTES) {
+      logger.warn('ANALYTICS', `fstats response too large for ${path}: ${contentLength} bytes`);
+      return null;
+    }
+    const text = await res.text();
+    if (text.length > MAX_RESPONSE_BYTES) {
+      logger.warn('ANALYTICS', `fstats response body too large for ${path}: ${text.length} bytes`);
+      return null;
+    }
+    return JSON.parse(text) as T;
   } catch (error: unknown) {
     logger.warn('ANALYTICS', `fstats fetch failed for ${path}: ${getErrorMessage(error)}`);
     return null;
@@ -138,7 +151,7 @@ function safeArray<T>(raw: unknown): T[] {
 
 export class FStatsClient implements IDataClient {
   async getOverviewStats(period: '7d' | '30d' | 'all' = '30d'): Promise<OverviewStats> {
-    const raw = await safeFetchJson<RawOverviewStats>(`/overview/stats?period=${period}`);
+    const raw = await safeFetchJson<RawOverviewStats>(`/overview/stats?period=${encodeURIComponent(period)}`);
     return {
       volumeUsd: raw?.volume_usd ?? 0,
       volumeChangePct: raw?.volume_change_pct ?? 0,
@@ -152,13 +165,13 @@ export class FStatsClient implements IDataClient {
   }
 
   async getRecentActivity(limit = 20): Promise<RawOpenPosition[]> {
-    const raw = await safeFetchJson<unknown>(`/overview/activity?limit=${limit}`);
+    const raw = await safeFetchJson<unknown>(`/overview/activity?limit=${encodeURIComponent(String(limit))}`);
     return safeArray<RawOpenPosition>(raw);
   }
 
   async getVolume(days = 30, pool?: string): Promise<VolumeData> {
-    const poolParam = pool ? `&pool=${pool}` : '';
-    const raw = await safeFetchJson<unknown>(`/volume/daily?days=${days}${poolParam}`);
+    const poolParam = pool ? `&pool=${encodeURIComponent(pool)}` : '';
+    const raw = await safeFetchJson<unknown>(`/volume/daily?days=${encodeURIComponent(String(days))}${poolParam}`);
     const daily = safeArray<RawDailyVolume>(raw);
     const dailyVolumes: DailyVolume[] = daily.map((d) => ({
       date: d.date ?? '',
@@ -198,7 +211,7 @@ export class FStatsClient implements IDataClient {
   }
 
   async getFees(days = 30): Promise<FeeData> {
-    const raw = await safeFetchJson<unknown>(`/fees/daily?days=${days}`);
+    const raw = await safeFetchJson<unknown>(`/fees/daily?days=${encodeURIComponent(String(days))}`);
     const daily = safeArray<RawDailyFee>(raw);
     const dailyFees = daily.map((d) => ({
       date: d.date ?? '',
@@ -222,7 +235,7 @@ export class FStatsClient implements IDataClient {
     limit = 10
   ): Promise<LeaderboardEntry[]> {
     const raw = await safeFetchJson<unknown>(
-      `/leaderboards/${metric}?days=${days}&limit=${limit}`
+      `/leaderboards/${encodeURIComponent(metric)}?days=${encodeURIComponent(String(days))}&limit=${encodeURIComponent(String(limit))}`
     );
     const entries = safeArray<RawLeaderboardEntry>(raw);
     return entries.map((entry, i) => ({

@@ -20,6 +20,9 @@ import { getErrorMessage } from '../utils/retry.js';
 
 const MAX_TRADE_HISTORY = 500;
 
+// Simulated trading fee: 0.08% of position size (Flash Trade typical)
+const SIM_FEE_BPS = 8;
+
 /**
  * SimulatedFlashClient implements IFlashClient for paper trading.
  * Uses CoinGecko prices as primary, fstats as enrichment. No hardcoded fallbacks.
@@ -39,6 +42,8 @@ export class SimulatedFlashClient implements IFlashClient {
       balance: initialBalance,
       positions: [],
       tradeHistory: [],
+      totalRealizedPnl: 0,
+      totalFeesPaid: 0,
     };
     this.priceService = new PriceService();
     this.fstats = new FStatsClient();
@@ -135,6 +140,13 @@ export class SimulatedFlashClient implements IFlashClient {
     const sizeUsd = collateralAmount * leverage;
     const liquidationPrice = this.calcLiquidationPrice(price, leverage, side);
 
+    // Trading fee: 0.08% of position size
+    const openFee = (sizeUsd * SIM_FEE_BPS) / 10_000;
+
+    if (collateralAmount + openFee > this.state.balance) {
+      throw new Error(`Insufficient balance for collateral + fee: need $${(collateralAmount + openFee).toFixed(2)}, have $${this.state.balance.toFixed(2)}`);
+    }
+
     const position: SimulatedPosition = {
       id: randomUUID().slice(0, 8),
       market: market.toUpperCase(),
@@ -143,10 +155,12 @@ export class SimulatedFlashClient implements IFlashClient {
       sizeUsd,
       collateralUsd: collateralAmount,
       leverage,
+      openFee,
       openedAt: Date.now(),
     };
 
-    this.state.balance -= collateralAmount;
+    this.state.balance -= collateralAmount + openFee;
+    this.state.totalFeesPaid += openFee;
     this.state.positions.push(position);
     this.state.tradeHistory.push({
       id: position.id,
@@ -185,7 +199,14 @@ export class SimulatedFlashClient implements IFlashClient {
       ? (priceDelta / position.entryPrice) * position.sizeUsd * pnlMultiplier
       : 0;
 
-    this.state.balance += position.collateralUsd + pnl;
+    // Close fee: 0.08% of position size
+    const closeFee = (position.sizeUsd * SIM_FEE_BPS) / 10_000;
+    this.state.totalFeesPaid += closeFee;
+    this.state.totalRealizedPnl += pnl;
+
+    // Floor balance at zero (liquidation scenario: collateral + PnL - fee < 0)
+    const returnAmount = position.collateralUsd + pnl - closeFee;
+    this.state.balance += Math.max(returnAmount, 0);
     this.state.positions.splice(idx, 1);
     this.state.tradeHistory.push({
       id: position.id,
@@ -256,12 +277,16 @@ export class SimulatedFlashClient implements IFlashClient {
         side: p.side,
         entryPrice: p.entryPrice,
         currentPrice,
+        markPrice: currentPrice,
         sizeUsd: p.sizeUsd,
         collateralUsd: p.collateralUsd,
         leverage: p.leverage,
         unrealizedPnl,
         unrealizedPnlPercent: p.collateralUsd > 0 ? (unrealizedPnl / p.collateralUsd) * 100 : 0,
         liquidationPrice,
+        openFee: p.openFee,
+        totalFees: p.openFee,
+        fundingRate: 0,
         timestamp: p.openedAt / 1000,
       };
     });
@@ -312,6 +337,8 @@ export class SimulatedFlashClient implements IFlashClient {
       balanceLabel: `Balance: $${this.state.balance.toFixed(2)}`,
       totalCollateralUsd,
       totalUnrealizedPnl,
+      totalRealizedPnl: this.state.totalRealizedPnl,
+      totalFees: this.state.totalFeesPaid,
       positions,
       totalPositionValue,
     };

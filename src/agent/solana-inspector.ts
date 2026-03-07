@@ -134,6 +134,8 @@ export class SolanaInspector {
         balanceLabel: '$0.00',
         totalCollateralUsd: 0,
         totalUnrealizedPnl: 0,
+        totalRealizedPnl: 0,
+        totalFees: 0,
         positions: [],
         totalPositionValue: 0,
       };
@@ -242,7 +244,7 @@ export class SolanaInspector {
       positions: results[1].status === 'fulfilled' ? results[1].value : [],
       portfolio: results[2].status === 'fulfilled' ? results[2].value : {
         walletAddress: 'unknown', balance: 0, balanceLabel: '$0.00',
-        totalCollateralUsd: 0, totalUnrealizedPnl: 0, positions: [], totalPositionValue: 0,
+        totalCollateralUsd: 0, totalUnrealizedPnl: 0, totalRealizedPnl: 0, totalFees: 0, positions: [], totalPositionValue: 0,
       },
       openInterest: results[3].status === 'fulfilled' ? results[3].value : { markets: [] },
       volume: results[4].status === 'fulfilled' ? results[4].value : {

@@ -358,14 +358,17 @@ export const flashGetPositions: ToolDefinition = {
       return { success: true, message: chalk.dim('\n  No open positions.\n') };
     }
 
-    const headers = ['Market', 'Side', 'Leverage', 'Size', 'Collateral', 'PnL', 'Liq Price'];
+    const headers = ['Market', 'Side', 'Lev', 'Size', 'Collateral', 'Entry', 'Mark', 'PnL', 'Fees', 'Liq'];
     const rows = positions.map((p: Position) => [
       chalk.bold(p.market),
       colorSide(p.side),
       `${p.leverage.toFixed(1)}x`,
       formatUsd(p.sizeUsd),
       formatUsd(p.collateralUsd),
+      formatPrice(p.entryPrice),
+      formatPrice(p.markPrice),
       `${colorPnl(p.unrealizedPnl)} ${chalk.dim(`(${colorPercent(p.unrealizedPnlPercent)})`)}`,
+      p.totalFees > 0 ? formatUsd(p.totalFees) : chalk.dim('—'),
       formatPrice(p.liquidationPrice),
     ]);
 
@@ -475,6 +478,8 @@ export const flashGetPortfolio: ToolDefinition = {
       portfolio.usdcBalance !== undefined ? `  USDC Available:   ${chalk.green('$' + portfolio.usdcBalance.toFixed(2))}` : '',
       `  Collateral:       ${formatUsd(portfolio.totalCollateralUsd)}`,
       `  Unrealized PnL:   ${colorPnl(portfolio.totalUnrealizedPnl)}`,
+      `  Realized PnL:     ${colorPnl(portfolio.totalRealizedPnl)}`,
+      portfolio.totalFees > 0 ? `  Fees Paid:        ${formatUsd(portfolio.totalFees)}` : '',
       '',
     );
 
