@@ -247,7 +247,8 @@ export class FlashTerminal {
         return;
       }
 
-      const trimmed = line.trim();
+      // Sanitize: strip control chars (null bytes, etc.) and collapse whitespace
+      const trimmed = line.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, '').trim();
 
       if (!trimmed) {
         this.rl.prompt();

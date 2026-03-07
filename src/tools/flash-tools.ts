@@ -92,6 +92,10 @@ export const flashOpenPosition: ToolDefinition = {
       return { success: false, message: chalk.red('  Invalid trade parameters: collateral and leverage must be positive numbers.') };
     }
 
+    if (collateral < 10) {
+      return { success: false, message: chalk.red(`  Minimum collateral is $10 (got $${collateral}).`) };
+    }
+
     const sizeUsd = collateral * leverage;
     const isLive = !context.simulationMode;
 

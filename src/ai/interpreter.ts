@@ -108,7 +108,9 @@ function parseSide(raw: string): TradeSide | null {
  * Exported so it can be used by both AIInterpreter and OfflineInterpreter.
  */
 export function localParse(input: string): ParsedIntent | null {
-  const lower = input.toLowerCase().trim();
+  // Sanitize: collapse whitespace (tabs, newlines, etc.) to single spaces, strip control chars
+  const sanitized = input.replace(/[\x00-\x1f\x7f]/g, ' ').replace(/\s+/g, ' ').trim();
+  const lower = sanitized.toLowerCase();
 
   // Help
   if (/^(help|commands|\?)$/.test(lower)) {
@@ -209,7 +211,7 @@ export function localParse(input: string): ParsedIntent | null {
 
   // Open position: "open 5x long SOL $500"
   const openMatch = lower.match(
-    /(?:open|buy|enter)\s+(?:a\s+)?(\d+(?:\.\d+)?)\s*x?\s*(long|short)\s+(?:position\s+)?(?:on\s+)?([a-z]+)\s+(?:with\s+)?\$?(\d+(?:\.\d+)?)/
+    /^(?:open|buy|enter)\s+(?:a\s+)?(\d+(?:\.\d+)?)\s*x?\s*(long|short)\s+(?:position\s+)?(?:on\s+)?([a-z]+)\s+(?:with\s+)?\$?(\d+(?:\.\d+)?)$/
   );
   if (openMatch) {
     const side = parseSide(openMatch[2]);
@@ -226,7 +228,7 @@ export function localParse(input: string): ParsedIntent | null {
 
   // Alternate: "long SOL $500 5x"
   const openMatch2 = lower.match(
-    /(long|short)\s+([a-z]+)\s+\$?(\d+(?:\.\d+)?)\s+(\d+(?:\.\d+)?)\s*x/
+    /^(long|short)\s+([a-z]+)\s+\$?(\d+(?:\.\d+)?)\s+(\d+(?:\.\d+)?)\s*x$/
   );
   if (openMatch2) {
     const side = parseSide(openMatch2[1]);
@@ -243,7 +245,7 @@ export function localParse(input: string): ParsedIntent | null {
 
   // Close position: "close SOL long"
   const closeMatch = lower.match(
-    /(?:close|exit|sell)\s+(?:my\s+)?([a-z]+)\s+(long|short)/
+    /^(?:close|exit|sell)\s+(?:my\s+)?([a-z]+)\s+(long|short)$/
   );
   if (closeMatch) {
     const side = parseSide(closeMatch[2]);
@@ -258,7 +260,7 @@ export function localParse(input: string): ParsedIntent | null {
 
   // Add collateral: "add $200 to SOL long"
   const addCollMatch = lower.match(
-    /add\s+\$?(\d+(?:\.\d+)?)\s+(?:collateral\s+)?(?:to\s+)?(?:my\s+)?([a-z]+)\s+(long|short)/
+    /^add\s+\$?(\d+(?:\.\d+)?)\s+(?:collateral\s+)?(?:to\s+)?(?:my\s+)?([a-z]+)\s+(long|short)$/
   );
   if (addCollMatch) {
     const side = parseSide(addCollMatch[3]);
@@ -274,7 +276,7 @@ export function localParse(input: string): ParsedIntent | null {
 
   // Remove collateral: "remove $100 from ETH long"
   const rmCollMatch = lower.match(
-    /remove\s+\$?(\d+(?:\.\d+)?)\s+(?:collateral\s+)?(?:from\s+)?(?:my\s+)?([a-z]+)\s+(long|short)/
+    /^remove\s+\$?(\d+(?:\.\d+)?)\s+(?:collateral\s+)?(?:from\s+)?(?:my\s+)?([a-z]+)\s+(long|short)$/
   );
   if (rmCollMatch) {
     const side = parseSide(rmCollMatch[3]);
