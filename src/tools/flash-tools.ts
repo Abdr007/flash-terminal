@@ -21,6 +21,8 @@ import {
   shortAddress,
 } from '../utils/format.js';
 import { getErrorMessage } from '../utils/retry.js';
+import { getSigningGuard, SigningAuditEntry } from '../security/signing-guard.js';
+import { updateLastWallet, clearLastWallet } from '../wallet/session.js';
 import chalk from 'chalk';
 
 // ─── Pre-Trade Validation ───────────────────────────────────────────────────
@@ -98,24 +100,68 @@ export const flashOpenPosition: ToolDefinition = {
 
     const sizeUsd = collateral * leverage;
     const isLive = !context.simulationMode;
+    const guard = getSigningGuard();
+    const walletAddr = context.walletAddress ?? 'unknown';
+    const estimatedFee = (sizeUsd * 8) / 10_000; // 0.08% Flash Trade fee
 
+    // ── Signing Guard: Trade Limit Check ──
+    const limitCheck = guard.checkTradeLimits({ collateral, leverage, sizeUsd, market });
+    if (!limitCheck.allowed) {
+      guard.logAudit({
+        timestamp: new Date().toISOString(),
+        type: 'open',
+        market, side, collateral, leverage, sizeUsd,
+        walletAddress: walletAddr,
+        result: 'rejected',
+        reason: limitCheck.reason,
+      });
+      return { success: false, message: chalk.red(`  Trade rejected: ${limitCheck.reason}`) };
+    }
+
+    // ── Signing Guard: Rate Limit Check ──
+    const rateCheck = guard.checkRateLimit();
+    if (!rateCheck.allowed) {
+      guard.logAudit({
+        timestamp: new Date().toISOString(),
+        type: 'open',
+        market, side, collateral, leverage, sizeUsd,
+        walletAddress: walletAddr,
+        result: 'rate_limited',
+        reason: rateCheck.reason,
+      });
+      return { success: false, message: chalk.red(`  ${rateCheck.reason}`) };
+    }
+
+    // ── Build Confirmation Summary ──
     const lines = [
       '',
-      isLive ? chalk.red.bold('  LIVE TRADE — Opening Position') : chalk.yellow('  Opening Position'),
-      chalk.dim('  ─────────────────'),
-      `  Market:     ${chalk.bold(market)} ${colorSide(side)}`,
-      `  Pool:       ${chalk.cyan(pool)}`,
-      `  Leverage:   ${chalk.bold(leverage + 'x')}`,
-      `  Collateral: ${chalk.bold(formatUsd(collateral))} ${chalk.dim('USDC')}`,
-      `  Size:       ${chalk.bold(formatUsd(sizeUsd))}`,
+      isLive ? chalk.red.bold('  CONFIRM TRANSACTION') : chalk.yellow('  CONFIRM TRANSACTION'),
+      chalk.dim('  ─────────────────────────────────'),
+      `  Market:      ${chalk.bold(market)} ${colorSide(side)}`,
+      `  Pool:        ${chalk.cyan(pool)}`,
+      `  Leverage:    ${chalk.bold(leverage + 'x')}`,
+      `  Collateral:  ${chalk.bold(formatUsd(collateral))} ${chalk.dim('USDC')}`,
+      `  Size:        ${chalk.bold(formatUsd(sizeUsd))}`,
+      `  Est. Fee:    ${chalk.dim(formatUsd(estimatedFee))}`,
+      `  Wallet:      ${chalk.dim(walletAddr)}`,
     ];
+
+    // Show configured limits
+    const limits = guard.limits;
+    if (limits.maxCollateralPerTrade > 0 || limits.maxPositionSize > 0 || limits.maxLeverage > 0) {
+      lines.push('');
+      lines.push(chalk.dim('  Limits:'));
+      if (limits.maxCollateralPerTrade > 0) lines.push(chalk.dim(`    Max Collateral: ${formatUsd(limits.maxCollateralPerTrade)}`));
+      if (limits.maxPositionSize > 0) lines.push(chalk.dim(`    Max Position:   ${formatUsd(limits.maxPositionSize)}`));
+      if (limits.maxLeverage > 0) lines.push(chalk.dim(`    Max Leverage:   ${limits.maxLeverage}x`));
+    }
 
     if (isLive) {
       const warnings = buildLiveTradeWarnings(market, leverage, collateral);
       if (warnings.length > 0) {
         lines.push('');
         for (const w of warnings) {
-          lines.push(`  ${chalk.yellow('⚠')} ${chalk.yellow(w)}`);
+          lines.push(`  ${chalk.yellow('!')} ${chalk.yellow(w)}`);
         }
       }
       lines.push('');
@@ -128,13 +174,26 @@ export const flashOpenPosition: ToolDefinition = {
       success: true,
       message: lines.join('\n'),
       requiresConfirmation: true,
-      confirmationPrompt: isLive ? 'Execute LIVE trade?' : 'Execute trade?',
+      confirmationPrompt: isLive ? 'Type "yes" to sign or "no" to cancel' : 'Execute trade?',
       data: {
         executeAction: async (): Promise<ToolResult> => {
+          // Record signing for rate limiter
+          guard.recordSigning();
+
           try {
             const result = await context.flashClient.openPosition(
               market, side, collateral, leverage, collateral_token
             );
+
+            // Audit log — successful
+            guard.logAudit({
+              timestamp: new Date().toISOString(),
+              type: 'open',
+              market, side, collateral, leverage, sizeUsd,
+              walletAddress: walletAddr,
+              result: 'confirmed',
+            });
+
             const txLink = context.simulationMode
               ? result.txSignature
               : `https://solscan.io/tx/${result.txSignature}`;
@@ -152,6 +211,15 @@ export const flashOpenPosition: ToolDefinition = {
               txSignature: result.txSignature,
             };
           } catch (error: unknown) {
+            // Audit log — failed
+            guard.logAudit({
+              timestamp: new Date().toISOString(),
+              type: 'open',
+              market, side, collateral, leverage, sizeUsd,
+              walletAddress: walletAddr,
+              result: 'failed',
+              reason: getErrorMessage(error),
+            });
             return { success: false, message: `  Failed to open position: ${getErrorMessage(error)}` };
           }
         },
@@ -184,24 +252,48 @@ export const flashClosePosition: ToolDefinition = {
     }
 
     const isLive = !context.simulationMode;
+    const guard = getSigningGuard();
+    const walletAddr = context.walletAddress ?? 'unknown';
+
+    // Rate limit check
+    const rateCheck = guard.checkRateLimit();
+    if (!rateCheck.allowed) {
+      guard.logAudit({
+        timestamp: new Date().toISOString(),
+        type: 'close', market, side,
+        walletAddress: walletAddr,
+        result: 'rate_limited', reason: rateCheck.reason,
+      });
+      return { success: false, message: chalk.red(`  ${rateCheck.reason}`) };
+    }
 
     return {
       success: true,
       message: [
         '',
-        isLive ? chalk.red.bold('  LIVE TRADE — Closing Position') : chalk.yellow('  Closing Position'),
-        chalk.dim('  ─────────────────'),
-        `  Market: ${chalk.bold(market)} ${colorSide(side)}`,
-        `  Pool:   ${chalk.cyan(pool)}`,
+        isLive ? chalk.red.bold('  CONFIRM TRANSACTION — Close Position') : chalk.yellow('  CONFIRM TRANSACTION — Close Position'),
+        chalk.dim('  ─────────────────────────────────'),
+        `  Market:  ${chalk.bold(market)} ${colorSide(side)}`,
+        `  Pool:    ${chalk.cyan(pool)}`,
+        `  Wallet:  ${chalk.dim(walletAddr)}`,
         isLive ? `\n${chalk.red('  This will execute a REAL on-chain transaction.')}` : '',
         '',
       ].join('\n'),
       requiresConfirmation: true,
-      confirmationPrompt: isLive ? 'Execute LIVE close?' : 'Confirm close?',
+      confirmationPrompt: isLive ? 'Type "yes" to sign or "no" to cancel' : 'Confirm close?',
       data: {
         executeAction: async (): Promise<ToolResult> => {
+          guard.recordSigning();
           try {
             const result = await context.flashClient.closePosition(market, side);
+
+            guard.logAudit({
+              timestamp: new Date().toISOString(),
+              type: 'close', market, side,
+              walletAddress: walletAddr,
+              result: 'confirmed',
+            });
+
             const pnlStr = result.pnl !== undefined ? `  PnL: ${colorPnl(result.pnl)}\n` : '';
             const txLink = context.simulationMode
               ? result.txSignature
@@ -220,6 +312,12 @@ export const flashClosePosition: ToolDefinition = {
               txSignature: result.txSignature,
             };
           } catch (error: unknown) {
+            guard.logAudit({
+              timestamp: new Date().toISOString(),
+              type: 'close', market, side,
+              walletAddress: walletAddr,
+              result: 'failed', reason: getErrorMessage(error),
+            });
             return { success: false, message: `  Failed to close position: ${getErrorMessage(error)}` };
           }
         },
@@ -253,23 +351,44 @@ export const flashAddCollateral: ToolDefinition = {
     }
 
     const isLive = !context.simulationMode;
+    const guard = getSigningGuard();
+    const walletAddr = context.walletAddress ?? 'unknown';
+
+    const rateCheck = guard.checkRateLimit();
+    if (!rateCheck.allowed) {
+      guard.logAudit({
+        timestamp: new Date().toISOString(),
+        type: 'add_collateral', market, side,
+        collateral: amount, walletAddress: walletAddr,
+        result: 'rate_limited', reason: rateCheck.reason,
+      });
+      return { success: false, message: chalk.red(`  ${rateCheck.reason}`) };
+    }
 
     return {
       success: true,
       message: [
         '',
-        isLive ? chalk.red.bold('  LIVE — Adding Collateral') : chalk.yellow('  Adding Collateral'),
-        chalk.dim('  ─────────────────'),
+        isLive ? chalk.red.bold('  CONFIRM TRANSACTION — Add Collateral') : chalk.yellow('  CONFIRM TRANSACTION — Add Collateral'),
+        chalk.dim('  ─────────────────────────────────'),
         `  Market: ${chalk.bold(market)} ${colorSide(side)}`,
         `  Amount: ${formatUsd(amount)} ${chalk.dim('USDC')}`,
+        `  Wallet: ${chalk.dim(walletAddr)}`,
         '',
       ].join('\n'),
       requiresConfirmation: true,
-      confirmationPrompt: isLive ? 'Execute LIVE transaction?' : 'Confirm?',
+      confirmationPrompt: isLive ? 'Type "yes" to sign or "no" to cancel' : 'Confirm?',
       data: {
         executeAction: async (): Promise<ToolResult> => {
+          guard.recordSigning();
           try {
             const result = await context.flashClient.addCollateral(market, side, amount);
+            guard.logAudit({
+              timestamp: new Date().toISOString(),
+              type: 'add_collateral', market, side,
+              collateral: amount, walletAddress: walletAddr,
+              result: 'confirmed',
+            });
             const txDisplay = context.simulationMode
               ? result.txSignature
               : `https://solscan.io/tx/${result.txSignature}`;
@@ -279,6 +398,12 @@ export const flashAddCollateral: ToolDefinition = {
               txSignature: result.txSignature,
             };
           } catch (error: unknown) {
+            guard.logAudit({
+              timestamp: new Date().toISOString(),
+              type: 'add_collateral', market, side,
+              collateral: amount, walletAddress: walletAddr,
+              result: 'failed', reason: getErrorMessage(error),
+            });
             return { success: false, message: `  Failed: ${getErrorMessage(error)}` };
           }
         },
@@ -312,23 +437,44 @@ export const flashRemoveCollateral: ToolDefinition = {
     }
 
     const isLive = !context.simulationMode;
+    const guard = getSigningGuard();
+    const walletAddr = context.walletAddress ?? 'unknown';
+
+    const rateCheck = guard.checkRateLimit();
+    if (!rateCheck.allowed) {
+      guard.logAudit({
+        timestamp: new Date().toISOString(),
+        type: 'remove_collateral', market, side,
+        collateral: amount, walletAddress: walletAddr,
+        result: 'rate_limited', reason: rateCheck.reason,
+      });
+      return { success: false, message: chalk.red(`  ${rateCheck.reason}`) };
+    }
 
     return {
       success: true,
       message: [
         '',
-        isLive ? chalk.red.bold('  LIVE — Removing Collateral') : chalk.yellow('  Removing Collateral'),
-        chalk.dim('  ─────────────────'),
+        isLive ? chalk.red.bold('  CONFIRM TRANSACTION — Remove Collateral') : chalk.yellow('  CONFIRM TRANSACTION — Remove Collateral'),
+        chalk.dim('  ─────────────────────────────────'),
         `  Market: ${chalk.bold(market)} ${colorSide(side)}`,
         `  Amount: ${formatUsd(amount)}`,
+        `  Wallet: ${chalk.dim(walletAddr)}`,
         '',
       ].join('\n'),
       requiresConfirmation: true,
-      confirmationPrompt: isLive ? 'Execute LIVE transaction?' : 'Confirm?',
+      confirmationPrompt: isLive ? 'Type "yes" to sign or "no" to cancel' : 'Confirm?',
       data: {
         executeAction: async (): Promise<ToolResult> => {
+          guard.recordSigning();
           try {
             const result = await context.flashClient.removeCollateral(market, side, amount);
+            guard.logAudit({
+              timestamp: new Date().toISOString(),
+              type: 'remove_collateral', market, side,
+              collateral: amount, walletAddress: walletAddr,
+              result: 'confirmed',
+            });
             const txDisplay = context.simulationMode
               ? result.txSignature
               : `https://solscan.io/tx/${result.txSignature}`;
@@ -338,6 +484,12 @@ export const flashRemoveCollateral: ToolDefinition = {
               txSignature: result.txSignature,
             };
           } catch (error: unknown) {
+            guard.logAudit({
+              timestamp: new Date().toISOString(),
+              type: 'remove_collateral', market, side,
+              collateral: amount, walletAddress: walletAddr,
+              result: 'failed', reason: getErrorMessage(error),
+            });
             return { success: false, message: `  Failed: ${getErrorMessage(error)}` };
           }
         },
@@ -748,6 +900,9 @@ export const walletImport: ToolDefinition = {
         context.walletName = name;
       }
 
+      // Persist session
+      updateLastWallet(name);
+
       const canSign = wm?.isConnected ?? false;
       const lines = [
         '',
@@ -828,6 +983,7 @@ export const walletUse: ToolDefinition = {
     try {
       const walletPath = walletStore.getWalletPath(name);
       walletStore.setDefault(name);
+      updateLastWallet(name);
 
       // Connect the wallet
       const wm = context.walletManager;
@@ -934,6 +1090,7 @@ export const walletDisconnect: ToolDefinition = {
     wm.disconnect();
     context.walletAddress = 'unknown';
     context.walletName = '';
+    clearLastWallet();
 
     // Clear default so it won't auto-load next startup
     const config = walletStore.getDefault();
@@ -1092,6 +1249,7 @@ export const walletConnect: ToolDefinition = {
       const { address } = wm.loadFromFile(path);
       context.walletAddress = address;
       context.walletName = 'wallet';
+      updateLastWallet('wallet');
 
       const canSign = wm.isConnected;
       const lines = [
@@ -1119,6 +1277,148 @@ export const walletConnect: ToolDefinition = {
 
 // ─── Export all tools ────────────────────────────────────────────────────────
 
+// ─── Risk Monitor Commands ──────────────────────────────────────────────────
+
+export const riskMonitorOn: ToolDefinition = {
+  name: 'risk_monitor_on',
+  description: 'Start real-time position risk monitoring',
+  parameters: z.object({}),
+  execute: async (_params, context): Promise<ToolResult> => {
+    const { getRiskMonitor } = await import('../monitor/risk-monitor.js');
+    const monitor = getRiskMonitor(context.flashClient);
+    const msg = monitor.start();
+    return { success: true, message: msg };
+  },
+};
+
+export const riskMonitorOff: ToolDefinition = {
+  name: 'risk_monitor_off',
+  description: 'Stop real-time position risk monitoring',
+  parameters: z.object({}),
+  execute: async (_params): Promise<ToolResult> => {
+    const { getActiveRiskMonitor } = await import('../monitor/risk-monitor.js');
+    const monitor = getActiveRiskMonitor();
+    if (!monitor) {
+      return { success: true, message: chalk.yellow('  Risk monitor is not running.') };
+    }
+    const msg = monitor.stop();
+    return { success: true, message: msg };
+  },
+};
+
+// ─── Protocol Inspector Commands ────────────────────────────────────────────
+
+export const inspectProtocol: ToolDefinition = {
+  name: 'inspect_protocol',
+  description: 'Inspect Flash Trade protocol state',
+  parameters: z.object({}),
+  execute: async (): Promise<ToolResult> => {
+    const { ProtocolInspector } = await import('../protocol/protocol-inspector.js');
+    const inspector = new ProtocolInspector();
+    const msg = await inspector.inspectProtocol();
+    return { success: true, message: msg };
+  },
+};
+
+export const inspectPool: ToolDefinition = {
+  name: 'inspect_pool',
+  description: 'Inspect a specific Flash Trade pool',
+  parameters: z.object({ pool: z.string().optional() }),
+  execute: async (params): Promise<ToolResult> => {
+    const { pool } = params as { pool?: string };
+    if (!pool) {
+      return { success: false, message: chalk.red('  Usage: inspect pool <pool_name>  (e.g. inspect pool Crypto.1)') };
+    }
+    const { ProtocolInspector } = await import('../protocol/protocol-inspector.js');
+    const inspector = new ProtocolInspector();
+    const msg = await inspector.inspectPool(pool);
+    return { success: true, message: msg };
+  },
+};
+
+export const inspectMarketTool: ToolDefinition = {
+  name: 'inspect_market',
+  description: 'Deep-inspect a specific market',
+  parameters: z.object({ market: z.string().optional() }),
+  execute: async (params): Promise<ToolResult> => {
+    const { market } = params as { market?: string };
+    if (!market) {
+      return { success: false, message: chalk.red('  Usage: inspect market <asset>  (e.g. inspect market SOL)') };
+    }
+    const { ProtocolInspector } = await import('../protocol/protocol-inspector.js');
+    const inspector = new ProtocolInspector();
+    const msg = await inspector.inspectMarket(market);
+    return { success: true, message: msg };
+  },
+};
+
+// ─── System Diagnostics Tools ───────────────────────────────────────────────
+
+export const systemStatusTool: ToolDefinition = {
+  name: 'system_status',
+  description: 'Display system health overview',
+  parameters: z.object({}),
+  execute: async (_params, context): Promise<ToolResult> => {
+    const { getSystemDiagnostics } = await import('../system/system-diagnostics.js');
+    const diag = getSystemDiagnostics();
+    if (!diag) {
+      return { success: true, message: chalk.dim('  System diagnostics not initialized.') };
+    }
+    const msg = await diag.systemStatus();
+    return { success: true, message: msg };
+  },
+};
+
+export const rpcStatusTool: ToolDefinition = {
+  name: 'rpc_status',
+  description: 'Show active RPC connection info',
+  parameters: z.object({}),
+  execute: async (): Promise<ToolResult> => {
+    const { getRpcManagerInstance } = await import('../network/rpc-manager.js');
+    const mgr = getRpcManagerInstance();
+    if (!mgr) {
+      return { success: true, message: chalk.dim('  RPC manager not initialized.') };
+    }
+    const latency = await mgr.measureLatency();
+    const msg = mgr.formatStatus(latency);
+    return { success: true, message: msg };
+  },
+};
+
+export const rpcTestTool: ToolDefinition = {
+  name: 'rpc_test',
+  description: 'Test all configured RPC endpoints',
+  parameters: z.object({}),
+  execute: async (): Promise<ToolResult> => {
+    const { getSystemDiagnostics } = await import('../system/system-diagnostics.js');
+    const diag = getSystemDiagnostics();
+    if (!diag) {
+      return { success: true, message: chalk.dim('  System diagnostics not initialized.') };
+    }
+    const msg = await diag.rpcTest();
+    return { success: true, message: msg };
+  },
+};
+
+export const txInspectTool: ToolDefinition = {
+  name: 'tx_inspect',
+  description: 'Inspect a transaction by signature',
+  parameters: z.object({ signature: z.string().optional() }),
+  execute: async (params): Promise<ToolResult> => {
+    const { signature } = params as { signature?: string };
+    if (!signature) {
+      return { success: false, message: chalk.red('  Usage: tx inspect <signature>') };
+    }
+    const { getSystemDiagnostics } = await import('../system/system-diagnostics.js');
+    const diag = getSystemDiagnostics();
+    if (!diag) {
+      return { success: true, message: chalk.dim('  System diagnostics not initialized.') };
+    }
+    const msg = await diag.txInspect(signature);
+    return { success: true, message: msg };
+  },
+};
+
 export const allFlashTools: ToolDefinition[] = [
   flashOpenPosition,
   flashClosePosition,
@@ -1143,4 +1443,13 @@ export const allFlashTools: ToolDefinition[] = [
   walletTokens,
   walletConnect,
   flashMarkets,
+  riskMonitorOn,
+  riskMonitorOff,
+  inspectProtocol,
+  inspectPool,
+  inspectMarketTool,
+  systemStatusTool,
+  rpcStatusTool,
+  rpcTestTool,
+  txInspectTool,
 ];

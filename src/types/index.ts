@@ -53,6 +53,21 @@ export enum ActionType {
   PortfolioState = 'portfolio_state',
   PortfolioExposure = 'portfolio_exposure',
   PortfolioRebalance = 'portfolio_rebalance',
+
+  // Risk Monitor
+  RiskMonitorOn = 'risk_monitor_on',
+  RiskMonitorOff = 'risk_monitor_off',
+
+  // Protocol Inspector
+  InspectProtocol = 'inspect_protocol',
+  InspectPool = 'inspect_pool',
+  InspectMarket = 'inspect_market',
+
+  // System Diagnostics
+  SystemStatus = 'system_status',
+  RpcStatus = 'rpc_status',
+  RpcTest = 'rpc_test',
+  TxInspect = 'tx_inspect',
 }
 
 // ─── Zod Schemas for Intent Parsing ──────────────────────────────────────────
@@ -233,6 +248,45 @@ export const PortfolioRebalanceSchema = z.object({
   action: z.literal(ActionType.PortfolioRebalance),
 });
 
+export const RiskMonitorOnSchema = z.object({
+  action: z.literal(ActionType.RiskMonitorOn),
+});
+
+export const RiskMonitorOffSchema = z.object({
+  action: z.literal(ActionType.RiskMonitorOff),
+});
+
+export const InspectProtocolSchema = z.object({
+  action: z.literal(ActionType.InspectProtocol),
+});
+
+export const InspectPoolSchema = z.object({
+  action: z.literal(ActionType.InspectPool),
+  pool: z.string().optional(),
+});
+
+export const InspectMarketSchema = z.object({
+  action: z.literal(ActionType.InspectMarket),
+  market: z.string().optional(),
+});
+
+export const SystemStatusSchema = z.object({
+  action: z.literal(ActionType.SystemStatus),
+});
+
+export const RpcStatusSchema = z.object({
+  action: z.literal(ActionType.RpcStatus),
+});
+
+export const RpcTestSchema = z.object({
+  action: z.literal(ActionType.RpcTest),
+});
+
+export const TxInspectSchema = z.object({
+  action: z.literal(ActionType.TxInspect),
+  signature: z.string().optional(),
+});
+
 export const ParsedIntentSchema = z.discriminatedUnion('action', [
   OpenPositionSchema,
   ClosePositionSchema,
@@ -270,6 +324,15 @@ export const ParsedIntentSchema = z.discriminatedUnion('action', [
   PortfolioStateSchema,
   PortfolioExposureSchema,
   PortfolioRebalanceSchema,
+  RiskMonitorOnSchema,
+  RiskMonitorOffSchema,
+  InspectProtocolSchema,
+  InspectPoolSchema,
+  InspectMarketSchema,
+  SystemStatusSchema,
+  RpcStatusSchema,
+  RpcTestSchema,
+  TxInspectSchema,
 ]);
 
 export type ParsedIntent = z.infer<typeof ParsedIntentSchema>;
@@ -617,6 +680,7 @@ export type Network = (typeof VALID_NETWORKS)[number];
 
 export interface FlashConfig {
   rpcUrl: string;
+  backupRpcUrls: string[];
   pythnetUrl: string;
   walletPath: string;
   anthropicApiKey: string;
@@ -628,6 +692,12 @@ export interface FlashConfig {
   computeUnitLimit: number;
   computeUnitPrice: number;
   logFile: string | null;
+  // Signing guard limits (0 = unlimited / use market defaults)
+  maxCollateralPerTrade: number;
+  maxPositionSize: number;
+  maxLeverage: number;
+  maxTradesPerMinute: number;
+  minDelayBetweenTradesMs: number;
 }
 
 // ─── Simulation Types ────────────────────────────────────────────────────────

@@ -41,8 +41,25 @@ export class WalletManager {
     return this.keypair;
   }
 
-  /** Disconnect wallet: clear keypair and public key from memory. */
+  /**
+   * Disconnect wallet: clear keypair and public key from memory.
+   * Attempts to zero the secret key bytes in the Keypair's internal buffer.
+   * Note: Keypair.fromSecretKey holds a REFERENCE to the input Uint8Array,
+   * so we zero the secretKey property directly to scrub from memory.
+   */
   disconnect(): void {
+    if (this.keypair) {
+      // Zero the secret key bytes in memory
+      // Keypair.secretKey returns the internal Uint8Array reference
+      try {
+        const sk = this.keypair.secretKey;
+        if (sk && sk instanceof Uint8Array) {
+          sk.fill(0);
+        }
+      } catch {
+        // Best-effort — some environments may restrict property access
+      }
+    }
     this.keypair = null;
     this.publicKey = null;
     this.tokenBalancesCache = null;
@@ -122,9 +139,29 @@ export class WalletManager {
     this.publicKey = this.keypair.publicKey;
 
     const address = this.publicKey.toBase58();
+    // SECURITY: Log only the public address — never log secret key material
     logger.debug('Wallet', `Loaded wallet: ${address}`);
 
     return { address, keypair: this.keypair };
+  }
+
+  /**
+   * Verify keypair integrity: returns true if the loaded keypair can produce valid signatures.
+   * Does not expose the private key — only checks that it hasn't been zeroed/corrupted.
+   */
+  verifyKeypairIntegrity(): boolean {
+    if (!this.keypair) return false;
+    try {
+      // Check that the secret key has non-zero bytes (not zeroed out)
+      const sk = this.keypair.secretKey;
+      let nonZero = 0;
+      for (let i = 0; i < 32; i++) { // Only check private portion (first 32 bytes)
+        if (sk[i] !== 0) nonZero++;
+      }
+      return nonZero > 0;
+    } catch {
+      return false;
+    }
   }
 
   /**

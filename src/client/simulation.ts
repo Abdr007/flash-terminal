@@ -239,7 +239,8 @@ export class SimulatedFlashClient implements IFlashClient {
 
     this.state.balance -= amount;
     pos.collateralUsd += amount;
-    pos.leverage = pos.collateralUsd > 0 ? pos.sizeUsd / pos.collateralUsd : 0;
+    const newLev = pos.collateralUsd > 0 ? pos.sizeUsd / pos.collateralUsd : 0;
+    pos.leverage = Number.isFinite(newLev) ? newLev : 0;
 
     getLogger().trade('ADD_COLLATERAL', { market, side, amount, newLeverage: pos.leverage });
     return { txSignature: `SIM_ADD_${pos.id}`, newLeverage: pos.leverage };
@@ -253,7 +254,8 @@ export class SimulatedFlashClient implements IFlashClient {
     if (amount >= pos.collateralUsd) throw new Error('Cannot remove all collateral — close position instead');
 
     pos.collateralUsd -= amount;
-    pos.leverage = pos.collateralUsd > 0 ? pos.sizeUsd / pos.collateralUsd : 0;
+    const newLev = pos.collateralUsd > 0 ? pos.sizeUsd / pos.collateralUsd : 0;
+    pos.leverage = Number.isFinite(newLev) ? newLev : 0;
     this.state.balance += amount;
 
     getLogger().trade('REMOVE_COLLATERAL', { market, side, amount, newLeverage: pos.leverage });

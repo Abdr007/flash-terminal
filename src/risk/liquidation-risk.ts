@@ -12,13 +12,15 @@ export function assessLiquidationRisk(position: Position): RiskAssessment {
 
   const curPrice = Number.isFinite(position.currentPrice) ? position.currentPrice : 0;
   const liqPrice = Number.isFinite(position.liquidationPrice) ? position.liquidationPrice : 0;
+  const entryPrice = Number.isFinite(position.entryPrice) ? position.entryPrice : 0;
 
-  if (curPrice > 0 && liqPrice > 0) {
-    // Directional distance: positive means safe, negative means past liquidation
+  if (curPrice > 0 && liqPrice > 0 && entryPrice > 0) {
+    // Directional distance normalized by entry price (not current price)
+    // Positive means safe, negative means past liquidation
     if (position.side === TradeSide.Long) {
-      distancePct = ((curPrice - liqPrice) / curPrice) * 100;
+      distancePct = ((curPrice - liqPrice) / entryPrice) * 100;
     } else {
-      distancePct = ((liqPrice - curPrice) / curPrice) * 100;
+      distancePct = ((liqPrice - curPrice) / entryPrice) * 100;
     }
     // Final NaN guard
     if (!Number.isFinite(distancePct)) distancePct = 0;

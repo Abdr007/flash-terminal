@@ -831,6 +831,11 @@ export const autopilotStart: ToolDefinition = {
     });
 
     autopilot.setTradeHandler(async (suggestion) => {
+      // Defense-in-depth: block autopilot trades if somehow running in live mode
+      if (!context.simulationMode) {
+        console.log(chalk.red(`  [Autopilot] BLOCKED — autopilot cannot execute trades in live mode`));
+        return;
+      }
       try {
         await context.flashClient.openPosition(
           suggestion.market,

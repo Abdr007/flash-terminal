@@ -1,21 +1,37 @@
 # Flash AI Terminal
 
-**AI-powered trading terminal for Flash Trade on Solana.**
+[![Build](https://img.shields.io/badge/build-passing-brightgreen)]()
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Node](https://img.shields.io/badge/node-%3E%3D20.0.0-brightgreen)]()
+[![TypeScript](https://img.shields.io/badge/typescript-5.7-blue)]()
+[![Solana](https://img.shields.io/badge/solana-mainnet--beta-purple)]()
 
-Trade perpetual futures using natural language commands. Scan markets, manage positions, analyze risk, and execute on-chain — all from your terminal.
+A command-line trading terminal for the [Flash Trade](https://www.flash.trade/) protocol on Solana. Provides AI-powered command parsing, real-time market analysis, portfolio monitoring, risk alerts, and on-chain trade execution.
+
+---
+
+## Overview
+
+Flash AI Terminal connects directly to the Flash Trade perpetual futures protocol on Solana. It combines an AI command interpreter, a multi-strategy market scanner, a real-time risk monitor, and a hardened transaction pipeline into a single CLI tool.
+
+The terminal operates in two modes:
+
+- **Simulation** — Paper trading against live market prices with a virtual balance. No wallet required.
+- **Live** — Signs and submits real transactions to the Solana blockchain. Requires a funded wallet.
+
+All market data is live. No synthetic prices, no fabricated signals.
 
 ```
-  ⚡ FLASH AI TERMINAL ⚡
-  ━━━━━━━━━━━━━━━━━━━━━━━━
+  FLASH AI TERMINAL
 
   LIVE TRADING MODE
 
-  Wallet:  ABDR
+  Wallet:  7xKp...3nRq
   Network: mainnet-beta
-  Balance: 0.2586 SOL
+  Balance: 2.41 SOL
 
   Market Intelligence
-  ─────────────────────────────────────────
+  ─────────────────────────────────────
 
   Regime:    TRENDING
   Markets:   9 scanned
@@ -25,283 +41,257 @@ Trade perpetual futures using natural language commands. Scan markets, manage po
     2. BTC    SHORT  65%
     3. JUP    LONG   58%
 
-flash [live] > open 2x long SOL $50
-```
-
----
-
-## Overview
-
-Flash AI Terminal is an intelligent command-line trading interface for decentralized derivatives markets. It connects directly to the [Flash Trade](https://www.flash.trade/) protocol on Solana, enabling traders to open and close leveraged positions using simple commands or natural language.
-
-The system combines an AI interpreter, a multi-strategy market scanner, a regime-aware risk engine, and a hardened transaction pipeline into a single CLI tool. Every piece of market data is live — no synthetic prices, no fabricated signals.
-
-**Example commands:**
-
-```
-open 2x long SOL $10
-scan market
-show my portfolio
-close sol long
-
-# Natural language
-open a 2x long sol position with ten dollars
-scan the market for opportunities
-how is my portfolio doing
+flash [live] > _
 ```
 
 ---
 
 ## Key Features
 
-- **AI Natural Language Trading** — Parse commands like "open a 2x long sol with ten dollars" via AI or Groq
-- **Real-Time Market Scanning** — Scan all Flash Trade markets and rank opportunities by confidence score
-- **Portfolio Analytics** — Exposure analysis, directional bias detection, correlation-aware allocation
-- **Risk Management Engine** — Liquidation risk, position sizing limits, regime-adjusted leverage
-- **Secure Wallet Integration** — Encrypted key storage, memory zeroing, path traversal prevention
-- **Reliable Transaction Pipeline** — Manual tx building, retry with fresh blockhash, confirmation polling
-- **CLI Optimized for Traders** — Fast command dispatch, command history, timeout protection
-- **Flash Trade Protocol Integration** — Direct smart contract execution via Flash SDK + Pyth oracles
-- **Built on Solana** — Sub-second finality, low fees, on-chain position management
+### Trading Execution
+
+- Open and close leveraged perpetual positions
+- Add and remove collateral from existing positions
+- On-chain transaction signing and submission via Flash SDK
+- Trade confirmation gates with full position summary before execution
+
+### Market Intelligence
+
+- Multi-strategy market scanner (momentum, mean reversion, whale follow)
+- Deep asset analysis with regime-aware signal aggregation
+- Whale activity detection from on-chain position data
+- Open interest and volume tracking across all markets
+
+### Risk Management
+
+- Real-time liquidation distance monitoring with tiered alerts
+- Portfolio exposure analysis and directional bias detection
+- Hysteresis-based alert thresholds to prevent notification spam
+- Automatic collateral suggestions when positions approach liquidation
+
+### Protocol Inspection
+
+- Protocol-level overview (program ID, pools, TVL)
+- Per-pool inspection (assets, utilization, OI breakdown)
+- Per-market deep dive (long/short ratio, whale positions, risk metrics)
+
+### Infrastructure
+
+- Blockchain state reconciliation (local state syncs with on-chain state)
+- Signing security guards with rate limiting and audit logging
+- RPC endpoint management with failover
+- Plugin architecture for custom tools and strategies
 
 ---
 
-## Flash Trade Integration
-
-Flash AI Terminal demonstrates a complete trading pipeline interacting with the Flash Trade perpetual futures protocol. This section explains how the integration works for developers building on Flash Trade.
-
-### Position Opening
-
-The system uses Flash SDK's `swapAndOpen` for USDC-collateralized positions. The flow:
-
-1. Resolve the target market to a Flash Trade pool (e.g., SOL → `Crypto.1`)
-2. Fetch live oracle prices from Pyth Network with the correct exponent
-3. Compute position size via `getSizeAmountFromLeverageAndCollateral`
-4. Build the swap-and-open instruction set
-5. Submit with compute budget and priority fee instructions
-
-### Position Closing
-
-Closing uses the Flash SDK `closePosition` flow:
-
-1. Look up the user's on-chain position via `getUserPositions`
-2. Match by target mint and side (Long/Short)
-3. Fetch current Pyth oracle price for slippage calculation
-4. Build and submit the close instruction
-
-### Oracle Price Usage
-
-Flash Trade requires oracle prices with the **native Pyth exponent** (e.g., `-8` for SOL). The system fetches prices via `PythHttpClient` from Pythnet and passes `priceData.price` and `priceData.exponent` directly to the SDK — never rescaling.
-
-### Collateral Validation
-
-Before any trade, the system checks:
-
-- Minimum collateral: $10
-- USDC token balance sufficient for the collateral amount
-- SOL balance sufficient for transaction fees (>0.01 SOL)
-- Leverage within market limits (e.g., 1.1x–100x for SOL/BTC/ETH)
-- No duplicate position on the same market/side
-
-### Transaction Submission
-
-Transactions are built manually using `MessageV0.compile` and signed with the wallet keypair. The system does not use the SDK's `sendTransactionV3` — it handles submission directly for reliability:
-
-- Fresh blockhash per attempt
-- `sendRawTransaction` with `maxRetries: 3`
-- Confirmation polling every 2 seconds with periodic resends
-- 45-second timeout per attempt, 2 attempts total
-- On-chain error detection via `getSignatureStatuses`
-
-### Developer Reference
-
-This project can serve as an example integration for developers building on Flash Trade. Key files:
-
-| File | Purpose |
-|------|---------|
-| `src/client/flash-client.ts` | Full FlashClient with open/close/collateral/positions |
-| `src/config/index.ts` | Pool-to-market mapping and configuration |
-| `src/wallet/walletManager.ts` | Keypair loading with security hardening |
-| `src/wallet/connection.ts` | Solana connection factory with HTTPS validation |
-
----
-
-## Architecture
+## System Architecture
 
 ```
 User Command
-     │
-     ▼
-┌─────────────────────────────────────────────┐
-│           AI Interpreter                    │
-│  Fast dispatch → Regex parser → AI fallback  │
-└──────────────────┬──────────────────────────┘
-                   │ ParsedIntent
-                   ▼
-┌─────────────────────────────────────────────┐
-│           Tool Dispatcher                   │
-│  ActionType → Tool lookup → Execute         │
-└───────┬──────────┬──────────┬───────────────┘
-        │          │          │
-        ▼          ▼          ▼
-   ┌────────┐ ┌────────┐ ┌──────────┐
-   │Scanner │ │Portfolio│ │ Trading  │
-   │        │ │ Engine  │ │  Tools   │
-   └───┬────┘ └───┬────┘ └────┬─────┘
-       │          │            │
-       ▼          ▼            ▼
-┌─────────────────────────────────────────────┐
-│           Risk Engine                       │
-│  Leverage limits · Position sizing ·        │
-│  Exposure caps · Correlation checks         │
-└──────────────────┬──────────────────────────┘
-                   │
-                   ▼
-┌─────────────────────────────────────────────┐
-│          Execution Engine                   │
-│  SimulatedFlashClient │ FlashClient (live)  │
-└──────────────────┬──────────────────────────┘
-                   │
-                   ▼
-┌─────────────────────────────────────────────┐
-│         Flash Trade Protocol                │
-│  Flash SDK · Pyth Oracles · Solana RPC      │
-└──────────────────┬──────────────────────────┘
-                   │
-                   ▼
-            Solana Blockchain
+     |
+     v
++-----------------------------------------------+
+|              AI Command Parser                 |
+|  Fast dispatch --> Regex parser --> LLM engine  |
++----------------------+------------------------+
+                       |  ParsedIntent
+                       v
++-----------------------------------------------+
+|             Execution Engine                   |
+|  Middleware --> Tool dispatch --> Execute       |
++--------+-----------+-----------+--------------+
+         |           |           |
+         v           v           v
+    +---------+ +---------+ +----------+
+    | Scanner | |Portfolio| | Trading  |
+    |         | | Engine  | |  Tools   |
+    +----+----+ +----+----+ +----+-----+
+         |           |           |
+         v           v           v
++-----------------------------------------------+
+|              Risk Engine                       |
+|  Leverage limits - Position sizing -           |
+|  Exposure caps - Liquidation monitoring        |
++----------------------+------------------------+
+                       |
+                       v
++-----------------------------------------------+
+|           Transaction Pipeline                 |
+|  SimulatedFlashClient | FlashClient (live)     |
++----------------------+------------------------+
+                       |
+                       v
++-----------------------------------------------+
+|          Flash Trade Protocol                  |
+|  Flash SDK - Pyth Oracles - Solana RPC         |
++----------------------+------------------------+
+                       |
+                       v
+               Solana Blockchain
 ```
 
-### Layer Descriptions
+### Subsystem Descriptions
 
-| Layer | Responsibility |
-|-------|---------------|
-| **AI Interpreter** | Converts user input to structured intents. Tries exact-match dispatch first, then regex parsing, then AI for natural language. |
-| **Tool Dispatcher** | Maps each `ActionType` to a registered tool function. Executes with error isolation and timeout protection. |
-| **Scanner** | Runs three strategies (momentum, mean reversion, whale follow) across all markets. Regime detection adjusts strategy weights dynamically. |
-| **Portfolio Engine** | Tracks exposure, directional bias, and capital allocation. Produces rebalance suggestions based on risk constraints. |
-| **Risk Engine** | Enforces position limits, leverage bounds, directional caps, and correlation-aware exposure limits before any trade. |
-| **Execution Engine** | Builds, signs, and submits Solana transactions. Handles confirmation polling, retry logic, and trade mutex. |
-| **Flash Trade Protocol** | The on-chain perpetual futures program. Manages positions, collateral, and liquidations via smart contracts. |
-
-See [docs/architecture.md](docs/architecture.md) for the complete system architecture with data flow diagrams.
+| Subsystem | Responsibility |
+|-----------|---------------|
+| **AI Command Parser** | Converts user input to structured intents. Single-token commands use fast dispatch; structured commands use regex; natural language falls back to LLM. |
+| **Execution Engine** | Routes intents to registered tool functions. Runs pre-execution middleware (logging, wallet checks, read-only guard). |
+| **Scanner** | Runs momentum, mean reversion, and whale follow strategies across all markets. Regime detection adjusts strategy weights. |
+| **Portfolio Engine** | Tracks exposure, directional bias, and capital allocation. Produces rebalance suggestions. |
+| **Risk Engine** | Enforces position limits, leverage bounds, directional caps, and exposure limits before any trade. |
+| **Risk Monitor** | Background process checking liquidation distance every 5s (prices) and 20s (positions). Emits alerts on threshold crossings. |
+| **Transaction Pipeline** | Builds, signs, and submits Solana transactions. Handles confirmation polling, retry logic, and trade mutex. |
+| **State Reconciler** | Syncs local state with blockchain on startup, after trades, on wallet switch, and every 60s. Blockchain is authoritative. |
+| **Plugin System** | Dynamically loads plugins from `src/plugins/` at startup. Plugins can register tools and lifecycle hooks. |
 
 ---
 
 ## Installation
+
+**Requirements:** Node.js >= 20.0.0
 
 ```bash
 git clone https://github.com/Abdr007/flash-ai-terminal.git
 cd flash-ai-terminal
 npm install
 npm run build
-npm link
 ```
 
 Start the terminal:
 
 ```bash
+npm start
+```
+
+Or link globally:
+
+```bash
+npm link
 flash
 ```
 
-Verify your environment:
+---
 
-```bash
-flash doctor
-```
+## Configuration
 
-### Environment Configuration
+Copy the example environment file:
 
 ```bash
 cp .env.example .env
 ```
 
-**Required:**
+### Required
 
-```env
-RPC_URL=https://api.mainnet-beta.solana.com
-```
+| Variable | Description |
+|----------|-------------|
+| `RPC_URL` | Solana RPC endpoint. Use a premium provider (Helius, Triton, QuickNode) for live trading. |
 
-**Optional (AI features):**
+### Trading
 
-```env
-ANTHROPIC_API_KEY=sk-ant-...     # AI natural language parsing
-GROQ_API_KEY=gsk_...             # Groq — AI fallback
-```
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `SIMULATION_MODE` | `true` | `true` for paper trading, `false` for live on-chain execution. |
+| `DEFAULT_POOL` | `Crypto.1` | Default Flash Trade pool for market resolution. |
+| `DEFAULT_SLIPPAGE_BPS` | `150` | Slippage tolerance in basis points (150 = 1.5%). |
+| `COMPUTE_UNIT_LIMIT` | `600000` | Transaction compute unit budget. |
+| `COMPUTE_UNIT_PRICE` | `50000` | Priority fee in microLamports. |
 
-**Trading defaults:**
+### Signing Guards
 
-```env
-SIMULATION_MODE=true             # true = paper trading, false = real transactions
-DEFAULT_POOL=Crypto.1
-DEFAULT_SLIPPAGE_BPS=150         # 1.5%
-COMPUTE_UNIT_PRICE=50000         # Priority fee in microLamports
-```
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MAX_COLLATERAL_PER_TRADE` | `0` (unlimited) | Maximum collateral per single trade in USD. |
+| `MAX_POSITION_SIZE` | `0` (unlimited) | Maximum position size in USD. |
+| `MAX_LEVERAGE` | `0` (unlimited) | Maximum allowed leverage multiplier. |
+| `MAX_TRADES_PER_MINUTE` | `10` | Rate limit on trade submissions. |
+| `MIN_DELAY_BETWEEN_TRADES_MS` | `3000` | Minimum delay between consecutive trades in milliseconds. |
 
-All commands work without AI API keys. The built-in regex parser handles standard commands. AI keys add natural language support for complex or conversational inputs.
+### AI Features (Optional)
 
-> **Note:** Use a premium RPC provider (Helius, Triton, QuickNode) for reliable live trading. The default public RPC is rate-limited.
+| Variable | Description |
+|----------|-------------|
+| `ANTHROPIC_API_KEY` | API key for LLM-powered natural language command parsing. |
+| `GROQ_API_KEY` | API key for alternative LLM provider. |
+
+All commands work without AI keys. The built-in regex parser handles standard commands. AI keys add natural language support for conversational input.
+
+### Network
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `NETWORK` | `mainnet-beta` | Solana network (`mainnet-beta` or `devnet`). |
+| `PYTHNET_URL` | `https://pythnet.rpcpool.com` | Pyth oracle RPC endpoint. |
+| `WALLET_PATH` | `~/.config/solana/id.json` | Path to Solana CLI keypair file. |
 
 ---
 
-## Usage
-
-### Mode Selection
-
-When you run `flash`, you select a mode:
+## Quick Start
 
 ```
-  1 → Live Trading     (real transactions, requires wallet + SOL + USDC)
-  2 → Simulation       (paper trading, $10K balance)
-  3 → Exit
+$ npm start
+
+  Select mode:
+    1 → Live Trading
+    2 → Simulation
+    3 → Exit
+
+  > 2
+
+  FLASH AI TERMINAL
+  Simulation Mode — $10,000.00 balance
 ```
 
-**Simulation mode** uses live market prices but executes trades against a local paper balance. No wallet required.
-
-**Live trading mode** signs and submits real transactions to the Solana blockchain. Requires a funded wallet.
-
-The mode is locked for the entire session.
-
-### Standard Commands
-
-| Command | Description |
-|---------|-------------|
-| `scan` | Scan all markets for trade opportunities |
-| `analyze SOL` | Deep analysis of a specific market |
-| `dashboard` | Combined market and portfolio overview |
-| `portfolio` | Portfolio summary with capital allocation |
-| `positions` | Open positions with unrealized PnL |
-| `risk` | Liquidation risk report |
-| `markets` | Available trading markets by pool |
-| `wallet tokens` | All token balances in wallet |
-| `help` | Full command reference |
-
-### Trading Commands
+### Example Session
 
 ```
-open 2x long SOL $50
-open 5x short BTC $200
-close SOL long
-add $100 to SOL long
-remove $50 from ETH short
-```
+flash [sim] > markets
+  Available markets by pool...
 
-### Natural Language Commands
+flash [sim] > scan
+  Scanning 9 markets...
 
-```
-open a 2x long sol position with ten dollars
-scan the market for opportunities
-show me my positions
-how is my portfolio doing
-close my sol long position
-```
+  Top Opportunities
+    1. SOL    LONG   72%   Momentum breakout
+    2. BTC    SHORT  65%   Mean reversion signal
+    3. JUP    LONG   58%   Whale accumulation
 
-### Autopilot (Simulation Only)
+flash [sim] > analyze SOL
+  SOL Market Analysis
+  ─────────────────────────────────
+  Price:        $148.52
+  24h Change:   +3.2%
+  Regime:       TRENDING
+  Signal:       LONG (72% confidence)
+  ...
 
-```
-autopilot start       Start automated scan-and-trade loop
-autopilot stop        Stop autopilot
-autopilot status      Current autopilot state and signals
+flash [sim] > open 2x long SOL $10
+  Open Position Summary
+  ─────────────────────────────────
+  Market:      SOL-PERP
+  Side:        LONG
+  Leverage:    2.0x
+  Collateral:  $10.00
+  Size:        $20.00
+  Est. Fee:    $0.02
+
+  Confirm? (yes/no) yes
+  Confirmed in 0.1s
+
+flash [sim] > positions
+  Market  Side  Lev   Size     Collateral  Entry     Mark      PnL
+  SOL     LONG  2.0x  $20.00   $10.00      $148.52   $148.71   +$0.26
+
+flash [sim] > portfolio
+  Portfolio Summary
+  ─────────────────────────────────
+  Total Exposure:  $20.00
+  Unrealized PnL:  +$0.26
+  ...
+
+flash [sim] > close SOL long
+  Confirm? (yes/no) yes
+  Confirmed in 0.1s
+  Realized PnL: +$0.24
 ```
 
 ---
@@ -321,35 +311,273 @@ autopilot status      Current autopilot state and signals
 
 ---
 
-## Safety Features
+## Protocol Inspection
 
-- **Minimum Collateral Validation** — Rejects trades below $10 at the tool layer, before any on-chain interaction
-- **Trade Confirmation Prompts** — Every trade requires explicit "yes" confirmation before execution
-- **Duplicate Trade Protection** — Checks for existing positions on the same market/side before opening
-- **Risk Warnings** — Extreme leverage (20x+, 50x+) triggers visible warnings with liquidation distance
-- **Input Validation** — Anchored regex patterns, control character sanitization, 1000-char input limit
-- **Secure Key Management** — Keys zeroed after loading, wallet files stored with 0600 permissions
+Inspect Flash Trade protocol state directly from the terminal.
 
-## Security
+```
+flash [sim] > inspect protocol
+  Flash Trade Protocol
+  ═════════════════════════════════
+  Program ID:   FLASH...
+  Pools:        8
+  Total OI:     $12.4M
+  ...
 
-- **Anchored Command Parsing** — All trade regex patterns anchored with `^...$` to prevent injection via trailing commands
-- **Shell Injection Prevention** — No user input is ever passed to shell execution; all parsing is regex-based
-- **Sanitized Input Handling** — Control characters (null bytes, tabs, newlines) stripped and collapsed before parsing
-- **Secure Wallet Storage** — `~/.flash/wallets/` with 0700 directory, 0600 files, symlink traversal prevention
-- **API Key Scrubbing** — Logger automatically redacts API keys, private keys are never logged
-- **HTTPS Enforcement** — RPC connection factory validates HTTPS protocol on all endpoints
+flash [sim] > inspect pool Crypto.1
+  Pool: Crypto.1
+  ─────────────────────────────────
+  Assets:       SOL, BTC, ETH, ZEC, BNB
+  Utilization:  42%
+  OI Long:      $5.2M
+  OI Short:     $3.8M
+  ...
 
-See [SECURITY.md](SECURITY.md) for the complete security policy.
+flash [sim] > inspect market SOL
+  SOL Market
+  ─────────────────────────────────
+  Long/Short Ratio:  1.37
+  Open Interest:     $2.1M
+  Whale Positions:   3
+  Largest Position:  $180K LONG
+  ...
+```
+
+**Data returned:**
+
+- `inspect protocol` — Program ID, pool count, total open interest, protocol-level stats
+- `inspect pool <name>` — Pool assets, utilization, OI breakdown by direction
+- `inspect market <asset>` — Long/short ratio, open interest, whale positions, risk metrics
 
 ---
 
-## Performance
+## Risk Monitor
 
-- **Fast Command Dispatch** — Single-token commands bypass the AI interpreter entirely via `FAST_DISPATCH` lookup table
-- **Parallel Market Data** — `Promise.allSettled` fetches prices, volume, OI, and whale data concurrently
-- **Bounded Memory Caches** — All caches have max entry counts (50–100) and TTL eviction (5–60s)
-- **Transaction Retry** — 2-attempt pipeline with fresh blockhash, periodic resends during confirmation polling
-- **RPC Latency Detection** — Startup health check warns if average RPC latency exceeds 600ms
+The real-time risk monitor runs in the background and alerts when positions approach liquidation.
+
+```
+flash [sim] > risk monitor on
+  Risk monitor started. (prices every 5s, positions every 20s)
+```
+
+### Alert Levels
+
+| Level | Distance to Liquidation | Action |
+|-------|------------------------|--------|
+| **Safe** | > 35% | No alert |
+| **Warning** | < 30% | Yellow warning with position details |
+| **Critical** | < 15% | Red alert with collateral suggestion |
+
+Hysteresis thresholds prevent alert oscillation:
+
+- Warning triggers at < 30%, recovers at > 35%
+- Critical triggers at < 15%, recovers at > 18%
+
+### Warning Example
+
+```
+  ⚠ RISK WARNING
+  ─────────────────────────────────
+  SOL LONG 5x
+  Entry:       $148.52
+  Current:     $141.20
+  Liquidation: $133.00
+
+  Distance to liquidation: 22%
+
+  Add $45 collateral to restore distance to 35%.
+```
+
+### Critical Example
+
+```
+  CRITICAL LIQUIDATION RISK
+  ═════════════════════════════════
+  SOL LONG 10x
+  Entry:       $148.52
+  Current:     $139.50
+  Liquidation: $136.80
+
+  Distance to liquidation: 8%
+
+  Add collateral or reduce position immediately.
+  Add $120 collateral to restore distance to 35%.
+```
+
+The monitor auto-calculates the exact collateral amount needed to restore a safe liquidation distance using binary search over the leverage-to-liquidation model.
+
+---
+
+## Security Model
+
+### Transaction Signing
+
+- Every trade displays a full position summary and requires explicit confirmation before signing
+- Signing rate limiter prevents rapid-fire submissions (`MAX_TRADES_PER_MINUTE`, `MIN_DELAY_BETWEEN_TRADES_MS`)
+- All trade attempts are logged to `~/.flash/signing-audit.log` with timestamp, market, side, and result
+- Configurable per-trade limits (`MAX_COLLATERAL_PER_TRADE`, `MAX_POSITION_SIZE`, `MAX_LEVERAGE`)
+
+### Wallet Security
+
+- Wallet files stored in `~/.flash/wallets/` with `0600` permissions (owner-only read/write)
+- Wallet import validates path within home directory; symlinks are resolved and checked
+- File size limits prevent reading non-wallet files
+- Private keys are never printed to the terminal or written to log files
+
+### API Key Safety
+
+- Log scrubbing automatically redacts API key patterns from all log output
+- API keys belong in `.env` only — never in shell history or command arguments
+- `.env` is listed in `.gitignore`
+
+### Network Security
+
+- RPC URLs validated for HTTPS protocol
+- All API calls have timeouts and response body size limits (prevents OOM from malicious endpoints)
+- Log files rotate at 10MB with automatic cleanup
+
+---
+
+## State Reconciliation
+
+The terminal maintains a local view of on-chain positions. The state reconciliation engine ensures this view stays accurate.
+
+### Sync Points
+
+| Trigger | Behavior |
+|---------|----------|
+| **Startup** | Fetches all positions from blockchain, builds local state |
+| **After trade confirmation** | Verifies the position exists on-chain; warns if not yet settled |
+| **Wallet switch** | Clears local state, re-fetches for new wallet |
+| **Every 60 seconds** | Background sync in live mode; detects externally opened/closed positions |
+
+### Recovery
+
+If the reconciler detects a discrepancy (position exists on-chain but not locally, or vice versa), it logs the event and rebuilds local state from the blockchain. Blockchain state is always authoritative.
+
+---
+
+## Plugin System
+
+Extend the terminal by adding plugins to `src/plugins/`.
+
+### Plugin Interface
+
+```typescript
+interface FlashPlugin {
+  name: string;
+  version?: string;
+  description?: string;
+  tools?: () => ToolDefinition[];
+  onInit?: (context: ToolContext) => Promise<void> | void;
+  onShutdown?: () => Promise<void> | void;
+}
+```
+
+### Creating a Plugin
+
+Create a file in `src/plugins/` (e.g., `my-scanner.ts`):
+
+```typescript
+import { FlashPlugin } from './plugin-loader.js';
+
+const plugin: FlashPlugin = {
+  name: 'my-scanner',
+  version: '1.0.0',
+  description: 'Custom market scanner',
+
+  tools: () => [
+    {
+      name: 'my_custom_scan',
+      description: 'Run custom scanner',
+      parameters: z.object({}),
+      execute: async (_params, context) => {
+        // Access context.flashClient, context.walletAddress, etc.
+        return { success: true, message: 'Scan complete' };
+      },
+    },
+  ],
+
+  onInit: (context) => {
+    console.log('Custom scanner initialized');
+  },
+};
+
+export default plugin;
+```
+
+Plugins are discovered automatically at startup. Files starting with `_` are skipped.
+
+### Extension Points
+
+- **Custom scanners** — Register tools that analyze markets with your own logic
+- **Trading strategies** — Add strategy implementations that produce trade signals
+- **Analytics tools** — Build custom dashboards, exporters, or alert integrations
+- **Protocol adapters** — Wrap additional protocols behind the `IFlashClient` interface
+
+---
+
+## Project Structure
+
+```
+src/
+├── cli/            Terminal REPL, user interaction, confirmation flow
+├── ai/             Intent parsing (regex + LLM fallback)
+├── tools/          Tool definitions, registry, and dispatch engine
+├── client/         Flash Trade SDK client and paper trading client
+├── agent/          AI-powered analysis, scanner, autopilot, dashboard
+├── strategies/     Momentum, mean reversion, whale follow strategies
+├── scanner/        Multi-market opportunity scanner
+├── portfolio/      Allocation, exposure, rebalance logic
+├── risk/           Liquidation risk, exposure computation
+├── monitor/        Real-time risk monitoring engine
+├── regime/         Market regime detection (trending/ranging/volatile)
+├── protocol/       Flash Trade protocol inspector
+├── core/           Execution middleware, state reconciliation
+├── network/        RPC endpoint management with failover
+├── system/         System diagnostics, health checks, tx inspection
+├── security/       Signing guard, rate limiter, audit logging
+├── plugins/        Plugin loader and user plugins
+├── wallet/         Keypair management, wallet store, session tracking
+├── automation/     Autopilot loop (simulation only)
+├── data/           CoinGecko, fstats.io API clients
+├── config/         Environment config, pool/market mapping, risk config
+├── types/          All types, enums, interfaces, Zod schemas
+└── utils/          Logger, retry, formatting, safe math
+```
+
+---
+
+## Development
+
+### Run in Development Mode
+
+```bash
+npm run dev
+```
+
+Uses `tsx` for TypeScript execution without a compile step.
+
+### Build
+
+```bash
+npm run build
+```
+
+Compiles TypeScript to `dist/` and makes the CLI executable.
+
+### Run Tests
+
+```bash
+npm run test            # Single run
+npm run test:watch      # Watch mode
+```
+
+### Type Check
+
+```bash
+npx tsc --noEmit
+```
 
 ---
 
@@ -367,100 +595,103 @@ The market regime (trending, ranging, volatile, whale-dominated, low-liquidity) 
 
 ---
 
+## Flash Trade Integration
+
+This project serves as a reference integration for building on Flash Trade.
+
+### Position Lifecycle
+
+1. **Market resolution** — Map asset name to Flash Trade pool (e.g., SOL → `Crypto.1`)
+2. **Oracle prices** — Fetch from Pyth Network with native exponent (e.g., `-8` for SOL)
+3. **Open** — `swapAndOpen` instruction with USDC collateral, computed position size
+4. **Close** — Match on-chain position by mint and side, build close instruction
+5. **Collateral** — Add/remove collateral instructions with balance validation
+
+### Transaction Submission
+
+Transactions are built manually using `MessageV0.compile` and signed with the wallet keypair:
+
+- Fresh blockhash per attempt
+- `sendRawTransaction` with `maxRetries: 3`
+- Confirmation polling every 2s with periodic resends
+- 45s timeout per attempt, 2 attempts total
+- On-chain error detection via `getSignatureStatuses`
+
+### Key Integration Files
+
+| File | Purpose |
+|------|---------|
+| `src/client/flash-client.ts` | FlashClient with open/close/collateral/positions |
+| `src/config/index.ts` | Pool-to-market mapping and configuration |
+| `src/wallet/walletManager.ts` | Keypair loading with security hardening |
+
+---
+
 ## Wallet Management
 
-Import a wallet:
-
 ```
-wallet import main ~/.config/solana/id.json
-```
+flash [live] > wallet import main ~/.config/solana/id.json
+  Wallet 'main' imported.
 
-Switch between wallets:
+flash [live] > wallet list
+  Saved wallets:
+    * main  7xKp...3nRq
 
-```
-wallet list
-wallet use main
-```
+flash [live] > wallet balance
+  SOL Balance: 2.41
 
-Check balances:
-
-```
-wallet balance
-wallet tokens
+flash [live] > wallet tokens
+  Token Balances:
+    USDC:  150.00
+    SOL:   2.41
 ```
 
 Wallet files are stored in `~/.flash/wallets/` with owner-only permissions.
 
 ---
 
-## Developer Extension
+## Contributing
 
-Flash AI Terminal is designed for extension. Developers can:
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, coding guidelines, and pull request process.
 
-**Add Trading Strategies** — Implement the strategy interface in `src/strategies/` and register in the signal aggregator. Each strategy receives market data and returns a directional signal with confidence.
+### Quick Reference
 
-**Add New Tools** — Define a tool in `src/tools/flash-tools.ts` or `src/agent/agent-tools.ts` with a Zod parameter schema, register it in the tool registry, and map a new `ActionType` in the engine.
-
-**Extend the Risk Engine** — Add new risk checks in `src/config/risk-config.ts`. The `checkTradeRisk` function runs before every trade and can block execution with a reason.
-
-**Integrate New Protocols** — Implement the `IFlashClient` interface for a new DEX or protocol. The tool layer and AI layer are protocol-agnostic — only the execution engine needs to change.
-
-**Custom AI Prompts** — Modify the system prompt in `src/ai/interpreter.ts` to add new action types or change how natural language maps to intents.
+1. Fork the repository and create a feature branch from `main`
+2. Follow TypeScript strict mode — no `any`, defensive arithmetic on external data
+3. Run `npm run build` and verify the CLI works before submitting
+4. One feature or fix per PR; include context on what the change does and why
 
 ---
 
 ## Data Policy
 
-Flash AI Terminal uses **live market data only**. No hardcoded fallback prices. No synthetic signals. Markets without reliable live data are excluded from analysis. Trading decisions are never based on stale or fabricated data.
+Flash AI Terminal uses live market data only. No hardcoded fallback prices. No synthetic signals. Markets without reliable live data are excluded from analysis. Trading decisions are never based on stale or fabricated data.
 
 ---
 
-## Why This Project Matters
+## Repository Documentation
 
-DeFi trading today requires navigating complex UIs, managing multiple browser tabs, and understanding raw blockchain data. Flash AI Terminal demonstrates how AI interfaces can simplify this:
-
-- **AI meets on-chain trading** — Natural language removes the learning curve for position management
-- **CLI for power users** — Terminal-native workflow for developers and algorithmic traders
-- **Open integration reference** — A working example of how to build on Flash Trade, from oracle prices to transaction submission
-
-This project bridges AI interfaces, on-chain trading execution, and CLI developer tooling into a single coherent system.
-
----
-
-## Roadmap
-
-- [ ] Autopilot in live mode with configurable risk limits
-- [ ] Advanced strategies with technical indicators
-- [ ] Web dashboard for visual portfolio monitoring
-- [ ] Historical analytics and trade journaling
-- [ ] Multi-protocol support (additional Solana DEXs)
-
----
-
-## Development
-
-```bash
-npm run dev          # Run with tsx (hot reload)
-npm run build        # Compile TypeScript
-npm run test         # Run test suite
-npm run test:watch   # Watch mode
-npm start            # Run compiled output
-```
-
-See [docs/project-structure.md](docs/project-structure.md) for module documentation and [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines.
+| File | Description |
+|------|-------------|
+| [README.md](README.md) | This file |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | System architecture and design decisions |
+| [SECURITY.md](SECURITY.md) | Security policy, wallet handling, key management |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | Development setup, coding style, PR guidelines |
+| [LICENSE](LICENSE) | MIT License |
+| [.env.example](.env.example) | Environment configuration template |
 
 ---
 
 ## Disclaimer
 
-Flash AI Terminal is a tool for interacting with DeFi protocols. It does **not** provide financial advice. All strategy signals, confidence scores, and trade suggestions are algorithmic computations, not recommendations.
+Flash AI Terminal is experimental infrastructure software for interacting with decentralized finance protocols. It does not provide financial advice. All strategy signals, confidence scores, and trade suggestions are algorithmic computations, not recommendations.
 
 **Trading perpetual futures involves substantial risk of loss.** Leveraged positions can be liquidated rapidly. You can lose your entire collateral. Past performance of any strategy signal does not indicate future results.
 
-- Start with simulation mode to understand the system
+- Start with simulation mode to understand the system before trading live
 - Use small positions when transitioning to live trading
 - Never trade with funds you cannot afford to lose
-- Verify all transactions on [Solscan](https://solscan.io) before and after execution
+- Verify all transactions on [Solscan](https://solscan.io)
 
 By using this software, you accept full responsibility for your trading decisions and outcomes.
 

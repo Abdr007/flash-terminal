@@ -349,7 +349,13 @@ export class FlashClient implements IFlashClient {
     _poolConfig: PoolConfig
   ): Promise<string> {
     const logger = getLogger();
-    const maxAttempts = 2;
+
+    // Pre-signing safety: verify keypair is still valid (not zeroed/disconnected)
+    if (!this.walletMgr.verifyKeypairIntegrity()) {
+      throw new Error('Wallet keypair is invalid or disconnected. Reconnect your wallet before signing.');
+    }
+
+    const maxAttempts = 3;
     const cuLimitIx = ComputeBudgetProgram.setComputeUnitLimit({ units: this.config.computeUnitLimit });
     const cuPriceIx = ComputeBudgetProgram.setComputeUnitPrice({ microLamports: this.config.computeUnitPrice });
 
@@ -731,7 +737,8 @@ export class FlashClient implements IFlashClient {
           continue;
         }
 
-        const leverage = sizeUsd / collateralUsd;
+        const rawLeverage = sizeUsd / collateralUsd;
+        const leverage = Number.isFinite(rawLeverage) ? rawLeverage : 0;
         const side = marketConfig.side === Side.Long ? TradeSide.Long : TradeSide.Short;
         const priceDelta = currentPrice - entryPrice;
         const pnlMult = side === TradeSide.Long ? 1 : -1;
@@ -749,6 +756,8 @@ export class FlashClient implements IFlashClient {
           : 0;
         const totalFees = Number.isFinite(rawFees) ? rawFees : 0;
 
+        const rawPnlPct = collateralUsd > 0 ? (safeUnrealizedPnl / collateralUsd) * 100 : 0;
+
         positions.push({
           pubkey: raw.pubkey.toBase58(),
           market: targetToken.symbol,
@@ -760,7 +769,7 @@ export class FlashClient implements IFlashClient {
           collateralUsd,
           leverage,
           unrealizedPnl: safeUnrealizedPnl,
-          unrealizedPnlPercent: (safeUnrealizedPnl / collateralUsd) * 100,
+          unrealizedPnlPercent: Number.isFinite(rawPnlPct) ? rawPnlPct : 0,
           liquidationPrice,
           openFee: 0,
           totalFees,

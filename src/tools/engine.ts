@@ -2,11 +2,13 @@ import {
   ActionType,
   ParsedIntent,
   ToolContext,
+  ToolDefinition,
   ToolResult,
 } from '../types/index.js';
 import { ToolRegistry } from './registry.js';
 import { allFlashTools } from './flash-tools.js';
 import { allAgentTools } from '../agent/agent-tools.js';
+import { runMiddleware } from '../core/execution-middleware.js';
 import chalk from 'chalk';
 
 /**
@@ -30,9 +32,20 @@ export class ToolEngine {
   }
 
   /**
+   * Register an additional tool at runtime (e.g. from plugins).
+   */
+  registerTool(tool: ToolDefinition): void {
+    this.registry.register(tool);
+  }
+
+  /**
    * Route a parsed intent to the appropriate tool and execute it.
    */
   async dispatch(intent: ParsedIntent): Promise<ToolResult> {
+    // Run execution middleware pipeline
+    const middlewareBlock = runMiddleware(intent, this.context);
+    if (middlewareBlock) return middlewareBlock;
+
     // Autopilot commands blocked in live mode
     if (this.isAutopilotAction(intent.action) && !this.context.simulationMode) {
       return {
@@ -246,6 +259,36 @@ export class ToolEngine {
       case ActionType.PortfolioRebalance:
         return { toolName: 'portfolio_rebalance', params: {} };
 
+      // Risk Monitor
+      case ActionType.RiskMonitorOn:
+        return { toolName: 'risk_monitor_on', params: {} };
+
+      case ActionType.RiskMonitorOff:
+        return { toolName: 'risk_monitor_off', params: {} };
+
+      // Protocol Inspector
+      case ActionType.InspectProtocol:
+        return { toolName: 'inspect_protocol', params: {} };
+
+      case ActionType.InspectPool:
+        return { toolName: 'inspect_pool', params: { pool: intent.pool } };
+
+      case ActionType.InspectMarket:
+        return { toolName: 'inspect_market', params: { market: intent.market } };
+
+      // System Diagnostics
+      case ActionType.SystemStatus:
+        return { toolName: 'system_status', params: {} };
+
+      case ActionType.RpcStatus:
+        return { toolName: 'rpc_status', params: {} };
+
+      case ActionType.RpcTest:
+        return { toolName: 'rpc_test', params: {} };
+
+      case ActionType.TxInspect:
+        return { toolName: 'tx_inspect', params: { signature: intent.signature } };
+
       default:
         return null;
     }
@@ -327,6 +370,20 @@ export class ToolEngine {
       `    ${chalk.cyan('wallet disconnect')}      Disconnect active wallet`,
       `    ${chalk.cyan('wallet balance')}         Show SOL balance`,
       `    ${chalk.cyan('wallet tokens')}          Detect all tokens`,
+      '',
+      `  ${chalk.cyan('risk monitor on')}     Start real-time risk monitoring`,
+      `  ${chalk.cyan('risk monitor off')}    Stop risk monitoring`,
+      '',
+      chalk.bold('  Protocol Inspector'),
+      `    ${chalk.cyan('inspect protocol')}    Flash Trade protocol overview`,
+      `    ${chalk.cyan('inspect pool <name>')} Inspect a specific pool`,
+      `    ${chalk.cyan('inspect market <asset>')} Deep market inspection`,
+      '',
+      chalk.bold('  System Diagnostics'),
+      `    ${chalk.cyan('system status')}      System health overview`,
+      `    ${chalk.cyan('rpc status')}         Active RPC info`,
+      `    ${chalk.cyan('rpc test')}           Test all RPC endpoints`,
+      `    ${chalk.cyan('tx inspect <sig>')}   Inspect a transaction`,
       '',
       `  ${chalk.cyan('exit')}`,
       chalk.dim('    Close the terminal.'),

@@ -112,6 +112,5 @@ Key dependencies with security implications:
 | `@solana/web3.js` | Solana RPC and transaction signing | Solana Foundation |
 | `flash-sdk` | Flash Trade protocol interaction | Flash Trade team |
 | `@pythnetwork/client` | Oracle price feeds | Pyth Network |
-| `@anthropic-ai/sdk` | AI command parsing (optional) | AI provider |
-| `openai` | Groq AI fallback (optional) | OpenAI SDK for Groq-compatible API |
+| AI SDK (optional) | LLM-powered command parsing | AI provider |
 | `zod` | Input validation schemas | Community standard |

@@ -10,12 +10,18 @@ import { SimulatedFlashClient } from '../client/simulation.js';
 import { FStatsClient } from '../data/fstats.js';
 import { WalletManager, createConnection } from '../wallet/index.js';
 import { WalletStore } from '../wallet/wallet-store.js';
+import { getLastWallet, updateLastWallet } from '../wallet/session.js';
 import { shortAddress } from '../utils/format.js';
 import { getErrorMessage } from '../utils/retry.js';
 import { initLogger } from '../utils/logger.js';
 import { getAutopilot, setAiApiKey, getInspector, getScanner, getRegimeDetector } from '../agent/agent-tools.js';
 import { formatUsd, colorPercent } from '../utils/format.js';
 import { MarketRegime } from '../regime/regime-types.js';
+import { initSigningGuard } from '../security/signing-guard.js';
+import { RpcManager, buildRpcEndpoints, initRpcManager } from '../network/rpc-manager.js';
+import { initSystemDiagnostics } from '../system/system-diagnostics.js';
+import { initReconciler, getReconciler } from '../core/state-reconciliation.js';
+import { loadPlugins, shutdownPlugins } from '../plugins/plugin-loader.js';
 
 const COMMAND_TIMEOUT_MS = 120_000;
 const SLOW_COMMAND_MS = 3_000;
@@ -66,6 +72,14 @@ const FAST_DISPATCH: Record<string, ParsedIntent> = {
   'portfolio exposure': { action: ActionType.PortfolioExposure },
   'portfolio rebalance': { action: ActionType.PortfolioRebalance },
   'capital':           { action: ActionType.PortfolioState },
+  'risk monitor on':   { action: ActionType.RiskMonitorOn },
+  'risk monitor off':  { action: ActionType.RiskMonitorOff },
+  'inspect protocol':  { action: ActionType.InspectProtocol },
+  'inspect':           { action: ActionType.InspectProtocol },
+  'system status':     { action: ActionType.SystemStatus },
+  'system':            { action: ActionType.SystemStatus },
+  'rpc status':        { action: ActionType.RpcStatus },
+  'rpc test':          { action: ActionType.RpcTest },
 };
 
 /** Timeout wrapper for command execution */
@@ -111,14 +125,28 @@ export class FlashTerminal {
   private pendingConfirmation: ((answer: string) => void) | null = null;
   /** Prevent concurrent command processing */
   private processing = false;
+  /** Cleanup callback for risk monitor on shutdown */
+  private riskMonitorCleanup: (() => void) | null = null;
+  /** RPC manager for failover support */
+  private rpcManager!: RpcManager;
 
   constructor(config: FlashConfig) {
     this.config = config;
     this.fstats = new FStatsClient();
-    const connection = createConnection(config.rpcUrl);
-    this.walletManager = new WalletManager(connection);
+    // Initial connection for wallet manager — will be replaced after RPC manager init
+    const initConnection = createConnection(config.rpcUrl);
+    this.walletManager = new WalletManager(initConnection);
 
     initLogger(config.logFile ? { logFile: config.logFile } : undefined);
+
+    // Initialize signing guard with config limits
+    initSigningGuard({
+      maxCollateralPerTrade: config.maxCollateralPerTrade,
+      maxPositionSize: config.maxPositionSize,
+      maxLeverage: config.maxLeverage,
+      maxTradesPerMinute: config.maxTradesPerMinute,
+      minDelayBetweenTradesMs: config.minDelayBetweenTradesMs,
+    });
 
     const hasAiKey = config.anthropicApiKey && config.anthropicApiKey !== 'sk-ant-...';
     const hasGroqKey = !!config.groqApiKey;
@@ -168,8 +196,10 @@ export class FlashTerminal {
       }
     }
 
-    // ─── Initialize Client ───────────────────────────────────────────
-    const connection = createConnection(this.config.rpcUrl);
+    // ─── Initialize RPC Manager ─────────────────────────────────────
+    const rpcEndpoints = buildRpcEndpoints(this.config.rpcUrl);
+    this.rpcManager = initRpcManager(rpcEndpoints);
+    const connection = this.rpcManager.connection;
 
     // Warn if using public RPC for live trading
     if (!this.config.simulationMode && this.config.rpcUrl.includes('api.mainnet-beta.solana.com')) {
@@ -181,13 +211,7 @@ export class FlashTerminal {
     if (!this.config.simulationMode) {
       (async () => {
         try {
-          let total = 0;
-          for (let i = 0; i < 3; i++) {
-            const s = Date.now();
-            await connection.getLatestBlockhash('confirmed');
-            total += Date.now() - s;
-          }
-          const avg = Math.round(total / 3);
+          const avg = await this.rpcManager.measureLatency();
           if (avg > 600) {
             console.log(chalk.yellow(`\n  ⚠ RPC latency is high (${avg}ms average).`));
             console.log(chalk.dim('    Transaction confirmations may be slower.'));
@@ -205,9 +229,30 @@ export class FlashTerminal {
         this.flashClient = new FlashClient(connection, this.walletManager, this.config);
       } catch (error: unknown) {
         console.log(chalk.red(`\n  Failed to initialize live client: ${getErrorMessage(error)}`));
-        console.log(chalk.dim('  Please check your RPC connection and try again.\n'));
-        this.rl.close();
-        process.exit(1);
+        // Attempt RPC failover
+        if (this.rpcManager.fallbackCount > 0) {
+          console.log(chalk.yellow('  Attempting RPC failover...'));
+          const didFailover = await this.rpcManager.failover();
+          if (didFailover) {
+            console.log(chalk.green(`  Switched to ${this.rpcManager.activeEndpoint.label}`));
+            try {
+              const { FlashClient: FC } = await import('../client/flash-client.js');
+              this.flashClient = new FC(this.rpcManager.connection, this.walletManager, this.config);
+            } catch (e2: unknown) {
+              console.log(chalk.red(`  Failover also failed: ${getErrorMessage(e2)}\n`));
+              this.rl.close();
+              process.exit(1);
+            }
+          } else {
+            console.log(chalk.red('  No healthy backup RPC found.\n'));
+            this.rl.close();
+            process.exit(1);
+          }
+        } else {
+          console.log(chalk.dim('  Please check your RPC connection and try again.\n'));
+          this.rl.close();
+          process.exit(1);
+        }
       }
     }
 
@@ -223,6 +268,36 @@ export class FlashTerminal {
 
     setAiApiKey(this.config.anthropicApiKey, this.config.groqApiKey);
     this.engine = new ToolEngine(this.context);
+
+    // Initialize system diagnostics
+    initSystemDiagnostics(this.rpcManager, this.context);
+
+    // Initialize state reconciliation engine
+    const reconciler = initReconciler(this.flashClient);
+    reconciler.reconcile().catch(() => {}); // Initial sync — fire and forget
+    if (!this.config.simulationMode) {
+      reconciler.startPeriodicSync(); // 60s background sync for live mode
+    }
+
+    // Load plugins and register their tools
+    try {
+      const pluginTools = await loadPlugins(this.context);
+      if (pluginTools.length > 0) {
+        for (const tool of pluginTools) {
+          this.engine.registerTool(tool);
+        }
+      }
+    } catch {
+      // Plugin loading is non-critical
+    }
+
+    // Register risk monitor cleanup
+    this.riskMonitorCleanup = () => {
+      import('../monitor/risk-monitor.js').then(({ getActiveRiskMonitor }) => {
+        const m = getActiveRiskMonitor();
+        if (m?.active) m.stop();
+      }).catch(() => {});
+    };
 
     // Set prompt based on mode
     this.updatePrompt();
@@ -344,6 +419,7 @@ export class FlashTerminal {
     const store = new WalletStore();
     const wallets = store.listWallets();
     let defaultWallet = store.getDefault();
+    const sessionWallet = getLastWallet();
 
     // Auto-set default if there's exactly one wallet saved
     if (!defaultWallet && wallets.length === 1) {
@@ -351,23 +427,66 @@ export class FlashTerminal {
       defaultWallet = wallets[0];
     }
 
-    // Auto-connect default wallet
-    if (defaultWallet) {
-      try {
-        const walletPath = store.getWalletPath(defaultWallet);
-        const info = this.tryConnectWallet(walletPath);
-        if (info && this.walletManager.isConnected) {
-          console.log(chalk.green(`\n  Wallet connected: ${defaultWallet}`));
-          return { ...info, name: defaultWallet };
+    // Check session for previous wallet
+    const targetWallet = defaultWallet ?? sessionWallet;
+
+    // Auto-connect target wallet
+    if (targetWallet && wallets.includes(targetWallet)) {
+      console.log('');
+      console.log(chalk.dim(`  Previous wallet detected: ${chalk.bold(targetWallet)}`));
+      console.log('');
+      console.log(`    ${chalk.cyan('1)')} Reconnect previous wallet`);
+      console.log(`    ${chalk.cyan('2)')} Choose different wallet`);
+      console.log(`    ${chalk.cyan('3)')} Continue without wallet ${chalk.dim('(read-only)')}`);
+      console.log('');
+
+      while (true) {
+        const choice = (await this.ask(`  ${chalk.yellow('>')} `)).trim();
+
+        if (choice === '1') {
+          try {
+            const walletPath = store.getWalletPath(targetWallet);
+            const info = this.tryConnectWallet(walletPath);
+            if (info && this.walletManager.isConnected) {
+              console.log(chalk.green(`\n  Wallet connected: ${targetWallet}`));
+              updateLastWallet(targetWallet);
+              return { ...info, name: targetWallet };
+            }
+          } catch {
+            console.log(chalk.dim(`  Wallet "${targetWallet}" could not be loaded.`));
+          }
+          break; // Fall through to picker
+        } else if (choice === '2') {
+          break; // Fall through to picker
+        } else if (choice === '3') {
+          // Read-only mode: no wallet
+          console.log(chalk.yellow('\n  Continuing in READ-ONLY mode.'));
+          console.log(chalk.dim('  You can view data but cannot execute trades.'));
+          return { address: 'read-only', name: 'read-only' };
+        } else {
+          console.log(chalk.dim('  Enter 1, 2, or 3.'));
+          continue;
         }
-      } catch {
-        console.log(chalk.dim(`\n  Wallet "${defaultWallet}" could not be loaded.`));
       }
     }
 
     // Multiple wallets saved — pick by number
     if (wallets.length > 1) {
       return this.showWalletPicker(store, wallets);
+    }
+
+    if (wallets.length === 1) {
+      try {
+        const walletPath = store.getWalletPath(wallets[0]);
+        const info = this.tryConnectWallet(walletPath);
+        if (info && this.walletManager.isConnected) {
+          console.log(chalk.green(`\n  Wallet connected: ${wallets[0]}`));
+          updateLastWallet(wallets[0]);
+          return { ...info, name: wallets[0] };
+        }
+      } catch {
+        console.log(chalk.dim(`\n  Wallet "${wallets[0]}" could not be loaded.`));
+      }
     }
 
     // No wallets — first-time setup
@@ -911,7 +1030,7 @@ export class FlashTerminal {
     // Only relevant in live mode — rebuild client with new wallet
     if (this.config.simulationMode) return;
 
-    const connection = createConnection(this.config.rpcUrl);
+    const connection = this.rpcManager.connection;
 
     try {
       const { FlashClient } = await import('../client/flash-client.js');
@@ -922,6 +1041,13 @@ export class FlashTerminal {
     } catch (error: unknown) {
       console.log(chalk.red(`  Failed to reinitialize live client: ${getErrorMessage(error)}`));
       console.log(chalk.dim('  Trading commands may fail until a wallet is reconnected.'));
+    }
+
+    // Update reconciler with new client
+    const reconciler = getReconciler();
+    if (reconciler) {
+      reconciler.setClient(this.flashClient);
+      reconciler.reconcile().catch(() => {});
     }
 
     // Rebuild tool engine with updated context
@@ -981,6 +1107,22 @@ export class FlashTerminal {
     } catch {
       // Best-effort cleanup
     }
+    try {
+      if (this.riskMonitorCleanup) this.riskMonitorCleanup();
+    } catch {
+      // Best-effort cleanup
+    }
+    try {
+      const reconciler = getReconciler();
+      if (reconciler) reconciler.stop();
+    } catch {
+      // Best-effort cleanup
+    }
+    try {
+      shutdownPlugins().catch(() => {});
+    } catch {
+      // Best-effort cleanup
+    }
     console.log(chalk.dim('\n  Goodbye.\n'));
     this.rl.close();
     process.exit(0);
@@ -998,6 +1140,15 @@ export class FlashTerminal {
 
     if (fastIntent) {
       intent = fastIntent;
+    } else if (lower.startsWith('inspect pool ')) {
+      const pool = input.slice('inspect pool '.length).trim();
+      intent = { action: ActionType.InspectPool, pool } as ParsedIntent;
+    } else if (lower.startsWith('inspect market ')) {
+      const market = input.slice('inspect market '.length).trim().toUpperCase();
+      intent = { action: ActionType.InspectMarket, market } as ParsedIntent;
+    } else if (lower.startsWith('tx inspect ')) {
+      const signature = input.slice('tx inspect '.length).trim();
+      intent = { action: ActionType.TxInspect, signature } as ParsedIntent;
     } else {
       // Full interpreter path (regex + AI)
       process.stdout.write(chalk.dim('  Parsing...\r'));
@@ -1059,6 +1210,20 @@ export class FlashTerminal {
           const elapsed = ((Date.now() - submitStart) / 1000).toFixed(1);
           console.log(chalk.green(`  Confirmed in ${elapsed}s`));
           console.log(execResult.message);
+
+          // Post-trade verification (live mode only)
+          if (!this.config.simulationMode && execResult.data?.market && execResult.data?.side) {
+            const rec = getReconciler();
+            if (rec) {
+              const verified = await rec.verifyTrade(
+                execResult.data.market as string,
+                execResult.data.side as string,
+              );
+              if (!verified) {
+                console.log(chalk.yellow('  ⚠ Position not yet found on-chain. It may take a moment to settle.'));
+              }
+            }
+          }
         } catch (error: unknown) {
           console.log(chalk.red(`  ${getErrorMessage(error)}`));
         }

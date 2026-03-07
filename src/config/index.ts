@@ -59,8 +59,13 @@ function validateRpcUrl(url: string): string {
 }
 
 export function loadConfig(): FlashConfig {
+  const backupRpcUrls: string[] = [];
+  if (process.env.BACKUP_RPC_1) backupRpcUrls.push(process.env.BACKUP_RPC_1);
+  if (process.env.BACKUP_RPC_2) backupRpcUrls.push(process.env.BACKUP_RPC_2);
+
   return {
     rpcUrl: validateRpcUrl(process.env.RPC_URL || 'https://api.mainnet-beta.solana.com'),
+    backupRpcUrls,
     pythnetUrl: process.env.PYTHNET_URL || 'https://pythnet.rpcpool.com',
     walletPath: resolveHome(process.env.WALLET_PATH || '~/.config/solana/id.json'),
     anthropicApiKey: process.env.ANTHROPIC_API_KEY || '',
@@ -72,6 +77,12 @@ export function loadConfig(): FlashConfig {
     computeUnitLimit: parseIntSafe(process.env.COMPUTE_UNIT_LIMIT, 600000),
     computeUnitPrice: parseIntSafe(process.env.COMPUTE_UNIT_PRICE, 500000),
     logFile: process.env.LOG_FILE || null,
+    // Signing guard limits (0 = unlimited / use market defaults)
+    maxCollateralPerTrade: parseIntSafe(process.env.MAX_COLLATERAL_PER_TRADE, 0),
+    maxPositionSize: parseIntSafe(process.env.MAX_POSITION_SIZE, 0),
+    maxLeverage: parseIntSafe(process.env.MAX_LEVERAGE, 0),
+    maxTradesPerMinute: parseIntSafe(process.env.MAX_TRADES_PER_MINUTE, 10),
+    minDelayBetweenTradesMs: parseIntSafe(process.env.MIN_DELAY_BETWEEN_TRADES_MS, 3000),
   };
 }
 

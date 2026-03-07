@@ -39,7 +39,7 @@ npm run test:watch    # Watch mode
 
 ## Project Structure
 
-See [docs/project-structure.md](docs/project-structure.md) for a complete module reference.
+See [ARCHITECTURE.md](ARCHITECTURE.md) for a complete module reference.
 
 Key directories:
 

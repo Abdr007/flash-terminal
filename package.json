@@ -23,6 +23,9 @@
     "cli",
     "trading"
   ],
+  "engines": {
+    "node": ">=20.0.0"
+  },
   "license": "MIT",
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",
