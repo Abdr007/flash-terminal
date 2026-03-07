@@ -69,6 +69,12 @@ export enum ActionType {
   RpcTest = 'rpc_test',
   TxInspect = 'tx_inspect',
 
+  // Trade Journal
+  TradeHistory = 'trade_history',
+
+  // Market Monitor
+  MarketMonitor = 'market_monitor',
+
   // Dry Run
   DryRun = 'dry_run',
 }
@@ -290,6 +296,14 @@ export const TxInspectSchema = z.object({
   signature: z.string().optional(),
 });
 
+export const TradeHistorySchema = z.object({
+  action: z.literal(ActionType.TradeHistory),
+});
+
+export const MarketMonitorSchema = z.object({
+  action: z.literal(ActionType.MarketMonitor),
+});
+
 export const DryRunSchema = z.object({
   action: z.literal(ActionType.DryRun),
   innerCommand: z.string(),
@@ -341,6 +355,8 @@ export const ParsedIntentSchema = z.discriminatedUnion('action', [
   RpcStatusSchema,
   RpcTestSchema,
   TxInspectSchema,
+  TradeHistorySchema,
+  MarketMonitorSchema,
   DryRunSchema,
 ]);
 
@@ -645,6 +661,9 @@ export interface IFlashClient {
   getMarketData(market?: string): Promise<MarketData[]>;
   getPortfolio(): Promise<Portfolio>;
   getBalance(): number;
+
+  /** Get recent trade history (simulation mode). */
+  getTradeHistory?(): SimulatedTrade[];
 
   /** Build a transaction preview without signing or sending. */
   previewOpenPosition?(

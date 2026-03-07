@@ -60,8 +60,8 @@ function validateRpcUrl(url: string): string {
 
 export function loadConfig(): FlashConfig {
   const backupRpcUrls: string[] = [];
-  if (process.env.BACKUP_RPC_1) backupRpcUrls.push(process.env.BACKUP_RPC_1);
-  if (process.env.BACKUP_RPC_2) backupRpcUrls.push(process.env.BACKUP_RPC_2);
+  if (process.env.BACKUP_RPC_1) backupRpcUrls.push(validateRpcUrl(process.env.BACKUP_RPC_1));
+  if (process.env.BACKUP_RPC_2) backupRpcUrls.push(validateRpcUrl(process.env.BACKUP_RPC_2));
 
   return {
     rpcUrl: validateRpcUrl(process.env.RPC_URL || 'https://api.mainnet-beta.solana.com'),

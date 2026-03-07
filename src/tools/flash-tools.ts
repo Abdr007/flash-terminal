@@ -339,6 +339,10 @@ export const flashAddCollateral: ToolDefinition = {
   execute: async (params, context): Promise<ToolResult> => {
     const { market, side, amount } = params as { market: string; side: TradeSide; amount: number };
 
+    if (!Number.isFinite(amount) || amount <= 0) {
+      return { success: false, message: chalk.red('  Amount must be a positive number.') };
+    }
+
     const validationError = validateLiveTradeContext(context);
     if (validationError) {
       return { success: false, message: chalk.red(`  ${validationError}`) };
@@ -424,6 +428,10 @@ export const flashRemoveCollateral: ToolDefinition = {
   }),
   execute: async (params, context): Promise<ToolResult> => {
     const { market, side, amount } = params as { market: string; side: TradeSide; amount: number };
+
+    if (!Number.isFinite(amount) || amount <= 0) {
+      return { success: false, message: chalk.red('  Amount must be a positive number.') };
+    }
 
     const validationError = validateLiveTradeContext(context);
     if (validationError) {
@@ -1419,6 +1427,72 @@ export const txInspectTool: ToolDefinition = {
   },
 };
 
+// ─── Trade History / Journal ──────────────────────────────────────────────────
+
+const tradeHistoryTool: ToolDefinition = {
+  name: 'trade_history',
+  description: 'Show recent trade history',
+  async execute(_params: Record<string, unknown>, context: ToolContext): Promise<ToolResult> {
+    const client = context.flashClient;
+    if (!client.getTradeHistory) {
+      return {
+        success: false,
+        message: [
+          '',
+          chalk.yellow('  Trade history is only available in simulation mode.'),
+          chalk.dim('  Live trade history can be viewed on Solscan.'),
+          '',
+        ].join('\n'),
+      };
+    }
+
+    const trades = client.getTradeHistory();
+    if (trades.length === 0) {
+      return {
+        success: true,
+        message: [
+          '',
+          chalk.dim('  No trades recorded yet.'),
+          chalk.dim('  Execute a trade and it will appear here.'),
+          '',
+        ].join('\n'),
+      };
+    }
+
+    // Show most recent 20 trades
+    const recent = trades.slice(-20).reverse();
+
+    const lines: string[] = [
+      '',
+      chalk.bold('  TRADE HISTORY'),
+      chalk.dim('  ──────────────────────────────────────────────────────────────────────'),
+      '',
+      chalk.dim('  Time       Action  Market  Side    Size        Entry       PnL'),
+      chalk.dim('  ──────────────────────────────────────────────────────────────────────'),
+    ];
+
+    for (const t of recent) {
+      const time = new Date(t.timestamp).toLocaleTimeString('en-US', { hour12: false });
+      const action = t.action === 'open' ? chalk.cyan('OPEN ') : chalk.yellow('CLOSE');
+      const market = t.market.padEnd(6);
+      const side = t.side === 'long' ? chalk.green('LONG ') : chalk.red('SHORT');
+      const size = formatUsd(t.sizeUsd).padStart(10);
+      const entry = formatPrice(t.price).padStart(10);
+      const pnl = t.pnl !== undefined
+        ? (t.pnl >= 0 ? chalk.green(`+${formatUsd(t.pnl)}`) : chalk.red(formatUsd(t.pnl)))
+        : chalk.dim('  —');
+
+      lines.push(`  ${time}  ${action}   ${market}  ${side}  ${size}  ${entry}  ${pnl}`);
+    }
+
+    lines.push('');
+    lines.push(chalk.dim(`  Showing ${recent.length} of ${trades.length} total trades`));
+    lines.push('');
+
+    return { success: true, message: lines.join('\n') };
+  },
+};
+
 export const allFlashTools: ToolDefinition[] = [
   flashOpenPosition,
   flashClosePosition,
@@ -1452,4 +1526,5 @@ export const allFlashTools: ToolDefinition[] = [
   rpcStatusTool,
   rpcTestTool,
   txInspectTool,
+  tradeHistoryTool,
 ];

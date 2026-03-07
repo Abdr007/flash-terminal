@@ -76,6 +76,10 @@ export class StateReconciler {
     this.timer = setInterval(() => {
       this.reconcile().catch(() => {});
     }, RECONCILE_INTERVAL_MS);
+    // Don't let the reconciler keep Node alive after user exits
+    if (this.timer.unref) {
+      this.timer.unref();
+    }
   }
 
   /**

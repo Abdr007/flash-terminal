@@ -133,18 +133,22 @@ export const aiAnalyze: ToolDefinition = {
     const meanReversionSignal = computeMeanReversionSignal({ market, openInterest });
 
     // Normalize whale data
-    const whaleRecentActivity: WhaleActivity[] = recentActivity.map((a) => ({
-      market: String(a.market_symbol ?? a.market ?? ''),
-      side: String(a.side ?? 'long'),
-      sizeUsd: Number(a.size_usd ?? 0),
-      timestamp: Number(a.timestamp ?? Date.now()),
-    }));
-    const whaleOpenPositions: WhaleActivity[] = openPositions.map((p) => ({
-      market: String(p.market_symbol ?? p.market ?? ''),
-      side: String(p.side ?? 'long'),
-      sizeUsd: Number(p.size_usd ?? 0),
-      timestamp: Number(p.timestamp ?? Date.now()),
-    }));
+    const whaleRecentActivity: WhaleActivity[] = recentActivity
+      .filter((a) => { const s = String(a.side ?? '').toLowerCase(); return s === 'long' || s === 'short'; })
+      .map((a) => ({
+        market: String(a.market_symbol ?? a.market ?? ''),
+        side: String(a.side),
+        sizeUsd: Number(a.size_usd ?? 0),
+        timestamp: Number(a.timestamp ?? Date.now()),
+      }));
+    const whaleOpenPositions: WhaleActivity[] = openPositions
+      .filter((p) => { const s = String(p.side ?? '').toLowerCase(); return s === 'long' || s === 'short'; })
+      .map((p) => ({
+        market: String(p.market_symbol ?? p.market ?? ''),
+        side: String(p.side),
+        sizeUsd: Number(p.size_usd ?? 0),
+        timestamp: Number(p.timestamp ?? Date.now()),
+      }));
 
     const whaleSignal = computeWhaleFollowSignal({
       recentActivity: whaleRecentActivity,
@@ -292,18 +296,22 @@ export const aiSuggestTrade: ToolDefinition = {
     }
 
     // Normalize whale data for fallback
-    const whaleRecentActivity: WhaleActivity[] = recentActivity.map((a) => ({
-      market: String(a.market_symbol ?? a.market ?? ''),
-      side: String(a.side ?? 'long'),
-      sizeUsd: Number(a.size_usd ?? 0),
-      timestamp: Number(a.timestamp ?? Date.now()),
-    }));
-    const whaleOpenPositions: WhaleActivity[] = openPositions.map((p) => ({
-      market: String(p.market_symbol ?? p.market ?? ''),
-      side: String(p.side ?? 'long'),
-      sizeUsd: Number(p.size_usd ?? 0),
-      timestamp: Number(p.timestamp ?? Date.now()),
-    }));
+    const whaleRecentActivity: WhaleActivity[] = recentActivity
+      .filter((a) => { const s = String(a.side ?? '').toLowerCase(); return s === 'long' || s === 'short'; })
+      .map((a) => ({
+        market: String(a.market_symbol ?? a.market ?? ''),
+        side: String(a.side),
+        sizeUsd: Number(a.size_usd ?? 0),
+        timestamp: Number(a.timestamp ?? Date.now()),
+      }));
+    const whaleOpenPositions: WhaleActivity[] = openPositions
+      .filter((p) => { const s = String(p.side ?? '').toLowerCase(); return s === 'long' || s === 'short'; })
+      .map((p) => ({
+        market: String(p.market_symbol ?? p.market ?? ''),
+        side: String(p.side),
+        sizeUsd: Number(p.size_usd ?? 0),
+        timestamp: Number(p.timestamp ?? Date.now()),
+      }));
 
     const balance = context.flashClient.getBalance();
     let suggestion;

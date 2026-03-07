@@ -102,22 +102,91 @@ export class SystemDiagnostics {
   }
 
   /**
-   * Test all configured RPC endpoints.
+   * Detailed RPC status with per-endpoint breakdown.
+   */
+  async rpcStatus(): Promise<string> {
+    const latency = await this.rpcManager.measureLatency();
+    return this.rpcManager.formatStatus(latency);
+  }
+
+  /**
+   * Test all configured RPC endpoints with latency, slot sync, and recommendation.
    */
   async rpcTest(): Promise<string> {
     const results = await this.rpcManager.checkAllHealth();
     const lines: string[] = [
       '',
-      chalk.bold('  RPC LATENCY TEST'),
-      chalk.dim('  ────────────────────────────'),
+      chalk.bold('  RPC DIAGNOSTIC TEST'),
+      chalk.dim('  ────────────────────────────────────────'),
       '',
     ];
 
-    for (const r of results) {
-      const status = r.healthy ? chalk.green('OK') : chalk.red('FAIL');
-      const lat = r.healthy ? this.colorLatency(r.latencyMs) : chalk.red(r.error ?? 'unreachable');
-      const active = r.url === this.rpcManager.activeEndpoint.url ? chalk.green(' (active)') : '';
-      lines.push(`    ${status} ${r.label.padEnd(16)} ${lat}${active}`);
+    // Find highest slot across all healthy endpoints for sync comparison
+    const healthySlots = results.filter(r => r.healthy && r.slot).map(r => r.slot!);
+    const maxSlot = healthySlots.length > 0 ? Math.max(...healthySlots) : 0;
+
+    let bestIdx = -1;
+    let bestScore = -1;
+
+    for (let i = 0; i < results.length; i++) {
+      const r = results[i];
+      const status = r.healthy ? chalk.green('PASS') : chalk.red('FAIL');
+      const isActive = r.url === this.rpcManager.activeEndpoint.url;
+      const activeTag = isActive ? chalk.green(' (active)') : '';
+
+      lines.push(`  ${status} ${r.label}${activeTag}`);
+
+      if (r.healthy) {
+        lines.push(`    Latency:  ${this.colorLatency(r.latencyMs)}`);
+        if (r.slot) {
+          const slotDelta = maxSlot - r.slot;
+          const syncStatus = slotDelta === 0
+            ? chalk.green('synced')
+            : slotDelta <= 50
+              ? chalk.yellow(`${slotDelta} slots behind`)
+              : chalk.red(`${slotDelta} slots behind — stale`);
+          lines.push(`    Slot:     ${r.slot.toLocaleString()} (${syncStatus})`);
+        }
+        const fr = this.rpcManager.getFailureRate(r.url);
+        if (fr > 0) {
+          lines.push(`    Failures: ${this.colorFailureRate(fr)}`);
+        }
+
+        // Score: lower latency + synced slot = better
+        const latencyScore = Math.max(0, 1 - r.latencyMs / 3000);
+        const slotScore = r.slot ? Math.max(0, 1 - (maxSlot - r.slot) / 10) : 0.5;
+        const failScore = 1 - this.rpcManager.getFailureRate(r.url);
+        const score = latencyScore * 0.4 + slotScore * 0.3 + failScore * 0.3;
+        if (score > bestScore) {
+          bestScore = score;
+          bestIdx = i;
+        }
+      } else {
+        lines.push(`    Error:    ${chalk.red(r.error ?? 'unreachable')}`);
+      }
+      lines.push('');
+    }
+
+    // Recommendation
+    lines.push(chalk.dim('  ────────────────────────────────────────'));
+    if (bestIdx >= 0) {
+      const best = results[bestIdx];
+      const isCurrent = best.url === this.rpcManager.activeEndpoint.url;
+      if (isCurrent) {
+        lines.push(chalk.green(`  Recommended: ${best.label} (current) — ${best.latencyMs}ms`));
+      } else {
+        lines.push(chalk.yellow(`  Recommended: ${best.label} — ${best.latencyMs}ms (not currently active)`));
+      }
+    } else {
+      lines.push(chalk.red('  No healthy RPC endpoints found'));
+    }
+
+    // Tip for users with only public RPC
+    const healthyCount = results.filter(r => r.healthy).length;
+    if (healthyCount <= 1 && results.length <= 1) {
+      lines.push('');
+      lines.push(chalk.dim('  Tip: Add BACKUP_RPC_1 and BACKUP_RPC_2 in .env for automatic failover.'));
+      lines.push(chalk.dim('  Free RPCs: Helius (helius.dev), QuickNode (quicknode.com)'));
     }
 
     lines.push('');
@@ -202,6 +271,13 @@ export class SystemDiagnostics {
     if (ms < 500) return chalk.green(`${ms}ms`);
     if (ms < 1500) return chalk.yellow(`${ms}ms`);
     return chalk.red(`${ms}ms`);
+  }
+
+  private colorFailureRate(rate: number): string {
+    const pct = `${(rate * 100).toFixed(0)}% fail`;
+    if (rate < 0.1) return chalk.green(pct);
+    if (rate < 0.3) return chalk.yellow(pct);
+    return chalk.red(pct);
   }
 
   private formatUptime(): string {

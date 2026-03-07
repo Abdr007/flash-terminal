@@ -15,7 +15,7 @@ import { shortAddress } from '../utils/format.js';
 import { getErrorMessage } from '../utils/retry.js';
 import { initLogger } from '../utils/logger.js';
 import { getAutopilot, setAiApiKey, getInspector, getScanner, getRegimeDetector } from '../agent/agent-tools.js';
-import { formatUsd, colorPercent } from '../utils/format.js';
+import { formatUsd, formatPrice, colorPercent } from '../utils/format.js';
 import { MarketRegime } from '../regime/regime-types.js';
 import { initSigningGuard } from '../security/signing-guard.js';
 import { RpcManager, buildRpcEndpoints, initRpcManager } from '../network/rpc-manager.js';
@@ -80,6 +80,13 @@ const FAST_DISPATCH: Record<string, ParsedIntent> = {
   'system':            { action: ActionType.SystemStatus },
   'rpc status':        { action: ActionType.RpcStatus },
   'rpc test':          { action: ActionType.RpcTest },
+  'trade history':     { action: ActionType.TradeHistory },
+  'trades':            { action: ActionType.TradeHistory },
+  'journal':           { action: ActionType.TradeHistory },
+  'history':           { action: ActionType.TradeHistory },
+  'market monitor':    { action: ActionType.MarketMonitor },
+  'monitor':           { action: ActionType.MarketMonitor },
+  'watch':             { action: ActionType.MarketMonitor },
 };
 
 /** Timeout wrapper for command execution */
@@ -197,7 +204,7 @@ export class FlashTerminal {
     }
 
     // ─── Initialize RPC Manager ─────────────────────────────────────
-    const rpcEndpoints = buildRpcEndpoints(this.config.rpcUrl);
+    const rpcEndpoints = buildRpcEndpoints(this.config.rpcUrl, this.config.backupRpcUrls);
     this.rpcManager = initRpcManager(rpcEndpoints);
     const connection = this.rpcManager.connection;
 
@@ -271,6 +278,22 @@ export class FlashTerminal {
 
     // Initialize system diagnostics
     initSystemDiagnostics(this.rpcManager, this.context);
+
+    // Wire RPC failover to auto-update FlashClient connection
+    if (!this.config.simulationMode) {
+      this.rpcManager.setConnectionChangeCallback((newConn, ep) => {
+        if (this.flashClient && 'replaceConnection' in this.flashClient) {
+          (this.flashClient as { replaceConnection: (c: typeof newConn) => void }).replaceConnection(newConn);
+        }
+        // Update context reference
+        if (this.context) {
+          this.context.flashClient = this.flashClient;
+        }
+        console.log(chalk.yellow(`\n  RPC failover: now using ${ep.label}`));
+      });
+      // Start background health monitoring for live trading
+      this.rpcManager.startMonitoring();
+    }
 
     // Initialize state reconciliation engine
     const reconciler = initReconciler(this.flashClient);
@@ -1041,6 +1064,7 @@ export class FlashTerminal {
     } catch (error: unknown) {
       console.log(chalk.red(`  Failed to reinitialize live client: ${getErrorMessage(error)}`));
       console.log(chalk.dim('  Trading commands may fail until a wallet is reconnected.'));
+      return;
     }
 
     // Update reconciler with new client
@@ -1123,6 +1147,11 @@ export class FlashTerminal {
     } catch {
       // Best-effort cleanup
     }
+    try {
+      this.rpcManager?.stopMonitoring();
+    } catch {
+      // Best-effort cleanup
+    }
     console.log(chalk.dim('\n  Goodbye.\n'));
     this.rl.close();
     process.exit(0);
@@ -1167,6 +1196,12 @@ export class FlashTerminal {
         console.log(chalk.red(`  Parse error: ${getErrorMessage(error)}`));
         return;
       }
+    }
+
+    // ─── Market Monitor Intercept ────────────────────────────────────
+    if (intent.action === ActionType.MarketMonitor) {
+      await this.handleMarketMonitor();
+      return;
     }
 
     // ─── Dry Run Intercept ──────────────────────────────────────────
@@ -1250,6 +1285,125 @@ export class FlashTerminal {
   }
 
   // ─── Dry Run Handler ─────────────────────────────────────────────
+
+  /**
+   * Handle market monitor — live-updating market table.
+   * Refreshes every 5 seconds. Press any key to exit.
+   */
+  private async handleMarketMonitor(): Promise<void> {
+    const { PriceService } = await import('../data/prices.js');
+    const priceSvc = new PriceService();
+    const { POOL_MARKETS } = await import('../config/index.js');
+
+    // Collect all unique market symbols
+    const allSymbols = [...new Set(Object.values(POOL_MARKETS).flat().map(s => s.toUpperCase()))];
+
+    let running = true;
+
+    const render = async () => {
+      const [priceMap, oi] = await Promise.all([
+        priceSvc.getPrices(allSymbols).catch(() => new Map()),
+        this.fstats.getOpenInterest().catch(() => ({ markets: [] })),
+      ]);
+
+      // Build rows only for markets with live price data
+      const rows: { symbol: string; price: number; change: number; totalOi: number; longPct: number; shortPct: number }[] = [];
+
+      for (const sym of allSymbols) {
+        const tp = priceMap.get(sym);
+        if (!tp) continue;
+        const oiEntry = oi.markets.find(m => m.market.toUpperCase().includes(sym));
+        const longOi = oiEntry?.longOi ?? 0;
+        const shortOi = oiEntry?.shortOi ?? 0;
+        const totalOi = longOi + shortOi;
+        const longPct = totalOi > 0 ? Math.round((longOi / totalOi) * 100) : 50;
+        const shortPct = totalOi > 0 ? 100 - longPct : 50;
+        rows.push({ symbol: sym, price: tp.price, change: tp.priceChange24h, totalOi, longPct, shortPct });
+      }
+
+      // Sort by total OI descending (most active markets first)
+      rows.sort((a, b) => b.totalOi - a.totalOi);
+
+      // Clear screen and render
+      process.stdout.write('\x1B[2J\x1B[H');
+      const now = new Date().toLocaleTimeString();
+      console.log('');
+      console.log(chalk.bold.yellow('  MARKET MONITOR'));
+      console.log(chalk.dim(`  ${now}  |  Refreshing every 5s  |  Press any key to exit`));
+      console.log(chalk.dim('  ' + '─'.repeat(68)));
+      console.log('');
+
+      // Header
+      const hdr = [
+        chalk.bold('  Asset'.padEnd(12)),
+        chalk.bold('Price'.padStart(12)),
+        chalk.bold('24h Change'.padStart(12)),
+        chalk.bold('Open Interest'.padStart(15)),
+        chalk.bold('Long / Short'.padStart(14)),
+      ].join('  ');
+      console.log(hdr);
+      console.log(chalk.dim('  ' + '─'.repeat(68)));
+
+      if (rows.length === 0) {
+        console.log(chalk.dim('\n  Waiting for price data...\n'));
+      } else {
+        for (const r of rows) {
+          const sym = chalk.bold(('  ' + r.symbol).padEnd(12));
+          const price = formatPrice(r.price).padStart(12);
+          const change = colorPercent(r.change).padStart(12);
+          const oiStr = formatUsd(r.totalOi).padStart(15);
+          const ratio = `${r.longPct} / ${r.shortPct}`.padStart(14);
+          const ratioColored = r.longPct > 60 ? chalk.green(ratio) : r.shortPct > 60 ? chalk.red(ratio) : chalk.gray(ratio);
+          console.log(`${sym}  ${price}  ${change}  ${oiStr}  ${ratioColored}`);
+        }
+      }
+
+      console.log('');
+    };
+
+    // Initial render
+    try {
+      await render();
+    } catch {
+      console.log(chalk.red('  Failed to fetch market data.'));
+      return;
+    }
+
+    // Set up refresh interval
+    const interval = setInterval(async () => {
+      if (!running) return;
+      try {
+        await render();
+      } catch {
+        // Silently skip failed refreshes
+      }
+    }, 5_000);
+    interval.unref();
+
+    // Wait for any keypress to exit
+    await new Promise<void>((resolve) => {
+      const wasRaw = process.stdin.isRaw;
+      if (process.stdin.isTTY) {
+        process.stdin.setRawMode(true);
+      }
+      process.stdin.resume();
+
+      const onKey = () => {
+        running = false;
+        clearInterval(interval);
+        process.stdin.removeListener('data', onKey);
+        if (process.stdin.isTTY) {
+          process.stdin.setRawMode(wasRaw ?? false);
+        }
+        // Clear screen and return to prompt
+        process.stdout.write('\x1B[2J\x1B[H');
+        console.log(chalk.dim('  Market monitor stopped.\n'));
+        resolve();
+      };
+
+      process.stdin.on('data', onKey);
+    });
+  }
 
   /**
    * Handle dry-run commands.

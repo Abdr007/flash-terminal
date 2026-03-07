@@ -40,6 +40,7 @@ import { getPoolForMarket } from '../config/index.js';
 import { getLogger } from '../utils/logger.js';
 import { getErrorMessage, withRetry } from '../utils/retry.js';
 import type { WalletManager } from '../wallet/walletManager.js';
+import { getRpcManagerInstance } from '../network/rpc-manager.js';
 
 // ─── Pyth Price Service ──────────────────────────────────────────────────────
 
@@ -181,6 +182,24 @@ function scrubSensitive(msg: string): string {
   return msg.replace(/api[_-]?key=[^&\s]+/gi, 'api_key=***');
 }
 
+/**
+ * Check if an error message indicates a network-level failure (not a program error).
+ * Network errors are candidates for RPC failover; program errors are not.
+ */
+function isNetworkError(msg: string): boolean {
+  const lower = msg.toLowerCase();
+  return lower.includes('timeout') ||
+    lower.includes('econnrefused') ||
+    lower.includes('econnreset') ||
+    lower.includes('enotfound') ||
+    lower.includes('fetch failed') ||
+    lower.includes('network request failed') ||
+    lower.includes('socket hang up') ||
+    lower.includes('429') ||
+    lower.includes('503') ||
+    lower.includes('502');
+}
+
 // ─── FlashClient ─────────────────────────────────────────────────────────────
 
 export class FlashClient implements IFlashClient {
@@ -196,6 +215,10 @@ export class FlashClient implements IFlashClient {
 
   /** Per-market mutex to prevent concurrent transactions on the same market/side */
   private activeTrades = new Set<string>();
+
+  /** Recent trade cache — prevents duplicate submissions within a short window */
+  private recentTrades = new Map<string, number>(); // tradeKey -> timestamp
+  private static readonly TRADE_CACHE_TTL_MS = 60_000;
 
   constructor(connection: Connection, walletManager: WalletManager, config: FlashConfig) {
     this.config = config;
@@ -238,6 +261,32 @@ export class FlashClient implements IFlashClient {
 
   get walletAddress(): string {
     return this.wallet.publicKey.toBase58();
+  }
+
+  /**
+   * Replace the active RPC connection (called by RpcManager on failover).
+   * Safe to call mid-session — in-flight sendTx() calls capture their own
+   * local `conn` reference at the start of each attempt, so swapping
+   * this.connection here does not disrupt confirmation polling.
+   * The new connection takes effect on the next attempt or next trade.
+   */
+  replaceConnection(connection: Connection): void {
+    this.connection = connection;
+    // Rebuild AnchorProvider with the new connection so perpClient uses it too
+    const walletAdapter = new Wallet(this.wallet);
+    this.provider = new AnchorProvider(connection, walletAdapter, {
+      commitment: 'confirmed',
+      preflightCommitment: 'confirmed',
+    });
+    this.perpClient = new PerpetualsClient(
+      this.provider,
+      this.poolConfig.programId,
+      this.poolConfig.perpComposibilityProgramId,
+      this.poolConfig.fbNftRewardProgramId,
+      this.poolConfig.rewardDistributionProgram.programId,
+      { prioritizationFee: this.config.computeUnitPrice }
+    );
+    getLogger().info('CLIENT', 'Connection replaced (RPC failover)');
   }
 
   // ─── Pre-Trade Validation ─────────────────────────────────────────────────
@@ -346,10 +395,11 @@ export class FlashClient implements IFlashClient {
   }
 
   /**
-   * Send a transaction with up to 2 attempts.
+   * Send a transaction with up to 3 attempts.
    * Each attempt gets a fresh blockhash and re-signs via the SDK.
    * Program errors (from simulation) are thrown immediately without retrying.
-   * Total window: ~90s (matches Solana blockhash validity).
+   * Before each retry, checks if the previous attempt's tx landed late
+   * to prevent duplicate collateral operations.
    */
   private async sendTx(
     instructions: TransactionInstruction[],
@@ -371,6 +421,28 @@ export class FlashClient implements IFlashClient {
     let lastSignature = '';
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      // Capture connection at start of attempt — use this reference for the ENTIRE
+      // attempt (send + confirm loop). If a background failover swaps this.connection
+      // mid-poll, the captured reference keeps polling the RPC that actually received
+      // the transaction, preventing false timeouts and duplicate submissions.
+      const conn = this.connection;
+
+      // Before retrying, check if the PREVIOUS attempt's tx landed late.
+      // This prevents duplicate collateral additions/removals where the program
+      // has no built-in dedup (unlike openPosition which rejects duplicates).
+      if (attempt > 1 && lastSignature) {
+        try {
+          const confirmed = await this.isSignatureConfirmed(lastSignature);
+          if (confirmed) {
+            process.stdout.write('                              \r');
+            logger.info('CLIENT', `Previous tx confirmed (late detection before retry): ${lastSignature}`);
+            return lastSignature;
+          }
+        } catch {
+          // Best-effort — proceed with retry if check fails
+        }
+      }
+
       if (attempt === 1) {
         process.stdout.write('  Sending transaction...   \r');
       } else {
@@ -379,7 +451,7 @@ export class FlashClient implements IFlashClient {
       }
 
       try {
-        const latestBlockhash = await this.connection.getLatestBlockhash('confirmed');
+        const latestBlockhash = await conn.getLatestBlockhash('confirmed');
         const allIxs = [cuLimitIx, cuPriceIx, ...instructions];
         const message = MessageV0.compile({
           payerKey: this.wallet.publicKey,
@@ -391,7 +463,7 @@ export class FlashClient implements IFlashClient {
         vtx.sign([this.wallet, ...additionalSigners]);
         const txBytes = Buffer.from(vtx.serialize());
 
-        const signatureStr = await this.connection.sendRawTransaction(txBytes, {
+        const signatureStr = await conn.sendRawTransaction(txBytes, {
           skipPreflight: true,
           maxRetries: 3,
         });
@@ -399,12 +471,13 @@ export class FlashClient implements IFlashClient {
         logger.info('CLIENT', `Tx sent: ${signatureStr} (${txBytes.length} bytes, attempt ${attempt})`);
 
         // Poll for confirmation with periodic resends
+        // Uses the same `conn` that sent the transaction — never switches mid-poll.
         process.stdout.write('  Awaiting confirmation... \r');
         const start = Date.now();
         const timeoutMs = 45_000;
         for (let i = 0; Date.now() - start < timeoutMs; i++) {
           await new Promise(r => setTimeout(r, 2_000));
-          const { value } = await this.connection.getSignatureStatuses([signatureStr]);
+          const { value } = await conn.getSignatureStatuses([signatureStr]);
           const status = value?.[0];
           if (status?.err) {
             throw new Error(`Transaction failed on-chain: ${JSON.stringify(status.err)}`);
@@ -416,8 +489,24 @@ export class FlashClient implements IFlashClient {
           }
           // Resend every other poll to improve delivery
           if (i % 2 === 0) {
-            this.connection.sendRawTransaction(txBytes, { skipPreflight: true, maxRetries: 0 }).catch(() => {});
+            conn.sendRawTransaction(txBytes, { skipPreflight: true, maxRetries: 0 }).catch(() => {});
           }
+        }
+
+        // Before declaring timeout, do one final status check using the SAME
+        // connection that sent the tx. The tx may have landed between the last
+        // poll and now. This prevents duplicate submissions.
+        try {
+          const { value: finalValue } = await conn.getSignatureStatuses([signatureStr]);
+          const finalStatus = finalValue?.[0];
+          if (finalStatus && !finalStatus.err &&
+              (finalStatus.confirmationStatus === 'confirmed' || finalStatus.confirmationStatus === 'finalized')) {
+            process.stdout.write('                              \r');
+            logger.info('CLIENT', `Tx confirmed (late detection): ${signatureStr}`);
+            return signatureStr;
+          }
+        } catch {
+          // Final check is best-effort — if it fails we proceed to retry
         }
 
         lastError = `Not confirmed within ${timeoutMs / 1000}s`;
@@ -430,6 +519,23 @@ export class FlashClient implements IFlashClient {
         }
         lastError = eMsg;
         logger.warn('CLIENT', `Attempt ${attempt} failed: ${scrubSensitive(eMsg)}`);
+
+        // On network-level failures, attempt RPC failover before next retry.
+        // Uses force=true to bypass cooldown — explicit trade failures warrant
+        // immediate failover regardless of the background monitor's cooldown.
+        if (attempt < maxAttempts && isNetworkError(eMsg)) {
+          const rpcMgr = getRpcManagerInstance();
+          if (rpcMgr && rpcMgr.fallbackCount > 0) {
+            logger.info('CLIENT', 'Network error detected — attempting RPC failover before retry');
+            rpcMgr.recordResult(false);
+            const didFailover = await rpcMgr.failover(true);
+            if (didFailover) {
+              // replaceConnection is called via the onConnectionChange callback.
+              // Next iteration captures the new this.connection via `const conn = this.connection`.
+              logger.info('CLIENT', `Switched to ${rpcMgr.activeEndpoint.label} — retrying`);
+            }
+          }
+        }
       }
     }
 
@@ -456,6 +562,45 @@ export class FlashClient implements IFlashClient {
     this.activeTrades.delete(`${market}:${side}`);
   }
 
+  // ─── Recent Trade Cache ──────────────────────────────────────────────────
+
+  /**
+   * Build a cache key for a trade operation.
+   */
+  private tradeCacheKey(action: string, market: string, side: TradeSide, amount?: number): string {
+    return `${action}:${market}:${side}${amount !== undefined ? `:${amount}` : ''}`;
+  }
+
+  /**
+   * Check if an identical trade was recently submitted. Prevents accidental
+   * duplicate commands when the user re-sends after a timeout that actually landed.
+   * Evicts expired entries on each check.
+   */
+  private checkRecentTrade(key: string): void {
+    const now = Date.now();
+    // Evict expired entries
+    for (const [k, ts] of this.recentTrades) {
+      if (now - ts > FlashClient.TRADE_CACHE_TTL_MS) {
+        this.recentTrades.delete(k);
+      }
+    }
+    const lastTime = this.recentTrades.get(key);
+    if (lastTime && now - lastTime < FlashClient.TRADE_CACHE_TTL_MS) {
+      const ago = Math.ceil((now - lastTime) / 1000);
+      throw new Error(
+        `Duplicate trade detected — the same trade was submitted ${ago}s ago.\n` +
+        `  Wait ${Math.ceil((FlashClient.TRADE_CACHE_TTL_MS - (now - lastTime)) / 1000)}s or check "positions" to verify.`
+      );
+    }
+  }
+
+  /**
+   * Record a successful trade in the cache.
+   */
+  private recordRecentTrade(key: string): void {
+    this.recentTrades.set(key, Date.now());
+  }
+
   // ─── Open Position ────────────────────────────────────────────────────────
 
   async openPosition(
@@ -477,6 +622,10 @@ export class FlashClient implements IFlashClient {
         `  Try: open ${leverage}x ${sideStr} ${market} $10`
       );
     }
+
+    // Duplicate trade cache check
+    const cacheKey = this.tradeCacheKey('open', market, side, collateralAmount);
+    this.checkRecentTrade(cacheKey);
 
     // Check USDC balance before building transaction
     const inputSymbol = collateralToken ?? DEFAULT_COLLATERAL_TOKEN;
@@ -592,6 +741,7 @@ export class FlashClient implements IFlashClient {
       }
 
       const txSignature = await this.sendTx(result.instructions, result.additionalSigners, poolConfig);
+      this.recordRecentTrade(cacheKey);
 
       logger.trade('OPEN', {
         market, side, collateral: collateralAmount, leverage,
@@ -615,6 +765,9 @@ export class FlashClient implements IFlashClient {
     const logger = getLogger();
 
     await this.ensureSufficientSol();
+
+    const cacheKey = this.tradeCacheKey('close', market, side);
+    this.checkRecentTrade(cacheKey);
 
     this.acquireTradeLock(market, side);
     try {
@@ -648,6 +801,7 @@ export class FlashClient implements IFlashClient {
       }
 
       const txSignature = await this.sendTx(result.instructions, result.additionalSigners, poolConfig);
+      this.recordRecentTrade(cacheKey);
 
       logger.trade('CLOSE', { market, side, price: targetPrice.uiPrice, tx: txSignature });
       return { txSignature, exitPrice: targetPrice.uiPrice, pnl: 0 };
@@ -661,6 +815,9 @@ export class FlashClient implements IFlashClient {
   async addCollateral(market: string, side: TradeSide, amount: number): Promise<CollateralResult> {
     await this.ensureSufficientSol();
 
+    const cacheKey = this.tradeCacheKey('add', market, side, amount);
+    this.checkRecentTrade(cacheKey);
+
     this.acquireTradeLock(market, side);
     try {
       const poolConfig = this.getPoolConfigForMarket(market);
@@ -673,6 +830,7 @@ export class FlashClient implements IFlashClient {
       );
 
       const txSignature = await this.sendTx(result.instructions, result.additionalSigners, poolConfig);
+      this.recordRecentTrade(cacheKey);
       getLogger().trade('ADD_COLLATERAL', { market, side, amount, tx: txSignature });
       return { txSignature };
     } finally {
@@ -682,6 +840,9 @@ export class FlashClient implements IFlashClient {
 
   async removeCollateral(market: string, side: TradeSide, amount: number): Promise<CollateralResult> {
     await this.ensureSufficientSol();
+
+    const cacheKey = this.tradeCacheKey('remove', market, side, amount);
+    this.checkRecentTrade(cacheKey);
 
     this.acquireTradeLock(market, side);
     try {
@@ -695,6 +856,7 @@ export class FlashClient implements IFlashClient {
       );
 
       const txSignature = await this.sendTx(result.instructions, result.additionalSigners, poolConfig);
+      this.recordRecentTrade(cacheKey);
       getLogger().trade('REMOVE_COLLATERAL', { market, side, amount, tx: txSignature });
       return { txSignature };
     } finally {

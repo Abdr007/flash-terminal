@@ -55,6 +55,11 @@ const READ_ONLY_ALLOWED = new Set<ActionType>([
   ActionType.RpcStatus,
   ActionType.RpcTest,
   ActionType.TxInspect,
+  // Trade journal
+  ActionType.TradeHistory,
+  ActionType.MarketMonitor,
+  // Dry run (preview only, no signing)
+  ActionType.DryRun,
 ]);
 
 /**

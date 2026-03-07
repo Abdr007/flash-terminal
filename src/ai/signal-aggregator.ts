@@ -99,8 +99,19 @@ export function aggregateSignals(
     };
   }
 
-  // When bullish and bearish are exactly equal, return low confidence instead of biasing Long
-  const direction: TradeSide = bullishScore > bearishScore ? TradeSide.Long : bullishScore < bearishScore ? TradeSide.Short : TradeSide.Long;
+  // When bullish and bearish are exactly equal, return near-zero confidence (no directional bias)
+  if (bullishScore === bearishScore) {
+    return {
+      market: market.symbol,
+      direction: TradeSide.Long, // irrelevant — confidence blocks trade
+      recommendedLeverage: 1.1,
+      confidenceScore: 0.05,
+      confidenceLabel: 'low',
+      signalBreakdown: signals,
+      source: 'strategy_engine',
+    };
+  }
+  const direction: TradeSide = bullishScore > bearishScore ? TradeSide.Long : TradeSide.Short;
   const rawConfidence = Math.max(bullishScore, bearishScore) / (bullishScore + bearishScore + 0.5);
   // Reduce confidence when signals conflict: close scores → low confidence
   const conflictPenalty = totalWeight > 0

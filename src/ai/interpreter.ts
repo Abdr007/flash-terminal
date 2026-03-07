@@ -412,6 +412,16 @@ export function localParse(input: string): ParsedIntent | null {
     return { action: ActionType.ScanMarkets };
   }
 
+  // Trade History / Journal
+  if (/^(?:trade\s+history|trades|journal|trade\s+journal|history)$/.test(lower)) {
+    return { action: ActionType.TradeHistory };
+  }
+
+  // Market Monitor
+  if (/^(?:market\s+monitor|monitor|watch|watch\s+markets?)$/.test(lower)) {
+    return { action: ActionType.MarketMonitor };
+  }
+
   // ─── Dry Run Command ────────────────────────────────────────────────────
 
   const dryrunMatch = lower.match(/^(?:dryrun|dry-run|dry\s+run)\s+(.+)$/);
@@ -577,6 +587,7 @@ export class AIInterpreter {
         response = await this.anthropic!.messages.create({
           model: 'claude-haiku-4-5-20251001',
           max_tokens: 256,
+          temperature: 0,
           system: SYSTEM_PROMPT,
           messages: [{ role: 'user', content: userInput }],
         }, { signal: controller.signal });
@@ -669,9 +680,73 @@ export class AIInterpreter {
  * Used when no API key is configured.
  */
 export class OfflineInterpreter {
+  private context: CommandContext = { updatedAt: 0 };
+
+  /** Update conversation context after a successful parse. */
+  private updateContext(intent: ParsedIntent): void {
+    const now = Date.now();
+    if ('market' in intent && intent.market) this.context.lastMarket = intent.market as string;
+    if ('side' in intent) this.context.lastSide = intent.side as TradeSide;
+    if ('leverage' in intent) this.context.lastLeverage = intent.leverage as number;
+    if ('collateral' in intent) this.context.lastCollateral = intent.collateral as number;
+    this.context.lastAction = intent.action;
+    this.context.updatedAt = now;
+  }
+
+  /** Get fresh context (returns undefined if expired). */
+  private getContext(): CommandContext | undefined {
+    if (Date.now() - this.context.updatedAt > CONTEXT_TTL_MS) return undefined;
+    return this.context;
+  }
+
+  /** Try to resolve follow-up commands using conversation context. */
+  private tryContextualParse(userInput: string): ParsedIntent | null {
+    const ctx = this.getContext();
+    if (!ctx) return null;
+
+    const lower = normalizeAssetAliases(normalizeNumberWords(userInput))
+      .replace(/[\x00-\x1f\x7f]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .toLowerCase();
+
+    if (/^close\s+(it|that|the\s+position)$/.test(lower) && ctx.lastMarket && ctx.lastSide) {
+      return { action: ActionType.ClosePosition, market: ctx.lastMarket, side: ctx.lastSide };
+    }
+
+    const increaseMatch = lower.match(/^(?:increase|change|set)\s+(?:it\s+)?(?:collateral\s+)?to\s+\$?(\d+(?:\.\d+)?)$/);
+    if (increaseMatch && ctx.lastMarket && ctx.lastSide && ctx.lastCollateral) {
+      const newAmount = parseFloat(increaseMatch[1]);
+      const diff = newAmount - ctx.lastCollateral;
+      if (diff > 0) {
+        return { action: ActionType.AddCollateral, market: ctx.lastMarket, side: ctx.lastSide, amount: diff };
+      }
+    }
+
+    const addMatch = lower.match(/^add\s+\$?(\d+(?:\.\d+)?)\s+(?:to\s+it|more|to\s+that)$/);
+    if (addMatch && ctx.lastMarket && ctx.lastSide) {
+      return { action: ActionType.AddCollateral, market: ctx.lastMarket, side: ctx.lastSide, amount: parseFloat(addMatch[1]) };
+    }
+
+    if (/^(?:analyze\s+it|what\s+about\s+it)$/.test(lower) && ctx.lastMarket) {
+      return { action: ActionType.Analyze, market: ctx.lastMarket };
+    }
+
+    return null;
+  }
+
   async parseIntent(userInput: string): Promise<ParsedIntent> {
     const result = localParse(userInput);
-    if (result) return result;
+    if (result) {
+      this.updateContext(result);
+      return result;
+    }
+
+    const contextResult = this.tryContextualParse(userInput);
+    if (contextResult) {
+      this.updateContext(contextResult);
+      return contextResult;
+    }
 
     getLogger().warn('AI', 'Could not parse locally. Set an AI API key for AI-powered parsing.');
     return { action: ActionType.Help };

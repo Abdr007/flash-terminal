@@ -5,6 +5,11 @@ import { createConnection } from '../wallet/connection.js';
 
 const LATENCY_THRESHOLD_MS = 3_000;
 const HEALTH_CHECK_TIMEOUT_MS = 5_000;
+const HEALTH_MONITOR_INTERVAL_MS = 30_000;
+const FAILURE_RATE_WINDOW = 20;
+const FAILURE_RATE_THRESHOLD = 0.5; // 50% failure rate triggers failover
+const FAILOVER_COOLDOWN_MS = 60_000; // Minimum 60s between failovers to prevent oscillation
+const SLOT_LAG_THRESHOLD = 50; // Slots behind network tip before endpoint is considered stale
 
 export interface RpcEndpoint {
   url: string;
@@ -16,18 +21,34 @@ export interface RpcHealthResult {
   label: string;
   healthy: boolean;
   latencyMs: number;
+  slot?: number;
+  slotLag?: number;
   error?: string;
 }
 
+export type ConnectionChangeCallback = (connection: Connection, endpoint: RpcEndpoint) => void;
+
 /**
- * RPC Manager — manages multiple RPC endpoints with automatic failover.
- * Primary is tried first; on failure, backups are tried in order.
+ * RPC Manager — manages multiple RPC endpoints with automatic failover,
+ * background health monitoring, failure rate tracking, and connection
+ * change propagation.
  */
 export class RpcManager {
   private endpoints: RpcEndpoint[];
   private activeIndex = 0;
   private _connection: Connection;
   private failoverCount = 0;
+  private monitorTimer: ReturnType<typeof setInterval> | null = null;
+  private onConnectionChange: ConnectionChangeCallback | null = null;
+  private lastFailoverTime = 0;
+  private failoverInProgress = false;
+
+  /** Rolling failure window per endpoint (true = success, false = failure) */
+  private failureHistory: Map<string, boolean[]> = new Map();
+  /** Last measured latency per endpoint */
+  private latencyHistory: Map<string, number> = new Map();
+  /** Last observed slot per endpoint (for slot lag detection) */
+  private slotHistory: Map<string, number> = new Map();
 
   constructor(endpoints: RpcEndpoint[]) {
     if (endpoints.length === 0) {
@@ -35,6 +56,9 @@ export class RpcManager {
     }
     this.endpoints = endpoints;
     this._connection = createConnection(endpoints[0].url);
+    for (const ep of endpoints) {
+      this.failureHistory.set(ep.url, []);
+    }
   }
 
   get connection(): Connection {
@@ -58,26 +82,104 @@ export class RpcManager {
   }
 
   /**
-   * Test a single RPC endpoint for health + latency.
+   * Register a callback invoked whenever the active connection changes (failover).
+   * Used by FlashClient to pick up the new connection automatically.
+   */
+  setConnectionChangeCallback(cb: ConnectionChangeCallback): void {
+    this.onConnectionChange = cb;
+  }
+
+  /**
+   * Record a success or failure for the active endpoint.
+   */
+  recordResult(success: boolean): void {
+    const url = this.activeEndpoint.url;
+    const history = this.failureHistory.get(url) ?? [];
+    history.push(success);
+    if (history.length > FAILURE_RATE_WINDOW) {
+      history.shift();
+    }
+    this.failureHistory.set(url, history);
+  }
+
+  /**
+   * Get failure rate for an endpoint (0.0 = all success, 1.0 = all failures).
+   */
+  getFailureRate(url: string): number {
+    const history = this.failureHistory.get(url);
+    if (!history || history.length === 0) return 0;
+    const failures = history.filter(s => !s).length;
+    return failures / history.length;
+  }
+
+  /**
+   * Get the highest known slot across all endpoints (used for slot lag comparison).
+   */
+  private getMaxKnownSlot(): number {
+    let max = 0;
+    for (const slot of this.slotHistory.values()) {
+      if (slot > max) max = slot;
+    }
+    return max;
+  }
+
+  /**
+   * Get current slot lag for an endpoint (0 = synced, -1 = unknown).
+   */
+  getSlotLag(url: string): number {
+    const slot = this.slotHistory.get(url);
+    if (slot === undefined) return -1;
+    const max = this.getMaxKnownSlot();
+    if (max === 0 || slot >= max) return 0;
+    return max - slot;
+  }
+
+  /**
+   * Test a single RPC endpoint for health + latency + slot.
+   * Uses a lightweight Connection without WebSocket to avoid leaking sockets
+   * during repeated health checks.
    */
   async checkHealth(endpoint: RpcEndpoint): Promise<RpcHealthResult> {
     try {
-      const conn = createConnection(endpoint.url);
+      // Lightweight connection: no WebSocket, just HTTP for health checks
+      const conn = new Connection(endpoint.url, {
+        commitment: 'confirmed',
+        disableRetryOnRateLimit: true,
+        fetch: (url, options) =>
+          fetch(url, { ...options, signal: AbortSignal.timeout(HEALTH_CHECK_TIMEOUT_MS) }),
+      });
       const start = Date.now();
-      await Promise.race([
-        conn.getLatestBlockhash('confirmed'),
-        new Promise((_, reject) =>
-          setTimeout(() => reject(new Error('timeout')), HEALTH_CHECK_TIMEOUT_MS)
-        ),
-      ]);
+      await conn.getLatestBlockhash('confirmed');
       const latencyMs = Date.now() - start;
+      this.latencyHistory.set(endpoint.url, latencyMs);
+
+      // Get slot for sync check and slot lag detection
+      let slot: number | undefined;
+      let slotLag: number | undefined;
+      try {
+        slot = await conn.getSlot('confirmed');
+        if (slot !== undefined) {
+          this.slotHistory.set(endpoint.url, slot);
+          // Compute slot lag: compare against the highest known slot across all endpoints
+          const maxKnownSlot = this.getMaxKnownSlot();
+          if (maxKnownSlot > 0 && slot < maxKnownSlot) {
+            slotLag = maxKnownSlot - slot;
+          }
+        }
+      } catch {
+        // Slot check is best-effort
+      }
+
       return {
         url: endpoint.url,
         label: endpoint.label,
         healthy: true,
         latencyMs,
+        slot,
+        slotLag,
       };
     } catch (e: unknown) {
+      this.latencyHistory.set(endpoint.url, -1);
       return {
         url: endpoint.url,
         label: endpoint.label,
@@ -103,52 +205,98 @@ export class RpcManager {
     const calls = 3;
     for (let i = 0; i < calls; i++) {
       const start = Date.now();
+      let timer: ReturnType<typeof setTimeout> | undefined;
       try {
         await Promise.race([
           this._connection.getLatestBlockhash('confirmed'),
-          new Promise((_, reject) =>
-            setTimeout(() => reject(new Error('timeout')), HEALTH_CHECK_TIMEOUT_MS)
-          ),
+          new Promise<never>((_, reject) => {
+            timer = setTimeout(() => reject(new Error('timeout')), HEALTH_CHECK_TIMEOUT_MS);
+          }),
         ]);
         total += Date.now() - start;
       } catch {
         total += HEALTH_CHECK_TIMEOUT_MS;
+      } finally {
+        if (timer !== undefined) clearTimeout(timer);
       }
     }
-    return Math.round(total / calls);
+    const avg = Math.round(total / calls);
+    this.latencyHistory.set(this.activeEndpoint.url, avg);
+    return avg;
   }
 
   /**
    * Attempt automatic failover to the next healthy endpoint.
    * Returns true if failover succeeded, false if no healthy backup found.
+   * Enforces a cooldown period to prevent oscillation between endpoints.
+   * @param force — bypass cooldown (used for explicit network errors during trading)
    */
-  async failover(): Promise<boolean> {
+  async failover(force = false): Promise<boolean> {
     const logger = getLogger();
 
-    for (let i = 0; i < this.endpoints.length; i++) {
-      const idx = (this.activeIndex + 1 + i) % this.endpoints.length;
-      if (idx === this.activeIndex) continue;
-
-      const ep = this.endpoints[idx];
-      const health = await this.checkHealth(ep);
-
-      if (health.healthy) {
-        logger.warn('RPC', `Failover: switching from ${this.endpoints[this.activeIndex].label} to ${ep.label}`);
-        this.activeIndex = idx;
-        this._connection = createConnection(ep.url);
-        this.failoverCount++;
-        return true;
-      }
+    // Prevent concurrent failover calls from racing each other.
+    // The monitor and sendTx can both call failover() concurrently —
+    // without this guard, two callers can both pass the cooldown check,
+    // both create new connections, and call replaceConnection twice.
+    if (this.failoverInProgress) {
+      logger.debug('RPC', 'Failover already in progress — skipping concurrent call');
+      return false;
     }
 
-    logger.error('RPC', 'No healthy backup RPC found');
-    return false;
+    // Cooldown: prevent oscillation between endpoints
+    const now = Date.now();
+    if (!force && now - this.lastFailoverTime < FAILOVER_COOLDOWN_MS) {
+      const remaining = Math.ceil((FAILOVER_COOLDOWN_MS - (now - this.lastFailoverTime)) / 1000);
+      logger.debug('RPC', `Failover cooldown active (${remaining}s remaining) — skipping`);
+      return false;
+    }
+
+    this.failoverInProgress = true;
+    try {
+      for (let i = 0; i < this.endpoints.length; i++) {
+        const idx = (this.activeIndex + 1 + i) % this.endpoints.length;
+        if (idx === this.activeIndex) continue;
+
+        const ep = this.endpoints[idx];
+        const health = await this.checkHealth(ep);
+
+        if (health.healthy) {
+          const prevLabel = this.endpoints[this.activeIndex].label;
+          logger.warn('RPC', `Failover: switching from ${prevLabel} to ${ep.label} (latency: ${health.latencyMs}ms)`);
+          this.activeIndex = idx;
+          this._connection = createConnection(ep.url);
+          this.failoverCount++;
+          this.lastFailoverTime = Date.now();
+
+          // Notify FlashClient of connection change
+          if (this.onConnectionChange) {
+            this.onConnectionChange(this._connection, ep);
+          }
+
+          return true;
+        }
+      }
+
+      logger.error('RPC', 'No healthy backup RPC found');
+      return false;
+    } finally {
+      this.failoverInProgress = false;
+    }
   }
 
   /**
-   * Get a connection, checking health first. If unhealthy, attempt failover.
+   * Get a connection, checking health first. If unhealthy or high failure rate, attempt failover.
    */
   async getHealthyConnection(): Promise<Connection> {
+    // Check failure rate first (fast, no network call)
+    const failureRate = this.getFailureRate(this.activeEndpoint.url);
+    if (failureRate >= FAILURE_RATE_THRESHOLD && this.fallbackCount > 0) {
+      const logger = getLogger();
+      logger.warn('RPC', `High failure rate (${(failureRate * 100).toFixed(0)}%) on ${this.activeEndpoint.label} — attempting failover`);
+      const didFailover = await this.failover();
+      if (didFailover) return this._connection;
+    }
+
     const health = await this.checkHealth(this.activeEndpoint);
 
     if (!health.healthy || health.latencyMs > LATENCY_THRESHOLD_MS) {
@@ -163,7 +311,57 @@ export class RpcManager {
   }
 
   /**
-   * Format status for CLI display.
+   * Start background health monitoring.
+   * Checks the active endpoint periodically and auto-fails over if needed.
+   */
+  startMonitoring(): void {
+    if (this.monitorTimer) return; // Already running
+    const logger = getLogger();
+    logger.info('RPC', `Health monitor started (interval: ${HEALTH_MONITOR_INTERVAL_MS / 1000}s)`);
+
+    this.monitorTimer = setInterval(async () => {
+      try {
+        const health = await this.checkHealth(this.activeEndpoint);
+        this.recordResult(health.healthy);
+
+        if (!health.healthy) {
+          logger.warn('RPC', `Active RPC ${this.activeEndpoint.label} unhealthy — attempting failover`);
+          await this.failover();
+        } else if (health.latencyMs > LATENCY_THRESHOLD_MS) {
+          logger.warn('RPC', `Active RPC ${this.activeEndpoint.label} latency ${health.latencyMs}ms > ${LATENCY_THRESHOLD_MS}ms threshold`);
+          if (this.fallbackCount > 0) {
+            await this.failover();
+          }
+        } else if (health.slotLag !== undefined && health.slotLag > SLOT_LAG_THRESHOLD) {
+          logger.warn('RPC', `Active RPC ${this.activeEndpoint.label} is ${health.slotLag} slots behind (threshold: ${SLOT_LAG_THRESHOLD}) — attempting failover`);
+          if (this.fallbackCount > 0) {
+            await this.failover();
+          }
+        }
+      } catch {
+        // Monitor must never crash
+      }
+    }, HEALTH_MONITOR_INTERVAL_MS);
+
+    // Don't let the monitor keep Node alive
+    if (this.monitorTimer.unref) {
+      this.monitorTimer.unref();
+    }
+  }
+
+  /**
+   * Stop background health monitoring.
+   */
+  stopMonitoring(): void {
+    if (this.monitorTimer) {
+      clearInterval(this.monitorTimer);
+      this.monitorTimer = null;
+      getLogger().info('RPC', 'Health monitor stopped');
+    }
+  }
+
+  /**
+   * Format status for CLI display (enhanced with per-endpoint details).
    */
   formatStatus(latencyMs: number): string {
     const active = this.activeEndpoint;
@@ -173,23 +371,66 @@ export class RpcManager {
       chalk.dim('  ────────────────────────────'),
       '',
       `  Active RPC:    ${chalk.cyan(active.label)}`,
+      `  Endpoint:      ${chalk.dim(this.maskUrl(active.url))}`,
       `  Latency:       ${this.colorLatency(latencyMs)}`,
       `  Fallback RPCs: ${chalk.bold(String(this.fallbackCount))}`,
       `  Failovers:     ${chalk.bold(String(this.failoverCount))}`,
     ];
 
+    // Slot lag for active
+    const activeSlotLag = this.getSlotLag(active.url);
+    if (activeSlotLag > 0) {
+      lines.push(`  Slot Lag:      ${this.colorSlotLag(activeSlotLag)}`);
+    }
+
+    // Failure rate for active
+    const failRate = this.getFailureRate(active.url);
+    if (failRate > 0) {
+      lines.push(`  Failure Rate:  ${this.colorFailureRate(failRate)}`);
+    }
+
     if (this.endpoints.length > 1) {
       lines.push('');
-      lines.push(chalk.bold('  Endpoints'));
+      lines.push(chalk.bold('  All Endpoints'));
+      lines.push(chalk.dim('  ─────────────────────────'));
       for (let i = 0; i < this.endpoints.length; i++) {
         const ep = this.endpoints[i];
-        const marker = i === this.activeIndex ? chalk.green('*') : chalk.dim('-');
-        lines.push(`    ${marker} ${ep.label} ${i === this.activeIndex ? chalk.green('(active)') : ''}`);
+        const isActive = i === this.activeIndex;
+        const marker = isActive ? chalk.green('●') : chalk.dim('○');
+        const label = isActive ? chalk.green(ep.label) : ep.label;
+        const lat = this.latencyHistory.get(ep.url);
+        const latStr = lat !== undefined ? ` ${this.colorLatency(lat)}` : '';
+        const fr = this.getFailureRate(ep.url);
+        const frStr = fr > 0 ? ` ${this.colorFailureRate(fr)}` : '';
+        const sl = this.getSlotLag(ep.url);
+        const slStr = sl > 0 ? ` ${this.colorSlotLag(sl)}` : '';
+        lines.push(`    ${marker} ${label.padEnd(18)}${latStr}${frStr}${slStr}`);
+        lines.push(chalk.dim(`      ${this.maskUrl(ep.url)}`));
       }
     }
 
     lines.push('');
     return lines.join('\n');
+  }
+
+  /**
+   * Mask API keys in URLs for display.
+   */
+  private maskUrl(url: string): string {
+    try {
+      const parsed = new URL(url);
+      // Mask path segments that look like API keys (long alphanumeric strings)
+      const parts = parsed.pathname.split('/');
+      const masked = parts.map(p => p.length > 20 ? p.slice(0, 6) + '***' : p);
+      parsed.pathname = masked.join('/');
+      // Remove query params that might contain keys
+      if (parsed.search) {
+        parsed.search = '';
+      }
+      return parsed.toString().replace(/\/$/, '');
+    } catch {
+      return url.slice(0, 30) + '***';
+    }
   }
 
   private colorLatency(ms: number): string {
@@ -198,25 +439,37 @@ export class RpcManager {
     if (ms < 1500) return chalk.yellow(`${ms}ms`);
     return chalk.red(`${ms}ms`);
   }
+
+  private colorFailureRate(rate: number): string {
+    const pct = `${(rate * 100).toFixed(0)}% fail`;
+    if (rate < 0.1) return chalk.green(pct);
+    if (rate < 0.3) return chalk.yellow(pct);
+    return chalk.red(pct);
+  }
+
+  private colorSlotLag(lag: number): string {
+    if (lag <= 0) return chalk.green('synced');
+    if (lag <= 10) return chalk.green(`${lag} slots behind`);
+    if (lag <= SLOT_LAG_THRESHOLD) return chalk.yellow(`${lag} slots behind`);
+    return chalk.red(`${lag} slots behind`);
+  }
 }
 
 /**
- * Build RPC endpoints from environment config.
- * Reads: RPC_URL, BACKUP_RPC_1, BACKUP_RPC_2
+ * Build RPC endpoints from config.
+ * Accepts the primary URL and optional backup URLs from the config.
  */
-export function buildRpcEndpoints(primaryUrl: string): RpcEndpoint[] {
+export function buildRpcEndpoints(primaryUrl: string, backupUrls?: string[]): RpcEndpoint[] {
   const endpoints: RpcEndpoint[] = [
     { url: primaryUrl, label: labelFromUrl(primaryUrl) },
   ];
 
-  const backup1 = process.env.BACKUP_RPC_1;
-  const backup2 = process.env.BACKUP_RPC_2;
-
-  if (backup1) {
-    endpoints.push({ url: backup1, label: labelFromUrl(backup1) });
-  }
-  if (backup2) {
-    endpoints.push({ url: backup2, label: labelFromUrl(backup2) });
+  if (backupUrls) {
+    for (const url of backupUrls) {
+      if (url) {
+        endpoints.push({ url, label: labelFromUrl(url) });
+      }
+    }
   }
 
   return endpoints;
@@ -244,6 +497,8 @@ function labelFromUrl(url: string): string {
     if (host.includes('alchemy')) return 'Alchemy';
     if (host.includes('triton')) return 'Triton';
     if (host.includes('getblock')) return 'GetBlock';
+    if (host.includes('ankr')) return 'Ankr';
+    if (host.includes('shyft')) return 'Shyft';
     if (host.includes('mainnet-beta.solana.com')) return 'Solana Public';
     if (host === 'localhost' || host === '127.0.0.1') return 'Localhost';
     return host.split('.')[0] || 'Custom';

@@ -289,6 +289,9 @@ export class ToolEngine {
       case ActionType.TxInspect:
         return { toolName: 'tx_inspect', params: { signature: intent.signature } };
 
+      case ActionType.TradeHistory:
+        return { toolName: 'trade_history', params: {} };
+
       default:
         return null;
     }
@@ -302,6 +305,9 @@ export class ToolEngine {
       '',
       `  ${chalk.cyan('markets')}`,
       chalk.dim('    View available trading markets.'),
+      '',
+      `  ${chalk.cyan('monitor')}`,
+      chalk.dim('    Live market monitor with prices, OI, and long/short ratio.'),
       '',
       `  ${chalk.cyan('scan')}`,
       chalk.dim('    Scan all markets and identify potential opportunities.'),
@@ -348,6 +354,7 @@ export class ToolEngine {
       `    ${chalk.cyan('close SOL long')}           Close a position`,
       `    ${chalk.cyan('add $200 to SOL long')}     Add collateral`,
       `    ${chalk.cyan('remove $100 from ETH long')} Remove collateral`,
+      `    ${chalk.cyan('trade history')}             View recent trades`,
       '',
     ];
 
