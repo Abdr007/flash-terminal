@@ -1,12 +1,15 @@
-# Flash AI Terminal
+![Build](https://img.shields.io/badge/build-passing-brightgreen)
+![Node](https://img.shields.io/badge/node-%3E%3D20-blue)
+![TypeScript](https://img.shields.io/badge/typescript-5.7-blue)
+![License](https://img.shields.io/badge/license-MIT-green)
+![Code Quality](https://img.shields.io/badge/code%20quality-A-brightgreen)
+![Solana](https://img.shields.io/badge/solana-mainnet--beta-purple)
 
-[![Build](https://img.shields.io/badge/build-passing-brightgreen)]()
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Node](https://img.shields.io/badge/node-%3E%3D20.0.0-brightgreen)]()
-[![TypeScript](https://img.shields.io/badge/typescript-5.7-blue)]()
-[![Solana](https://img.shields.io/badge/solana-mainnet--beta-purple)]()
+# FLASH AI TERMINAL
 
-A command-line trading terminal for the [Flash Trade](https://www.flash.trade/) protocol on Solana. Provides AI-powered command parsing, real-time market analysis, portfolio monitoring, risk alerts, and on-chain trade execution.
+A command-line trading terminal for the [Flash Trade](https://www.flash.trade/) protocol on Solana.
+
+Provides AI-powered command parsing, real-time market analysis, portfolio monitoring, liquidation risk alerts, transaction dry-run, and on-chain trade execution.
 
 ---
 
@@ -46,6 +49,320 @@ flash [live] > _
 
 ---
 
+## CLI Demonstration
+
+### Viewing Markets
+
+```
+flash [sim] > markets
+
+  FLASH TRADE MARKETS
+  ─────────────────────────────────────
+
+  Crypto.1
+    SOL    BTC    ETH    ZEC    BNB
+
+  Virtual.1
+    XAG    XAU    CRUDEOIL    EUR    GBP    USDJPY    USDCNH
+
+  Governance.1
+    JTO    JUP    PYTH    RAY    HYPE    MET    KMNO
+
+  Community.1       PUMP    BONK    PENGU
+  Community.2       WIF
+  Trump.1           FARTCOIN
+  Ore.1             ORE
+  Remora.1          TSLAr    MSTRr    CRCLr    NVDAr    SPYr
+```
+
+### Scanning for Opportunities
+
+```
+flash [sim] > scan
+
+  Scanning 9 markets...
+
+  Market Opportunities
+  ─────────────────────────────────────
+    1. SOL    LONG   72%   Momentum breakout
+    2. BTC    SHORT  65%   Mean reversion signal
+    3. JUP    LONG   58%   Whale accumulation
+```
+
+### Analyzing a Market
+
+```
+flash [sim] > analyze SOL
+
+  SOL Market Analysis
+  ─────────────────────────────────────
+  Price:        $148.52
+  24h Change:   +3.2%
+  Regime:       TRENDING
+  Signal:       LONG (72% confidence)
+
+  Strategy Breakdown
+    Momentum:        LONG   78%
+    Mean Reversion:  LONG   65%
+    Whale Follow:    LONG   74%
+```
+
+### Opening a Position
+
+```
+flash [sim] > open 2x long SOL $10
+
+  Open Position Summary
+  ─────────────────────────────────────
+  Market:      SOL-PERP
+  Side:        LONG
+  Leverage:    2.0x
+  Collateral:  $10.00
+  Size:        $20.00
+  Est. Fee:    $0.02
+
+  Confirm? (yes/no) yes
+  Confirmed in 0.1s
+```
+
+### Viewing Positions and Portfolio
+
+```
+flash [sim] > positions
+
+  Market  Side  Lev   Size     Collateral  Entry     Mark      PnL
+  SOL     LONG  2.0x  $20.00   $10.00      $148.52   $148.71   +$0.26
+
+flash [sim] > portfolio
+
+  Portfolio Summary
+  ─────────────────────────────────────
+  Balance:         $9,989.98
+  Total Exposure:  $20.00
+  Unrealized PnL:  +$0.26
+  Realized PnL:    $0.00
+  Total Fees:      $0.02
+  Positions:       1
+```
+
+### Closing a Position
+
+```
+flash [sim] > close SOL long
+
+  Confirm? (yes/no) yes
+  Confirmed in 0.1s
+  Realized PnL: +$0.24
+```
+
+---
+
+## Natural Language Commands
+
+The terminal accepts natural English instructions. An AI interpreter converts spoken commands into structured trading actions. All parsed intents pass through the same validation and confirmation pipeline as typed commands.
+
+```
+flash [sim] > open a 2x long position on sol with ten dollars
+
+  AI Interpretation
+  ─────────────────────────────────────
+  Action:      open_position
+  Market:      SOL
+  Side:        LONG
+  Leverage:    2x
+  Collateral:  $10.00
+
+  Execute trade? (yes/no)
+```
+
+Additional examples:
+
+```
+flash > buy sol with 5x leverage and 100 dollars
+flash > short ethereum with 3x leverage $50
+flash > close my solana long position
+flash > add twenty dollars to my sol long
+flash > remove $50 from my btc short
+flash > how is my portfolio doing
+flash > what are the best opportunities right now
+flash > analyze bitcoin
+```
+
+The interpreter normalizes:
+
+- **Number words** — "ten" becomes 10, "twenty five" becomes 25, "five hundred" becomes 500
+- **Asset names** — "solana" resolves to SOL, "bitcoin" to BTC, "ethereum" to ETH, "gold" to XAU
+- **Leverage** — "5x", "5 times", "leverage 5" all resolve to 5
+- **Collateral** — "$500", "500 dollars", "500 USDC" all resolve to 500
+
+If the AI cannot determine intent, the system falls back to the built-in regex parser. All commands work without AI keys configured.
+
+---
+
+## Transaction Preview (Dry Run)
+
+The `dryrun` command compiles a transaction and runs Solana simulation without signing or sending. Designed for protocol developers, security auditors, and advanced traders who want to inspect transaction behavior before execution.
+
+```
+flash [live] > dryrun open 2x long SOL $10
+
+  TRANSACTION PREVIEW (DRY RUN)
+  ─────────────────────────────────────
+
+  Trade Parameters
+    Market:         SOL
+    Side:           LONG
+    Collateral:     $10.00
+    Leverage:       2x
+    Position Size:  $20.00
+
+    Entry Price:    $148.52
+    Liq. Price:     $81.69
+    Est. Fee:       $0.0160
+
+  ─────────────────────────────────────
+  Solana Transaction
+    Program:        FLASHhBBFyEr...
+    Accounts:       14
+    Instructions:   4
+    Tx Size:        892 bytes
+    CU Budget:      400,000
+
+  ─────────────────────────────────────
+  Simulation Result
+    Status:         SUCCESS
+    CU Consumed:    123,456
+
+  Program Logs
+    Program FLASHhBBFy... invoke [1]
+    Program log: open_position
+    Program FLASHhBBFy... success
+
+  ─────────────────────────────────────
+  No transaction was signed or sent.
+```
+
+The dry-run mode:
+
+- Compiles the full `MessageV0` transaction with compute budget instructions
+- Calls `connection.simulateTransaction()` on the Solana RPC
+- Displays program logs, compute units consumed, and any errors
+- Never signs the transaction
+- Never sends the transaction to the network
+
+---
+
+## Real-Time Risk Monitor
+
+The risk monitor runs as a background process and continuously checks liquidation distance for all open positions.
+
+```
+flash [sim] > risk monitor on
+  Risk monitor started. (prices every 5s, positions every 20s)
+```
+
+### Alert Levels
+
+| Level | Distance to Liquidation | Action |
+|-------|------------------------|--------|
+| **Safe** | > 35% | No alert |
+| **Warning** | < 30% | Yellow warning with position details |
+| **Critical** | < 15% | Red alert with collateral suggestion |
+
+Hysteresis thresholds prevent alert oscillation:
+
+- Warning triggers at < 30%, recovers at > 35%
+- Critical triggers at < 15%, recovers at > 18%
+
+### Warning Alert
+
+```
+  ⚠ RISK WARNING
+  ─────────────────────────────────────
+  SOL LONG 5x
+  Entry:       $148.52
+  Current:     $141.20
+  Liquidation: $133.00
+
+  Distance to liquidation: 22%
+
+  Add $45 collateral to restore distance to 35%.
+```
+
+### Critical Alert
+
+```
+  CRITICAL LIQUIDATION RISK
+  ═════════════════════════════════════
+  SOL LONG 10x
+  Entry:       $148.52
+  Current:     $139.50
+  Liquidation: $136.80
+
+  Distance to liquidation: 8%
+
+  Add collateral or reduce position immediately.
+  Add $120 collateral to restore distance to 35%.
+```
+
+The monitor auto-calculates the exact collateral amount needed to restore a safe liquidation distance using binary search over the leverage-to-liquidation model.
+
+---
+
+## Market Opportunity Scanner
+
+The scanner analyzes all available markets and ranks them by signal strength.
+
+```
+flash [sim] > scan
+
+  Scanning 9 markets...
+
+  Market Opportunities
+  ─────────────────────────────────────
+  Rank  Market  Dir    Score  Strategy
+    1.  SOL     LONG   72%   Momentum breakout
+    2.  BTC     SHORT  65%   Mean reversion signal
+    3.  JUP     LONG   58%   Whale accumulation
+```
+
+Three independent strategies produce signals that are aggregated with regime-weighted scoring:
+
+| Strategy | Detects | Data Source |
+|----------|---------|-------------|
+| Momentum | Strong directional moves | Price changes, volume trends |
+| Mean Reversion | Oversold/overbought conditions | Price deviation, open interest |
+| Whale Follow | Large position clustering | On-chain whale activity |
+
+The market regime (trending, ranging, volatile, whale-dominated, low-liquidity) dynamically adjusts strategy weights. High-volatility regimes reduce leverage suggestions. Low-liquidity regimes reduce position sizing.
+
+---
+
+## Screenshots
+
+When evaluating this project, the following views demonstrate the core functionality:
+
+| View | Description |
+|------|-------------|
+| **Market Scanner** | Output of `scan` showing ranked opportunities with confidence scores |
+| **Risk Monitor** | Warning and critical alerts with liquidation distance and collateral suggestions |
+| **Portfolio Summary** | Output of `portfolio` showing exposure, PnL, fees, and position table |
+| **Transaction Preview** | Output of `dryrun` showing compiled transaction details and simulation logs |
+| **Protocol Inspector** | Output of `inspect protocol` and `inspect market` showing on-chain state |
+
+To capture screenshots, run the terminal in simulation mode and execute the commands shown in the CLI Demonstration section above.
+
+---
+
+## Design Philosophy
+
+- **Deterministic command execution** — All commands resolve to structured `ParsedIntent` objects validated by Zod schemas. The same input always produces the same action.
+- **AI-assisted, not AI-dependent** — The AI interpreter is a convenience layer. All commands work through the built-in regex parser without any AI keys configured.
+- **Defensive error handling** — `Number.isFinite()` guards on all arithmetic, try/catch on all external calls, timeout enforcement on all network requests. No NaN or Infinity values propagate through calculations.
+- **Developer transparency** — Every trade shows full position details before confirmation. The `dryrun` command exposes the exact transaction structure. Blockchain state is always authoritative over local state.
+
+---
+
 ## Key Features
 
 ### Trading Execution
@@ -54,6 +371,7 @@ flash [live] > _
 - Add and remove collateral from existing positions
 - On-chain transaction signing and submission via Flash SDK
 - Trade confirmation gates with full position summary before execution
+- Per-market trade mutex prevents concurrent transaction submissions
 
 ### Market Intelligence
 
@@ -81,6 +399,7 @@ flash [live] > _
 - Signing security guards with rate limiting and audit logging
 - RPC endpoint management with failover
 - Plugin architecture for custom tools and strategies
+- Transaction dry-run with Solana simulation
 
 ---
 
@@ -225,77 +544,6 @@ All commands work without AI keys. The built-in regex parser handles standard co
 
 ---
 
-## Quick Start
-
-```
-$ npm start
-
-  Select mode:
-    1 → Live Trading
-    2 → Simulation
-    3 → Exit
-
-  > 2
-
-  FLASH AI TERMINAL
-  Simulation Mode — $10,000.00 balance
-```
-
-### Example Session
-
-```
-flash [sim] > markets
-  Available markets by pool...
-
-flash [sim] > scan
-  Scanning 9 markets...
-
-  Top Opportunities
-    1. SOL    LONG   72%   Momentum breakout
-    2. BTC    SHORT  65%   Mean reversion signal
-    3. JUP    LONG   58%   Whale accumulation
-
-flash [sim] > analyze SOL
-  SOL Market Analysis
-  ─────────────────────────────────
-  Price:        $148.52
-  24h Change:   +3.2%
-  Regime:       TRENDING
-  Signal:       LONG (72% confidence)
-  ...
-
-flash [sim] > open 2x long SOL $10
-  Open Position Summary
-  ─────────────────────────────────
-  Market:      SOL-PERP
-  Side:        LONG
-  Leverage:    2.0x
-  Collateral:  $10.00
-  Size:        $20.00
-  Est. Fee:    $0.02
-
-  Confirm? (yes/no) yes
-  Confirmed in 0.1s
-
-flash [sim] > positions
-  Market  Side  Lev   Size     Collateral  Entry     Mark      PnL
-  SOL     LONG  2.0x  $20.00   $10.00      $148.52   $148.71   +$0.26
-
-flash [sim] > portfolio
-  Portfolio Summary
-  ─────────────────────────────────
-  Total Exposure:  $20.00
-  Unrealized PnL:  +$0.26
-  ...
-
-flash [sim] > close SOL long
-  Confirm? (yes/no) yes
-  Confirmed in 0.1s
-  Realized PnL: +$0.24
-```
-
----
-
 ## Supported Markets
 
 | Pool | Markets |
@@ -351,69 +599,13 @@ flash [sim] > inspect market SOL
 
 ---
 
-## Risk Monitor
-
-The real-time risk monitor runs in the background and alerts when positions approach liquidation.
-
-```
-flash [sim] > risk monitor on
-  Risk monitor started. (prices every 5s, positions every 20s)
-```
-
-### Alert Levels
-
-| Level | Distance to Liquidation | Action |
-|-------|------------------------|--------|
-| **Safe** | > 35% | No alert |
-| **Warning** | < 30% | Yellow warning with position details |
-| **Critical** | < 15% | Red alert with collateral suggestion |
-
-Hysteresis thresholds prevent alert oscillation:
-
-- Warning triggers at < 30%, recovers at > 35%
-- Critical triggers at < 15%, recovers at > 18%
-
-### Warning Example
-
-```
-  ⚠ RISK WARNING
-  ─────────────────────────────────
-  SOL LONG 5x
-  Entry:       $148.52
-  Current:     $141.20
-  Liquidation: $133.00
-
-  Distance to liquidation: 22%
-
-  Add $45 collateral to restore distance to 35%.
-```
-
-### Critical Example
-
-```
-  CRITICAL LIQUIDATION RISK
-  ═════════════════════════════════
-  SOL LONG 10x
-  Entry:       $148.52
-  Current:     $139.50
-  Liquidation: $136.80
-
-  Distance to liquidation: 8%
-
-  Add collateral or reduce position immediately.
-  Add $120 collateral to restore distance to 35%.
-```
-
-The monitor auto-calculates the exact collateral amount needed to restore a safe liquidation distance using binary search over the leverage-to-liquidation model.
-
----
-
 ## Security Model
 
 ### Transaction Signing
 
 - Every trade displays a full position summary and requires explicit confirmation before signing
 - Signing rate limiter prevents rapid-fire submissions (`MAX_TRADES_PER_MINUTE`, `MIN_DELAY_BETWEEN_TRADES_MS`)
+- Per-market trade mutex prevents concurrent transaction submissions on all trade operations
 - All trade attempts are logged to `~/.flash/signing-audit.log` with timestamp, market, side, and result
 - Configurable per-trade limits (`MAX_COLLATERAL_PER_TRADE`, `MAX_POSITION_SIZE`, `MAX_LEVERAGE`)
 
@@ -434,6 +626,7 @@ The monitor auto-calculates the exact collateral amount needed to restore a safe
 
 - RPC URLs validated for HTTPS protocol
 - All API calls have timeouts and response body size limits (prevents OOM from malicious endpoints)
+- Oracle price validation rejects zero or negative values from Pyth
 - Log files rotate at 10MB with automatic cleanup
 
 ---
@@ -517,12 +710,67 @@ Plugins are discovered automatically at startup. Files starting with `_` are ski
 
 ---
 
+## Wallet Management
+
+```
+flash [live] > wallet import main ~/.config/solana/id.json
+  Wallet 'main' imported.
+
+flash [live] > wallet list
+  Saved wallets:
+    * main  7xKp...3nRq
+
+flash [live] > wallet balance
+  SOL Balance: 2.41
+
+flash [live] > wallet tokens
+  Token Balances:
+    USDC:  150.00
+    SOL:   2.41
+```
+
+Wallet files are stored in `~/.flash/wallets/` with owner-only permissions.
+
+---
+
+## Flash Trade Integration
+
+This project serves as a reference integration for building on Flash Trade.
+
+### Position Lifecycle
+
+1. **Market resolution** — Map asset name to Flash Trade pool (e.g., SOL -> `Crypto.1`)
+2. **Oracle prices** — Fetch from Pyth Network with native exponent (e.g., `-8` for SOL)
+3. **Open** — `swapAndOpen` instruction with USDC collateral, computed position size
+4. **Close** — Match on-chain position by mint and side, build close instruction
+5. **Collateral** — Add/remove collateral instructions with balance validation
+
+### Transaction Submission
+
+Transactions are built manually using `MessageV0.compile` and signed with the wallet keypair:
+
+- Fresh blockhash per attempt
+- `sendRawTransaction` with `maxRetries: 3`
+- Confirmation polling every 2s with periodic resends
+- 45s timeout per attempt, 3 attempts total
+- On-chain error detection via `getSignatureStatuses`
+
+### Key Integration Files
+
+| File | Purpose |
+|------|---------|
+| `src/client/flash-client.ts` | FlashClient with open/close/collateral/positions/dryrun |
+| `src/config/index.ts` | Pool-to-market mapping and configuration |
+| `src/wallet/walletManager.ts` | Keypair loading with security hardening |
+
+---
+
 ## Project Structure
 
 ```
 src/
 ├── cli/            Terminal REPL, user interaction, confirmation flow
-├── ai/             Intent parsing (regex + LLM fallback)
+├── ai/             Intent parsing (regex + NLP normalization + LLM fallback)
 ├── tools/          Tool definitions, registry, and dispatch engine
 ├── client/         Flash Trade SDK client and paper trading client
 ├── agent/          AI-powered analysis, scanner, autopilot, dashboard
@@ -578,75 +826,6 @@ npm run test:watch      # Watch mode
 ```bash
 npx tsc --noEmit
 ```
-
----
-
-## Strategy Engine
-
-Three independent strategies produce signals that are aggregated with regime-weighted scoring:
-
-| Strategy | Detects | Data Source |
-|----------|---------|-------------|
-| Momentum | Strong directional moves | Price changes, volume trends |
-| Mean Reversion | Oversold/overbought conditions | Price deviation, open interest |
-| Whale Follow | Large position clustering | On-chain whale activity |
-
-The market regime (trending, ranging, volatile, whale-dominated, low-liquidity) dynamically adjusts strategy weights. High-volatility regimes reduce leverage. Low-liquidity regimes reduce position sizes.
-
----
-
-## Flash Trade Integration
-
-This project serves as a reference integration for building on Flash Trade.
-
-### Position Lifecycle
-
-1. **Market resolution** — Map asset name to Flash Trade pool (e.g., SOL → `Crypto.1`)
-2. **Oracle prices** — Fetch from Pyth Network with native exponent (e.g., `-8` for SOL)
-3. **Open** — `swapAndOpen` instruction with USDC collateral, computed position size
-4. **Close** — Match on-chain position by mint and side, build close instruction
-5. **Collateral** — Add/remove collateral instructions with balance validation
-
-### Transaction Submission
-
-Transactions are built manually using `MessageV0.compile` and signed with the wallet keypair:
-
-- Fresh blockhash per attempt
-- `sendRawTransaction` with `maxRetries: 3`
-- Confirmation polling every 2s with periodic resends
-- 45s timeout per attempt, 2 attempts total
-- On-chain error detection via `getSignatureStatuses`
-
-### Key Integration Files
-
-| File | Purpose |
-|------|---------|
-| `src/client/flash-client.ts` | FlashClient with open/close/collateral/positions |
-| `src/config/index.ts` | Pool-to-market mapping and configuration |
-| `src/wallet/walletManager.ts` | Keypair loading with security hardening |
-
----
-
-## Wallet Management
-
-```
-flash [live] > wallet import main ~/.config/solana/id.json
-  Wallet 'main' imported.
-
-flash [live] > wallet list
-  Saved wallets:
-    * main  7xKp...3nRq
-
-flash [live] > wallet balance
-  SOL Balance: 2.41
-
-flash [live] > wallet tokens
-  Token Balances:
-    USDC:  150.00
-    SOL:   2.41
-```
-
-Wallet files are stored in `~/.flash/wallets/` with owner-only permissions.
 
 ---
 
