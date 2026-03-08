@@ -374,6 +374,8 @@ export class ToolEngine {
       `    ${chalk.cyan('rpc test')}                  Test all RPC endpoints`,
       `    ${chalk.cyan('tx inspect <sig>')}          Inspect a transaction`,
       `    ${chalk.cyan('dryrun <command>')}          Preview without executing`,
+      `    ${chalk.cyan('doctor')}                  Run terminal diagnostic`,
+      `    ${chalk.cyan('watch <command>')}          Auto-refresh a command (e.g. watch positions)`,
       '',
       chalk.dim('  ─────────────────────────────────────────────'),
       `  ${chalk.cyan('exit')}                        Close the terminal`,

@@ -23,6 +23,8 @@ import { initSystemDiagnostics } from '../system/system-diagnostics.js';
 import { initReconciler, getReconciler } from '../core/state-reconciliation.js';
 import { loadPlugins, shutdownPlugins } from '../plugins/plugin-loader.js';
 import { StatusBar } from './status-bar.js';
+import { runDoctor } from '../tools/doctor.js';
+import { startWatch } from './watch.js';
 
 /** Resolve common market name aliases to canonical Flash Trade symbols */
 const MARKET_ALIASES: Record<string, string> = {
@@ -1406,9 +1408,35 @@ export class FlashTerminal {
   private async handleInput(input: string): Promise<void> {
     const startTime = Date.now();
 
+    const lower = input.toLowerCase();
+
+    // ─── Doctor Diagnostic Intercept ───────────────────────────────
+    if (lower === 'doctor') {
+      const output = await runDoctor(
+        this.flashClient,
+        this.rpcManager,
+        this.walletManager,
+        this.context,
+      );
+      console.log(output);
+      return;
+    }
+
+    // ─── Watch Mode Intercept ────────────────────────────────────
+    if (lower.startsWith('watch ') && lower !== 'watch') {
+      const innerCmd = input.slice('watch '.length).trim();
+      if (innerCmd) {
+        await startWatch(innerCmd, {
+          engine: this.engine,
+          parseCommand: (cmd: string) => this.resolveIntent(cmd),
+          rl: this.rl,
+        });
+        return;
+      }
+    }
+
     // Fast dispatch for single-token commands
     let intent: ParsedIntent;
-    const lower = input.toLowerCase();
     const fastIntent = FAST_DISPATCH[lower];
 
     if (fastIntent) {
@@ -1753,6 +1781,33 @@ export class FlashTerminal {
 
       process.stdin.on('data', onKey);
     });
+  }
+
+  /**
+   * Resolve a raw command string into a ParsedIntent.
+   * Reuses FAST_DISPATCH, inspect routing, and the AI interpreter.
+   * Used by watch mode and dry-run to parse commands without executing them.
+   */
+  private async resolveIntent(input: string): Promise<ParsedIntent> {
+    const lower = input.toLowerCase();
+    const fastIntent = FAST_DISPATCH[lower];
+
+    if (fastIntent) return fastIntent;
+
+    if (lower.startsWith('inspect pool ')) {
+      const pool = input.slice('inspect pool '.length).trim();
+      return { action: ActionType.InspectPool, pool } as ParsedIntent;
+    }
+
+    if (lower.startsWith('inspect market ') || (lower.startsWith('inspect ') && !lower.startsWith('inspect pool ') && !lower.startsWith('inspect protocol') && lower !== 'inspect')) {
+      const prefix = lower.startsWith('inspect market ') ? 'inspect market ' : 'inspect ';
+      const rawMarket = input.slice(prefix.length).trim();
+      const market = resolveMarketAlias(rawMarket);
+      return { action: ActionType.InspectMarket, market } as ParsedIntent;
+    }
+
+    // Fall through to interpreter
+    return this.interpreter.parseIntent(input);
   }
 
   /**
