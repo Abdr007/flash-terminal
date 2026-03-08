@@ -15,9 +15,13 @@ interface FlashLocalConfig {
 function ensureDirs(): void {
   if (!existsSync(FLASH_DIR)) {
     mkdirSync(FLASH_DIR, { mode: 0o700 });
+  } else {
+    chmodSync(FLASH_DIR, 0o700);
   }
   if (!existsSync(WALLETS_DIR)) {
     mkdirSync(WALLETS_DIR, { mode: 0o700 });
+  } else {
+    chmodSync(WALLETS_DIR, 0o700);
   }
 }
 

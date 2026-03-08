@@ -8,16 +8,17 @@ Flash AI Terminal interacts with the Solana blockchain and manages cryptographic
 
 If you discover a security vulnerability, please report it responsibly.
 
+**Do not** open a public GitHub issue for security vulnerabilities.
+
 ### How to Report
 
-1. **Do not** open a public GitHub issue for security vulnerabilities.
-2. Email a description of the issue to the repository maintainers (see the GitHub profile for contact information).
-3. Include:
+1. Email a description of the issue to the repository maintainers (see the GitHub profile for contact information).
+2. Include:
    - A description of the vulnerability and its potential impact
    - Steps to reproduce the issue
    - Affected files or components
    - Any suggested fix, if you have one
-4. Use the subject line: `[SECURITY] Flash AI Terminal - <brief description>`
+3. Use the subject line: `[SECURITY] Flash AI Terminal - <brief description>`
 
 ### Response Timeline
 
@@ -49,7 +50,7 @@ The following security properties must never be violated:
 #### Key Storage
 
 - Wallet files are stored in `~/.flash/wallets/` with `0600` permissions (owner-only read/write)
-- The `~/.flash/` directory is created with `0700` permissions
+- The `~/.flash/` directory is created with `0700` permissions; existing directories are re-secured on startup
 - Wallet names are sanitized to alphanumeric characters, hyphens, and underscores (max 64 chars) to prevent path traversal
 
 #### Key Handling
@@ -69,10 +70,10 @@ The following security properties must never be violated:
 ### Transaction Signing
 
 - **Confirmation gate**: Full position summary (market, side, leverage, collateral, size, fees, wallet) displayed before every trade
-- **Rate limiter**: Configurable `MAX_TRADES_PER_MINUTE` and `MIN_DELAY_BETWEEN_TRADES_MS`
+- **Rate limiter**: Configurable `MAX_TRADES_PER_MINUTE` and `MIN_DELAY_BETWEEN_TRADES_MS`; recorded only after successful confirmation
 - **Trade limits**: Configurable `MAX_COLLATERAL_PER_TRADE`, `MAX_POSITION_SIZE`, `MAX_LEVERAGE`
-- **Trade mutex**: Per-market/side lock prevents concurrent transaction submissions
-- **Signature cache**: 60-second TTL cache prevents duplicate trade submissions
+- **Trade mutex**: Per-market/side lock acquired before any async operations, prevents concurrent transaction submissions
+- **Signature cache**: 120-second TTL cache prevents duplicate trade submissions
 - **Audit log**: All trade attempts logged to `~/.flash/signing-audit.log` (never includes key material)
 
 ### API Key Safety
@@ -87,7 +88,7 @@ API keys should only be set in `.env` files, never in shell history or command a
 
 ### Network Security
 
-- RPC URLs validated for HTTPS protocol (HTTP allowed only for localhost)
+- RPC URLs validated for HTTPS protocol (HTTP rejected for non-localhost endpoints)
 - RPC URLs rejected if they contain embedded credentials
 - All API calls have timeouts (8-10s for data, 120s for transactions)
 - Response body size limits prevent OOM from oversized responses (2MB fstats, 1MB CoinGecko)

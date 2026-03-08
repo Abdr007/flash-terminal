@@ -1175,9 +1175,20 @@ export class FlashTerminal {
       intent = { action: ActionType.DryRun, innerCommand: innerCmd } as ParsedIntent;
     } else if (lower.startsWith('inspect pool ')) {
       const pool = input.slice('inspect pool '.length).trim();
+      const { POOL_NAMES } = await import('../config/index.js');
+      if (!POOL_NAMES.includes(pool as typeof POOL_NAMES[number])) {
+        console.log(chalk.red(`  Unknown pool: ${pool}`));
+        console.log(chalk.dim(`  Valid pools: ${POOL_NAMES.join(', ')}`));
+        return;
+      }
       intent = { action: ActionType.InspectPool, pool } as ParsedIntent;
     } else if (lower.startsWith('inspect market ')) {
       const market = input.slice('inspect market '.length).trim().toUpperCase();
+      const { getPoolForMarket } = await import('../config/index.js');
+      if (!getPoolForMarket(market)) {
+        console.log(chalk.red(`  Unknown market: ${market}`));
+        return;
+      }
       intent = { action: ActionType.InspectMarket, market } as ParsedIntent;
     } else if (lower.startsWith('tx inspect ')) {
       const signature = input.slice('tx inspect '.length).trim();

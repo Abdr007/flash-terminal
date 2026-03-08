@@ -115,6 +115,7 @@ export class RiskMonitor {
     this.timer = setInterval(() => {
       this.tick().catch(() => {}); // fire-and-forget
     }, PRICE_INTERVAL_MS);
+    this.timer.unref();
     // Run first tick immediately
     this.tick().catch(() => {});
     return chalk.green('  Risk monitor started.') + chalk.dim(' (prices every 5s, positions every 20s)');

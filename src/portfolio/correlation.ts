@@ -12,7 +12,6 @@ const CORRELATION_GROUPS: string[][] = [
   ['XAU', 'XAG'],                                                             // Precious metals
   ['EUR', 'GBP'],                                                             // Forex (vs USD)
   ['CRUDEOIL'],                                                                // Commodities
-  ['TSLAr', 'MSTRr', 'NVDAr', 'CRCLr', 'SPYr'],                             // US equities
   ['HYPE'],                                                                    // Standalone
   ['FARTCOIN'],                                                                // Standalone
   ['ORE'],                                                                     // Standalone

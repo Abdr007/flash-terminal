@@ -102,6 +102,7 @@ export class Autopilot {
         getLogger().error('AUTOPILOT', `Cycle error: ${getErrorMessage(err)}`);
       });
     }, this.config.intervalMs);
+    this.timer.unref();
 
     const lines = [
       '',

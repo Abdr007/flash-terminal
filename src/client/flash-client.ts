@@ -218,7 +218,7 @@ export class FlashClient implements IFlashClient {
 
   /** Recent trade cache — prevents duplicate submissions within a short window */
   private recentTrades = new Map<string, number>(); // tradeKey -> timestamp
-  private static readonly TRADE_CACHE_TTL_MS = 60_000;
+  private static readonly TRADE_CACHE_TTL_MS = 120_000;
 
   constructor(connection: Connection, walletManager: WalletManager, config: FlashConfig) {
     this.config = config;
@@ -242,7 +242,7 @@ export class FlashClient implements IFlashClient {
     } catch {
       throw new Error(
         `Unknown pool: ${config.defaultPool}. ` +
-        `Valid pools: Crypto.1, Virtual.1, Governance.1, Community.1, Community.2, Trump.1, Ore.1, Remora.1`
+        `Valid pools: Crypto.1, Virtual.1, Governance.1, Community.1, Community.2, Trump.1, Ore.1`
       );
     }
 
@@ -612,8 +612,7 @@ export class FlashClient implements IFlashClient {
   ): Promise<OpenPositionResult> {
     const logger = getLogger();
 
-    // Pre-trade validation
-    await this.ensureSufficientSol();
+    // Pre-trade validation (synchronous checks before locking)
     this.validateLeverage(market, leverage);
     const sideStr = side === TradeSide.Long ? 'long' : 'short';
     if (collateralAmount < 10) {
@@ -623,63 +622,65 @@ export class FlashClient implements IFlashClient {
       );
     }
 
-    // Duplicate trade cache check
+    // Duplicate trade cache check (synchronous)
     const cacheKey = this.tradeCacheKey('open', market, side, collateralAmount);
     this.checkRecentTrade(cacheKey);
 
-    // Check USDC balance before building transaction
-    const inputSymbol = collateralToken ?? DEFAULT_COLLATERAL_TOKEN;
-    if (inputSymbol === 'USDC') {
+    // Acquire trade lock BEFORE any async operations to prevent interleaving
+    this.acquireTradeLock(market, side);
+    try {
+      await this.ensureSufficientSol();
+
+      // Check USDC balance before building transaction
+      const inputSymbol = collateralToken ?? DEFAULT_COLLATERAL_TOKEN;
+      if (inputSymbol === 'USDC') {
+        try {
+          const balances = await this.walletMgr.getTokenBalances();
+          const usdcBalance = balances.tokens.find(t => t.symbol === 'USDC')?.amount ?? 0;
+          if (usdcBalance < collateralAmount) {
+            throw new Error(
+              `Insufficient USDC collateral.\n` +
+              `  Required: $${collateralAmount.toFixed(2)}\n` +
+              `  Available: $${usdcBalance.toFixed(2)}\n` +
+              `  Deposit USDC to trade on Flash Trade.`
+            );
+          }
+        } catch (e: unknown) {
+          const eMsg = getErrorMessage(e);
+          if (eMsg.includes('Insufficient USDC')) throw e;
+          // RPC failure during balance check — warn but don't block the trade
+          logger.warn('CLIENT', `USDC balance check skipped (RPC error): ${scrubSensitive(eMsg)}`);
+        }
+      }
+
+      // Check for duplicate position before sending
+      const poolConfig = this.getPoolConfigForMarket(market);
       try {
-        const balances = await this.walletMgr.getTokenBalances();
-        const usdcBalance = balances.tokens.find(t => t.symbol === 'USDC')?.amount ?? 0;
-        if (usdcBalance < collateralAmount) {
-          throw new Error(
-            `Insufficient USDC collateral.\n` +
-            `  Required: $${collateralAmount.toFixed(2)}\n` +
-            `  Available: $${usdcBalance.toFixed(2)}\n` +
-            `  Deposit USDC to trade on Flash Trade.`
+        const positions = await this.perpClient.getUserPositions(this.wallet.publicKey, poolConfig);
+        const token = this.findToken(poolConfig, market);
+        const sdkSide = toSdkSide(side);
+        const markets = poolConfig.markets as unknown as Array<{
+          marketAccount: PublicKey; targetMint: PublicKey; side: typeof Side.Long | typeof Side.Short;
+        }>;
+        const marketConfig = markets.find(m => m.targetMint.equals(token.mintKey) && m.side === sdkSide);
+        if (marketConfig) {
+          const existing = (positions as Array<{ market: PublicKey }>).find(
+            p => p.market.equals(marketConfig.marketAccount)
           );
+          if (existing) {
+            throw new Error(
+              `You already have an open ${sideStr} position on ${market}.\n` +
+              `  Close it first with: close ${sideStr} ${market}`
+            );
+          }
         }
       } catch (e: unknown) {
         const eMsg = getErrorMessage(e);
-        if (eMsg.includes('Insufficient USDC')) throw e;
-        // RPC failure during balance check — warn but don't block the trade
-        logger.warn('CLIENT', `USDC balance check skipped (RPC error): ${scrubSensitive(eMsg)}`);
+        if (eMsg.includes('already have an open')) throw e;
+        // If position check fails due to RPC, proceed — the program will reject duplicates anyway
+        logger.debug('CLIENT', `Pre-trade position check skipped: ${scrubSensitive(eMsg)}`);
       }
-    }
 
-    // Check for duplicate position before sending
-    const poolConfig = this.getPoolConfigForMarket(market);
-    try {
-      const positions = await this.perpClient.getUserPositions(this.wallet.publicKey, poolConfig);
-      const token = this.findToken(poolConfig, market);
-      const sdkSide = toSdkSide(side);
-      const markets = poolConfig.markets as unknown as Array<{
-        marketAccount: PublicKey; targetMint: PublicKey; side: typeof Side.Long | typeof Side.Short;
-      }>;
-      const marketConfig = markets.find(m => m.targetMint.equals(token.mintKey) && m.side === sdkSide);
-      if (marketConfig) {
-        const existing = (positions as Array<{ market: PublicKey }>).find(
-          p => p.market.equals(marketConfig.marketAccount)
-        );
-        if (existing) {
-          throw new Error(
-            `You already have an open ${sideStr} position on ${market}.\n` +
-            `  Close it first with: close ${sideStr} ${market}`
-          );
-        }
-      }
-    } catch (e: unknown) {
-      const eMsg = getErrorMessage(e);
-      if (eMsg.includes('already have an open')) throw e;
-      // If position check fails due to RPC, proceed — the program will reject duplicates anyway
-      logger.debug('CLIENT', `Pre-trade position check skipped: ${scrubSensitive(eMsg)}`);
-    }
-
-    // Acquire trade lock to prevent concurrent sends on same market/side
-    this.acquireTradeLock(market, side);
-    try {
       const sdkSide = toSdkSide(side);
 
       const targetToken = this.findToken(poolConfig, market);

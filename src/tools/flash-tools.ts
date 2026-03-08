@@ -177,13 +177,13 @@ export const flashOpenPosition: ToolDefinition = {
       confirmationPrompt: isLive ? 'Type "yes" to sign or "no" to cancel' : 'Execute trade?',
       data: {
         executeAction: async (): Promise<ToolResult> => {
-          // Record signing for rate limiter
-          guard.recordSigning();
-
           try {
             const result = await context.flashClient.openPosition(
               market, side, collateral, leverage, collateral_token
             );
+
+            // Record signing AFTER successful confirmation (not before)
+            guard.recordSigning();
 
             // Audit log — successful
             guard.logAudit({
@@ -283,10 +283,10 @@ export const flashClosePosition: ToolDefinition = {
       confirmationPrompt: isLive ? 'Type "yes" to sign or "no" to cancel' : 'Confirm close?',
       data: {
         executeAction: async (): Promise<ToolResult> => {
-          guard.recordSigning();
           try {
             const result = await context.flashClient.closePosition(market, side);
 
+            guard.recordSigning();
             guard.logAudit({
               timestamp: new Date().toISOString(),
               type: 'close', market, side,
@@ -384,9 +384,9 @@ export const flashAddCollateral: ToolDefinition = {
       confirmationPrompt: isLive ? 'Type "yes" to sign or "no" to cancel' : 'Confirm?',
       data: {
         executeAction: async (): Promise<ToolResult> => {
-          guard.recordSigning();
           try {
             const result = await context.flashClient.addCollateral(market, side, amount);
+            guard.recordSigning();
             guard.logAudit({
               timestamp: new Date().toISOString(),
               type: 'add_collateral', market, side,
@@ -474,9 +474,9 @@ export const flashRemoveCollateral: ToolDefinition = {
       confirmationPrompt: isLive ? 'Type "yes" to sign or "no" to cancel' : 'Confirm?',
       data: {
         executeAction: async (): Promise<ToolResult> => {
-          guard.recordSigning();
           try {
             const result = await context.flashClient.removeCollateral(market, side, amount);
+            guard.recordSigning();
             guard.logAudit({
               timestamp: new Date().toISOString(),
               type: 'remove_collateral', market, side,

@@ -46,13 +46,13 @@ function validateRpcUrl(url: string): string {
     const parsed = new URL(url);
     const isLocal = parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1';
     if (parsed.protocol !== 'https:' && !(parsed.protocol === 'http:' && isLocal)) {
-      console.error(`  WARNING: RPC URL should use HTTPS: ${url}`);
+      throw new Error(`RPC URL must use HTTPS (got ${parsed.protocol}). Only localhost may use HTTP.`);
     }
     if (parsed.username || parsed.password) {
       throw new Error('RPC URL must not contain embedded credentials — use headers instead');
     }
   } catch (e) {
-    if (e instanceof Error && (e.message.includes('credentials') || e.message.includes('HTTPS'))) throw e;
+    if (e instanceof Error && (e.message.includes('credentials') || e.message.includes('HTTPS') || e.message.includes('RPC URL must'))) throw e;
     // If URL is unparseable, let it fail later at connection time
   }
   return url;
@@ -103,7 +103,6 @@ export const POOL_NAMES = [
   'Community.2',
   'Trump.1',
   'Ore.1',
-  'Remora.1',
 ] as const;
 
 // Market symbols per pool
@@ -115,7 +114,6 @@ export const POOL_MARKETS: Record<string, string[]> = {
   'Community.2': ['WIF'],
   'Trump.1': ['FARTCOIN'],
   'Ore.1': ['ORE'],
-  'Remora.1': ['TSLAr', 'MSTRr', 'CRCLr', 'NVDAr', 'SPYr'],
 };
 
 export function getPoolForMarket(symbol: string): string | null {
