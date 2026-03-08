@@ -41,6 +41,8 @@ const MAX_RESPONSE_BYTES = 1024 * 1024; // 1MB max for price data
 export class PriceService {
   private cache: Map<string, { data: TokenPrice; expiry: number }> = new Map();
   private cacheTtlMs = 15_000; // 15s cache
+  private lastMissingWarnTime = 0;
+  private static readonly MISSING_WARN_INTERVAL_MS = 60_000; // throttle: once per 60s
 
   /**
    * Fetch prices for the given symbols.
@@ -89,10 +91,11 @@ export class PriceService {
       logger.warn('PRICE', `CoinGecko fetch failed: ${getErrorMessage(error)}`);
     }
 
-    // Log missing symbols — one summary line instead of per-market spam
+    // Log missing symbols — throttled to avoid spam during continuous monitor refresh
     const missing = uncached.filter(sym => !priceMap.has(sym));
-    if (missing.length > 0) {
+    if (missing.length > 0 && now - this.lastMissingWarnTime >= PriceService.MISSING_WARN_INTERVAL_MS) {
       logger.warn('PRICE', `No live price for ${missing.length} market(s): ${missing.join(', ')} — excluded from analysis`);
+      this.lastMissingWarnTime = now;
     }
 
     return priceMap;
