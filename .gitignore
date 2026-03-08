@@ -19,6 +19,10 @@ id.json
 # Logs
 *.log
 flash-*.log
+logs/
+
+# Flash runtime data
+.flash/
 
 # OS files
 .DS_Store
