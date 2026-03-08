@@ -133,7 +133,7 @@ export class TradeAgent {
           { role: 'system', content: SYSTEM_PROMPT },
           { role: 'user', content: userMessage },
         ],
-        temperature: 0,
+        temperature: 0.4,
       });
 
       const text = response.choices[0]?.message?.content;

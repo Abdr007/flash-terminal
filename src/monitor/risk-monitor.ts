@@ -86,6 +86,8 @@ export class RiskMonitor {
   private cachedPositions: Position[] = [];
   private lastPositionFetch = 0;
   private tickCount = 0;
+  private lastHeartbeat = 0;
+  private static readonly HEARTBEAT_INTERVAL_MS = 60_000; // status output every 60s
 
   constructor(client: IFlashClient) {
     this.client = client;
@@ -113,6 +115,7 @@ export class RiskMonitor {
     this.cachedPositions = [];
     this.lastPositionFetch = 0;
     this.tickCount = 0;
+    this.lastHeartbeat = 0;
     this.timer = setInterval(() => {
       this.tick().catch((err) => {
         getLogger().debug('RISK_MONITOR', `Tick error: ${getErrorMessage(err)}`);
@@ -227,6 +230,21 @@ export class RiskMonitor {
 
       // Emit alerts for positions that changed risk level
       this.emitAlerts(assessed);
+
+      // Periodic heartbeat so user knows monitor is alive
+      const now2 = Date.now();
+      if (this.tickCount === 1 || now2 - this.lastHeartbeat >= RiskMonitor.HEARTBEAT_INTERVAL_MS) {
+        this.lastHeartbeat = now2;
+        const worstDist = worstPosition ? `${(worstPosition.distanceToLiquidation * 100).toFixed(0)}%` : '—';
+        const overallLevel = assessed.some(r => r.riskLevel === RiskLevel.Critical) ? chalk.red('CRITICAL')
+          : assessed.some(r => r.riskLevel === RiskLevel.Warning) ? chalk.yellow('WARNING')
+          : chalk.green('SAFE');
+        process.stdout.write(
+          chalk.dim(`\n  [Risk Monitor] ${assessed.length} position(s) monitored | `) +
+          `Risk: ${overallLevel}` +
+          chalk.dim(` | Closest liq: ${worstDist}\n`)
+        );
+      }
     } catch (error: unknown) {
       logger.debug('RISK_MONITOR', `Tick failed: ${getErrorMessage(error)}`);
     }

@@ -90,6 +90,13 @@ export const flashOpenPosition: ToolDefinition = {
       return { success: false, message: chalk.red(`  Market not supported on Flash Trade: ${market}`) };
     }
 
+    // Check if virtual market is currently open
+    const { getMarketStatus, formatMarketClosedMessage } = await import('../data/market-hours.js');
+    const marketStatus = getMarketStatus(market);
+    if (!marketStatus.isOpen) {
+      return { success: false, message: chalk.yellow(formatMarketClosedMessage(market)) };
+    }
+
     if (!Number.isFinite(collateral) || !Number.isFinite(leverage) || collateral <= 0 || leverage <= 0) {
       return { success: false, message: chalk.red('  Invalid trade parameters: collateral and leverage must be positive numbers.') };
     }
@@ -197,6 +204,22 @@ export const flashOpenPosition: ToolDefinition = {
             const txLink = context.simulationMode
               ? result.txSignature
               : `https://solscan.io/tx/${result.txSignature}`;
+
+            // Compute liquidation price if not returned by SDK
+            let liqPrice = result.liquidationPrice;
+            if (!liqPrice || liqPrice <= 0) {
+              // Approximate: liqPrice = entryPrice * (1 ∓ 1/leverage * 0.9) for long/short
+              if (result.entryPrice > 0 && leverage > 0) {
+                const liqDist = (1 / leverage) * 0.9;
+                liqPrice = side === TradeSide.Long
+                  ? result.entryPrice * (1 - liqDist)
+                  : result.entryPrice * (1 + liqDist);
+              }
+            }
+
+            // Estimate fee: 0.08% of position size (Flash Trade standard fee)
+            const estimatedFee = sizeUsd * 0.0008;
+
             return {
               success: true,
               message: [
@@ -205,7 +228,8 @@ export const flashOpenPosition: ToolDefinition = {
                 chalk.dim('  ─────────────────'),
                 `  Entry Price:       ${formatPrice(result.entryPrice)}`,
                 `  Size:              ${formatUsd(result.sizeUsd)}`,
-                `  Liquidation Price: ${result.liquidationPrice ? chalk.yellow(formatPrice(result.liquidationPrice)) : chalk.dim('N/A')}`,
+                `  Liquidation Price: ${liqPrice && liqPrice > 0 ? chalk.yellow(formatPrice(liqPrice)) : chalk.dim('N/A')}`,
+                `  Est. Fee:          ${chalk.dim(formatUsd(estimatedFee))}`,
                 `  TX: ${chalk.dim(txLink)}`,
                 '',
               ].join('\n'),
@@ -250,6 +274,13 @@ export const flashClosePosition: ToolDefinition = {
     const pool = getPoolForMarket(market);
     if (!pool) {
       return { success: false, message: chalk.red(`  Market not supported on Flash Trade: ${market}`) };
+    }
+
+    // Check if virtual market is currently open
+    const { getMarketStatus, formatMarketClosedMessage } = await import('../data/market-hours.js');
+    const mktStatus = getMarketStatus(market);
+    if (!mktStatus.isOpen) {
+      return { success: false, message: chalk.yellow(formatMarketClosedMessage(market)) };
     }
 
     const isLive = !context.simulationMode;
@@ -355,6 +386,13 @@ export const flashAddCollateral: ToolDefinition = {
       return { success: false, message: chalk.red(`  Market not supported on Flash Trade: ${market}`) };
     }
 
+    // Check if virtual market is currently open
+    const { getMarketStatus, formatMarketClosedMessage } = await import('../data/market-hours.js');
+    const mktStatus = getMarketStatus(market);
+    if (!mktStatus.isOpen) {
+      return { success: false, message: chalk.yellow(formatMarketClosedMessage(market)) };
+    }
+
     const isLive = !context.simulationMode;
     const guard = getSigningGuard();
     const walletAddr = context.walletAddress ?? 'unknown';
@@ -443,6 +481,13 @@ export const flashRemoveCollateral: ToolDefinition = {
     const pool = getPoolForMarket(market);
     if (!pool) {
       return { success: false, message: chalk.red(`  Market not supported on Flash Trade: ${market}`) };
+    }
+
+    // Check if virtual market is currently open
+    const { getMarketStatus, formatMarketClosedMessage } = await import('../data/market-hours.js');
+    const mktStatus2 = getMarketStatus(market);
+    if (!mktStatus2.isOpen) {
+      return { success: false, message: chalk.yellow(formatMarketClosedMessage(market)) };
     }
 
     const isLive = !context.simulationMode;

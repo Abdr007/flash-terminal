@@ -157,6 +157,12 @@ const ASSET_ALIASES: Record<string, string> = {
   binance: 'BNB', jupiter: 'JUP', raydium: 'RAY',
   dogwifhat: 'WIF', bonk: 'BONK', pyth: 'PYTH',
   gold: 'XAU', silver: 'XAG', crude: 'CRUDEOIL', oil: 'CRUDEOIL',
+  jito: 'JTO', kamino: 'KMNO', metaplex: 'MET',
+  pengu: 'PENGU', penguin: 'PENGU', fartcoin: 'FARTCOIN',
+  hype: 'HYPE', hyperliquid: 'HYPE', ore: 'ORE',
+  zcash: 'ZEC', euro: 'EUR', pound: 'GBP', sterling: 'GBP',
+  yen: 'USDJPY', yuan: 'USDCNH',
+  pump: 'PUMP', pumpfun: 'PUMP',
 };
 
 /** Normalize asset aliases: "solana" → "SOL" */

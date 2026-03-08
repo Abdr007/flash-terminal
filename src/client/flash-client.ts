@@ -15,6 +15,7 @@ import {
   PerpetualsClient,
   PoolConfig,
   CustodyAccount,
+  PositionAccount,
   Side,
   Privilege,
   Token,
@@ -180,6 +181,34 @@ const USDC_MINT = new PublicKey('EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v');
 function scrubSensitive(msg: string): string {
   // Mask anything that looks like an API key or base58 private key in query params
   return msg.replace(/api[_-]?key=[^&\s]+/gi, 'api_key=***');
+}
+
+/**
+ * Map raw Solana program error codes to human-readable messages.
+ * Flash Trade uses Anchor-style Custom error codes. Known codes:
+ *   3012 — Market closed / oracle stale (virtual markets outside trading hours)
+ */
+function mapProgramError(rawError: string): string {
+  if (rawError.includes('Custom(3012)') || rawError.includes('"Custom":3012')) {
+    return [
+      'Trade rejected by Flash protocol.',
+      '',
+      '  Possible reasons:',
+      '  • Market is currently closed (virtual markets follow real-world trading sessions)',
+      '  • Oracle price is stale or unavailable',
+      '  • Insufficient pool liquidity',
+      '  • Position below minimum size',
+      '',
+      '  If this is a commodity or FX market, try again during trading hours.',
+    ].join('\n');
+  }
+  // Extract custom error code for other program errors
+  const customMatch = rawError.match(/Custom\(?(\d+)\)?/i);
+  if (customMatch) {
+    return `Trade rejected by Flash protocol (error ${customMatch[1]}). The transaction did not execute.`;
+  }
+  // Fallback: return a cleaned-up version without raw JSON
+  return `Transaction rejected by program. The transaction did not execute.`;
 }
 
 /**
@@ -418,6 +447,17 @@ export class FlashClient implements IFlashClient {
     return token;
   }
 
+  /**
+   * Resolve a token symbol from its mint address within the pool.
+   * Used to determine a position's actual collateral token.
+   */
+  private resolveTokenSymbol(poolConfig: PoolConfig, mint: PublicKey): string {
+    const tokens = poolConfig.tokens as Array<{ symbol: string; mintKey: PublicKey }>;
+    const token = tokens.find((t) => t.mintKey.equals(mint));
+    if (!token) throw new Error(`Token with mint ${mint.toBase58()} not found in pool`);
+    return token.symbol;
+  }
+
   private findCustody(poolConfig: PoolConfig, symbol: string) {
     const custodies = poolConfig.custodies as Array<{ symbol: string; custodyAccount: PublicKey }>;
     const custody = custodies.find((c) => c.symbol === symbol);
@@ -566,7 +606,7 @@ export class FlashClient implements IFlashClient {
               const simErr = JSON.stringify(simResult.value.err);
               // Program errors (InstructionError) are terminal — don't retry
               if (simErr.includes('InstructionError') || simErr.includes('Custom')) {
-                throw new Error(`Transaction simulation failed: ${simErr}`);
+                throw new Error(mapProgramError(simErr));
               }
               logger.warn('CLIENT', `Pre-send simulation warning: ${simErr}`);
             }
@@ -844,15 +884,43 @@ export class FlashClient implements IFlashClient {
         BN_ZERO
       );
 
+      // ── Determine the correct collateral token for this market+side ──
+      // The on-chain market PDA is derived from (targetCustody, collateralCustody, side).
+      // For non-virtual tokens (JUP, JTO, RAY, HYPE): long collateral = self, short collateral = USDC
+      // For virtual tokens (PYTH, KMNO, MET): long collateral = JUP, short collateral = USDC
+      // We MUST look this up from poolConfig.markets rather than assuming collateral = target.
+      const poolMarkets = poolConfig.markets as unknown as Array<{
+        targetMint: PublicKey; collateralMint: PublicKey;
+        side: typeof Side.Long | typeof Side.Short;
+      }>;
+      const matchedMarket = poolMarkets.find(
+        m => m.targetMint.equals(targetToken.mintKey) && m.side === sdkSide
+      );
+      let marketCollateralSymbol: string;
+      if (matchedMarket) {
+        marketCollateralSymbol = this.resolveTokenSymbol(poolConfig, matchedMarket.collateralMint);
+      } else {
+        // Fallback: assume collateral = target (works for standard markets)
+        logger.warn('TRADE', `No market config found for ${market}/${sideStr}, assuming collateral = target`);
+        marketCollateralSymbol = targetToken.symbol;
+      }
+
+      logger.debug('TRADE', `Instruction routing: market=${market} side=${sideStr} ` +
+        `inputToken=${inputToken.symbol} marketCollateral=${marketCollateralSymbol}`);
+
       let result: { instructions: TransactionInstruction[]; additionalSigners: Signer[] };
-      if (inputToken.symbol === targetToken.symbol) {
+      if (inputToken.symbol === marketCollateralSymbol) {
+        // User's input token matches the market's collateral custody → direct open
+        logger.debug('TRADE', `Using openPosition(${targetToken.symbol}, ${marketCollateralSymbol})`);
         result = await this.perpClient.openPosition(
-          targetToken.symbol, inputToken.symbol, priceAfterSlippage,
+          targetToken.symbol, marketCollateralSymbol, priceAfterSlippage,
           collateralNative, sizeAmount, sdkSide, poolConfig, Privilege.None
         );
       } else {
+        // User's input token differs from market collateral → swap first
+        logger.debug('TRADE', `Using swapAndOpen(${targetToken.symbol}, ${marketCollateralSymbol}, ${inputToken.symbol})`);
         result = await this.perpClient.swapAndOpen(
-          targetToken.symbol, targetToken.symbol, inputToken.symbol,
+          targetToken.symbol, marketCollateralSymbol, inputToken.symbol,
           collateralNative, priceAfterSlippage, sizeAmount, sdkSide,
           poolConfig, Privilege.None
         );
@@ -860,6 +928,22 @@ export class FlashClient implements IFlashClient {
 
       const txSignature = await this.sendTx(result.instructions, result.additionalSigners, poolConfig);
       this.recordRecentTrade(cacheKey);
+
+      // Compute SDK-exact liquidation price for the return value
+      let openLiqPrice = 0;
+      try {
+        const targetCustodyAcct = CustodyAccount.from(outputCustody.custodyAccount, custodyAccounts[1]);
+        const openSizeUsd = targetPrice.price.getAssetAmountUsd(sizeAmount, targetToken.decimals);
+        const openCollateralUsd = inputPrice.price.getAssetAmountUsd(collateralNative, inputToken.decimals);
+        const liqResult = this.perpClient.getLiquidationPriceWithOrder(
+          openCollateralUsd, sizeAmount, openSizeUsd, targetToken.decimals,
+          targetPrice.price, sdkSide, targetCustodyAcct,
+        );
+        const liqUi = parseFloat(liqResult.toUiPrice(8));
+        if (Number.isFinite(liqUi) && liqUi > 0) openLiqPrice = liqUi;
+      } catch {
+        // Non-critical: liquidation price is display-only
+      }
 
       logger.trade('OPEN', {
         market, side, collateral: collateralAmount, leverage,
@@ -869,7 +953,7 @@ export class FlashClient implements IFlashClient {
       return {
         txSignature,
         entryPrice: targetPrice.uiPrice,
-        liquidationPrice: 0,
+        liquidationPrice: openLiqPrice,
         sizeUsd: collateralAmount * leverage,
       };
     } finally {
@@ -891,6 +975,7 @@ export class FlashClient implements IFlashClient {
     try {
       const poolConfig = this.getPoolConfigForMarket(market);
       const sdkSide = toSdkSide(side);
+      const sideStr = side === TradeSide.Long ? 'long' : 'short';
 
       const targetToken = this.findToken(poolConfig, market);
       const receivingToken = receiveToken
@@ -905,15 +990,39 @@ export class FlashClient implements IFlashClient {
         false, new BN(this.config.defaultSlippageBps), targetPrice.price, sdkSide
       );
 
+      // ── Determine the correct collateral token for this market+side ──
+      // Same logic as openPosition: look up the actual market collateral from poolConfig.
+      const poolMarkets = poolConfig.markets as unknown as Array<{
+        targetMint: PublicKey; collateralMint: PublicKey;
+        side: typeof Side.Long | typeof Side.Short;
+      }>;
+      const matchedMarket = poolMarkets.find(
+        m => m.targetMint.equals(targetToken.mintKey) && m.side === sdkSide
+      );
+      let marketCollateralSymbol: string;
+      if (matchedMarket) {
+        marketCollateralSymbol = this.resolveTokenSymbol(poolConfig, matchedMarket.collateralMint);
+      } else {
+        logger.warn('TRADE', `No market config found for ${market}/${sideStr}, assuming collateral = target`);
+        marketCollateralSymbol = targetToken.symbol;
+      }
+
+      logger.debug('TRADE', `Close routing: market=${market} side=${sideStr} ` +
+        `receiveToken=${receivingToken.symbol} marketCollateral=${marketCollateralSymbol}`);
+
       let result: { instructions: TransactionInstruction[]; additionalSigners: Signer[] };
-      if (receivingToken.symbol === targetToken.symbol) {
+      if (receivingToken.symbol === marketCollateralSymbol) {
+        // Output token matches market collateral — direct close
+        logger.debug('TRADE', `Using closePosition(${targetToken.symbol}, ${marketCollateralSymbol})`);
         result = await this.perpClient.closePosition(
-          targetToken.symbol, receivingToken.symbol, priceAfterSlippage,
+          targetToken.symbol, marketCollateralSymbol, priceAfterSlippage,
           sdkSide, poolConfig, Privilege.None
         );
       } else {
+        // Output token differs from market collateral — close and swap
+        logger.debug('TRADE', `Using closeAndSwap(${targetToken.symbol}, ${receivingToken.symbol}, ${marketCollateralSymbol})`);
         result = await this.perpClient.closeAndSwap(
-          targetToken.symbol, receivingToken.symbol, targetToken.symbol,
+          targetToken.symbol, receivingToken.symbol, marketCollateralSymbol,
           priceAfterSlippage, sdkSide, poolConfig, Privilege.None
         );
       }
@@ -939,17 +1048,32 @@ export class FlashClient implements IFlashClient {
     this.acquireTradeLock(market, side);
     try {
       const poolConfig = this.getPoolConfigForMarket(market);
-      const token = this.findToken(poolConfig, DEFAULT_COLLATERAL_TOKEN);
-      const amountNative = uiDecimalsToNative(amount.toString(), token.decimals);
-      const { position } = await this.findUserPosition(poolConfig, market, side);
+      const { position, marketConfig } = await this.findUserPosition(poolConfig, market, side);
 
-      const result = await this.perpClient.addCollateral(
-        amountNative, market, token.symbol, toSdkSide(side), position.pubkey, poolConfig
-      );
+      // Resolve position's actual collateral token from its collateralMint
+      const collateralSymbol = this.resolveTokenSymbol(poolConfig, marketConfig.collateralMint);
+      const inputToken = this.findToken(poolConfig, DEFAULT_COLLATERAL_TOKEN);
+      const amountNative = uiDecimalsToNative(amount.toString(), inputToken.decimals);
+
+      let result: { instructions: TransactionInstruction[]; additionalSigners: Signer[] };
+
+      if (inputToken.symbol === collateralSymbol) {
+        // Input matches position collateral — direct addCollateral
+        result = await this.perpClient.addCollateral(
+          amountNative, market, collateralSymbol, toSdkSide(side), position.pubkey, poolConfig
+        );
+      } else {
+        // Position collateral differs from input (e.g. position uses SOL, input is USDC)
+        // Use swapAndAddCollateral to swap input into position's collateral token
+        result = await this.perpClient.swapAndAddCollateral(
+          market, inputToken.symbol, collateralSymbol, amountNative,
+          toSdkSide(side), position.pubkey, poolConfig
+        );
+      }
 
       const txSignature = await this.sendTx(result.instructions, result.additionalSigners, poolConfig);
       this.recordRecentTrade(cacheKey);
-      getLogger().trade('ADD_COLLATERAL', { market, side, amount, tx: txSignature });
+      getLogger().trade('ADD_COLLATERAL', { market, side, amount, collateralSymbol, tx: txSignature });
       return { txSignature };
     } finally {
       this.releaseTradeLock(market, side);
@@ -965,17 +1089,33 @@ export class FlashClient implements IFlashClient {
     this.acquireTradeLock(market, side);
     try {
       const poolConfig = this.getPoolConfigForMarket(market);
-      const token = this.findToken(poolConfig, DEFAULT_COLLATERAL_TOKEN);
-      const amountNative = uiDecimalsToNative(amount.toString(), token.decimals);
-      const { position } = await this.findUserPosition(poolConfig, market, side);
+      const { position, marketConfig } = await this.findUserPosition(poolConfig, market, side);
 
-      const result = await this.perpClient.removeCollateral(
-        amountNative, market, token.symbol, toSdkSide(side), position.pubkey, poolConfig
-      );
+      // Resolve position's actual collateral token from its collateralMint
+      const collateralSymbol = this.resolveTokenSymbol(poolConfig, marketConfig.collateralMint);
+      const outputToken = this.findToken(poolConfig, DEFAULT_COLLATERAL_TOKEN);
+      // removeCollateral uses USD amount (collateralDeltaUsd), so always 6 decimals
+      const amountNative = uiDecimalsToNative(amount.toString(), 6);
+
+      let result: { instructions: TransactionInstruction[]; additionalSigners: Signer[] };
+
+      if (outputToken.symbol === collateralSymbol) {
+        // Position collateral matches desired output — direct removeCollateral
+        result = await this.perpClient.removeCollateral(
+          amountNative, market, collateralSymbol, toSdkSide(side), position.pubkey, poolConfig
+        );
+      } else {
+        // Position collateral differs from desired output (e.g. collateral is SOL, want USDC)
+        // Use removeCollateralAndSwap to withdraw and swap to output token
+        result = await this.perpClient.removeCollateralAndSwap(
+          market, collateralSymbol, outputToken.symbol, amountNative,
+          toSdkSide(side), poolConfig
+        );
+      }
 
       const txSignature = await this.sendTx(result.instructions, result.additionalSigners, poolConfig);
       this.recordRecentTrade(cacheKey);
-      getLogger().trade('REMOVE_COLLATERAL', { market, side, amount, tx: txSignature });
+      getLogger().trade('REMOVE_COLLATERAL', { market, side, amount, collateralSymbol, tx: txSignature });
       return { txSignature };
     } finally {
       this.releaseTradeLock(market, side);
@@ -1044,15 +1184,27 @@ export class FlashClient implements IFlashClient {
       BN_ZERO,
     );
 
+    // ── Determine the correct collateral token for this market+side ──
+    const poolMarkets = poolConfig.markets as unknown as Array<{
+      targetMint: PublicKey; collateralMint: PublicKey;
+      side: typeof Side.Long | typeof Side.Short;
+    }>;
+    const matchedMarket = poolMarkets.find(
+      m => m.targetMint.equals(targetToken.mintKey) && m.side === sdkSide
+    );
+    const marketCollateralSymbol = matchedMarket
+      ? this.resolveTokenSymbol(poolConfig, matchedMarket.collateralMint)
+      : targetToken.symbol;
+
     let result: { instructions: TransactionInstruction[]; additionalSigners: Signer[] };
-    if (inputToken.symbol === targetToken.symbol) {
+    if (inputToken.symbol === marketCollateralSymbol) {
       result = await this.perpClient.openPosition(
-        targetToken.symbol, inputToken.symbol, priceAfterSlippage,
+        targetToken.symbol, marketCollateralSymbol, priceAfterSlippage,
         collateralNative, sizeAmount, sdkSide, poolConfig, Privilege.None,
       );
     } else {
       result = await this.perpClient.swapAndOpen(
-        targetToken.symbol, targetToken.symbol, inputToken.symbol,
+        targetToken.symbol, marketCollateralSymbol, inputToken.symbol,
         collateralNative, priceAfterSlippage, sizeAmount, sdkSide,
         poolConfig, Privilege.None,
       );
@@ -1086,11 +1238,22 @@ export class FlashClient implements IFlashClient {
       }
     }
 
-    // Liquidation price estimate
-    const liqDist = leverage > 0 ? (1 / leverage) * 0.9 : 0;
-    const liqPrice = side === TradeSide.Long
-      ? targetPrice.uiPrice * (1 - liqDist)
-      : targetPrice.uiPrice * (1 + liqDist);
+    // Liquidation price — use SDK's exact protocol math
+    const targetCustodyAcct = CustodyAccount.from(outputCustody.custodyAccount, custodyAccounts[1]);
+    const sizeUsd = targetPrice.price.getAssetAmountUsd(sizeAmount, targetToken.decimals);
+    const collateralUsd = inputPrice.price.getAssetAmountUsd(collateralNative, inputToken.decimals);
+    let liqPrice = 0;
+    try {
+      const liqOraclePrice = this.perpClient.getLiquidationPriceWithOrder(
+        collateralUsd, sizeAmount, sizeUsd, targetToken.decimals,
+        targetPrice.price, sdkSide, targetCustodyAcct,
+      );
+      liqPrice = parseFloat(liqOraclePrice.toUiPrice(8));
+      if (!Number.isFinite(liqPrice) || liqPrice < 0) liqPrice = 0;
+    } catch {
+      // Fallback: SDK call failed, use 0 rather than approximate
+      liqPrice = 0;
+    }
 
     const preview: DryRunPreview = {
       market,
@@ -1147,12 +1310,32 @@ export class FlashClient implements IFlashClient {
       marketAccount: PublicKey; targetMint: PublicKey; collateralMint: PublicKey;
       side: typeof Side.Long | typeof Side.Short;
     }>;
-    const tokens = this.poolConfig.tokens as Array<{ symbol: string; mintKey: PublicKey }>;
+    const tokens = this.poolConfig.tokens as Array<{ symbol: string; mintKey: PublicKey; decimals: number }>;
+    const custodies = this.poolConfig.custodies as Array<{ custodyAccount: PublicKey; symbol: string }>;
+
+    // Batch-fetch all custody accounts for SDK liquidation math
+    const custodyKeys = custodies.map(c => c.custodyAccount);
+    let custodyAccountMap = new Map<string, CustodyAccount>();
+    try {
+      const custodyData = await this.perpClient.program.account.custody.fetchMultiple(custodyKeys);
+      for (let i = 0; i < custodies.length; i++) {
+        const cd = custodyData[i];
+        if (cd) {
+          custodyAccountMap.set(
+            custodies[i].symbol,
+            CustodyAccount.from(custodyKeys[i], cd as Parameters<typeof CustodyAccount.from>[1]),
+          );
+        }
+      }
+    } catch {
+      // Non-critical: liquidation will fall back to 0 if custody fetch fails
+      getLogger().debug('CLIENT', 'Custody fetch for liquidation calc failed, liq prices may be unavailable');
+    }
 
     for (const raw of rawPositions as unknown as Array<{
       pubkey: PublicKey; market: PublicKey;
       entryPrice?: { price: BN; exponent: number } | BN; sizeUsd?: BN; collateralUsd?: BN; openTime?: BN;
-      unsettledFeesUsd?: BN;
+      unsettledFeesUsd?: BN; sizeAmount?: BN;
       sizeDecimals?: number; collateralDecimals?: number;
     }>) {
       try {
@@ -1201,10 +1384,31 @@ export class FlashClient implements IFlashClient {
         const unrealizedPnl = (priceDelta / entryPrice) * sizeUsd * pnlMult;
         const safeUnrealizedPnl = Number.isFinite(unrealizedPnl) ? unrealizedPnl : 0;
 
-        const liqDist = leverage > 0 ? (1 / leverage) * 0.9 : 0;
-        const liquidationPrice = side === TradeSide.Long
-          ? entryPrice * (1 - liqDist)
-          : entryPrice * (1 + liqDist);
+        // SDK liquidation price — uses the same math as the Flash Trade protocol
+        let liquidationPrice = 0;
+        const targetCustodyAcct = custodyAccountMap.get(targetToken.symbol);
+        if (targetCustodyAcct && raw.entryPrice && typeof raw.entryPrice === 'object' && 'price' in raw.entryPrice && 'exponent' in raw.entryPrice) {
+          try {
+            const entryOraclePrice = OraclePrice.from({
+              price: raw.entryPrice.price,
+              exponent: new BN(raw.entryPrice.exponent),
+              confidence: BN_ZERO,
+              timestamp: BN_ZERO,
+            });
+            const unsettledFees = raw.unsettledFeesUsd ?? BN_ZERO;
+            // Cast raw decoded position data to PositionAccount for SDK liquidation math
+            const posAcct = PositionAccount.from(raw.pubkey, raw as unknown as ConstructorParameters<typeof PositionAccount>[1]);
+            const liqOraclePrice = this.perpClient.getLiquidationPriceContractHelper(
+              entryOraclePrice, unsettledFees, marketConfig.side, targetCustodyAcct, posAcct,
+            );
+            const liqUi = parseFloat(liqOraclePrice.toUiPrice(8));
+            if (Number.isFinite(liqUi) && liqUi > 0) {
+              liquidationPrice = liqUi;
+            }
+          } catch {
+            // Fall back to 0 if SDK calculation fails
+          }
+        }
 
         // Accumulated fees from protocol (unsettledFeesUsd is in USD with 6 decimals)
         const rawFees = raw.unsettledFeesUsd

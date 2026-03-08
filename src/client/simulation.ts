@@ -122,14 +122,38 @@ export class SimulatedFlashClient implements IFlashClient {
     return price;
   }
 
+  /**
+   * Calculate liquidation price using the same formula structure as the Flash Trade protocol.
+   *
+   * Protocol formula:
+   *   exitFee = sizeUsd × closeFeeBps / RATE_POWER
+   *   maintenanceMargin = sizeUsd × BPS_POWER / maxLeverage
+   *   liabilities = maintenanceMargin + exitFee
+   *   priceDist = (collateral - liabilities) / sizeUsd × entryPrice
+   *
+   * In simulation we approximate with:
+   *   closeFeeBps = 0.08% (8/10000)
+   *   maxLeverage = 100x → maintenanceMargin = 1% of size
+   */
   private calcLiquidationPrice(entryPrice: number, leverage: number, side: TradeSide): number {
     if (!Number.isFinite(leverage) || leverage <= 0 || !Number.isFinite(entryPrice) || entryPrice <= 0) {
       return 0;
     }
-    const liqDistance = (1 / leverage) * 0.9;
+    // Simulate the protocol's liability calculation
+    const collateralRatio = 1 / leverage;                  // collateral / size
+    const maintenanceMarginRatio = 1 / 100;                // sizeUsd / maxLeverage (100x)
+    const closeFeeRatio = 8 / 10_000;                      // 0.08% close fee
+    const liabilityRatio = maintenanceMarginRatio + closeFeeRatio; // ~1.08%
+    const priceDist = (collateralRatio - liabilityRatio) * entryPrice;
+
+    if (priceDist <= 0) {
+      // Collateral doesn't cover liabilities — position at immediate risk
+      return side === TradeSide.Long ? entryPrice : entryPrice;
+    }
+
     return side === TradeSide.Long
-      ? entryPrice * (1 - liqDistance)
-      : entryPrice * (1 + liqDistance);
+      ? entryPrice - priceDist
+      : entryPrice + priceDist;
   }
 
   async openPosition(

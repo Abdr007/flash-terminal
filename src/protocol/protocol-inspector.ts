@@ -186,8 +186,21 @@ export class ProtocolInspector {
       return chalk.red(`  Market not found: ${market}. Use 'markets' to see available markets.`);
     }
 
+    // Market status (virtual vs crypto)
+    const { getMarketStatus, getNextSessionOpen, getScheduleDetails } = await import('../data/market-hours.js');
+    const mktStatus = getMarketStatus(upper);
+
     const snap = await this.getSnapshot();
     const oi = snap.openInterest.find(m => m.market.toUpperCase() === upper);
+
+    let statusDisplay: string;
+    if (!mktStatus.isVirtual) {
+      statusDisplay = chalk.green('OPEN') + chalk.dim(' (24/7)');
+    } else if (mktStatus.isOpen) {
+      statusDisplay = chalk.green('OPEN');
+    } else {
+      statusDisplay = chalk.red('CLOSED');
+    }
 
     const lines: string[] = [
       '',
@@ -196,7 +209,29 @@ export class ProtocolInspector {
       '',
       `  Pool:          ${chalk.cyan(pool)}`,
       `  Oracle Source:  ${chalk.dim('Pyth')}`,
+      `  Status:        ${statusDisplay}`,
     ];
+
+    if (mktStatus.isVirtual) {
+      const details = getScheduleDetails(upper);
+      if (details) {
+        lines.push('');
+        lines.push(chalk.bold('  Trading Hours'));
+        lines.push(`    ${details.sessionHours}`);
+        if (details.dailyBreak) {
+          lines.push(`    Daily Break: ${details.dailyBreak}`);
+        }
+      }
+
+      if (!mktStatus.isOpen) {
+        const nextOpen = getNextSessionOpen(upper);
+        if (nextOpen) {
+          lines.push('');
+          lines.push(chalk.bold('  Next Session'));
+          lines.push(`    Opens at: ${chalk.yellow(nextOpen.toUTCString())}`);
+        }
+      }
+    }
 
     if (oi) {
       const totalOi = oi.longOi + oi.shortOi;

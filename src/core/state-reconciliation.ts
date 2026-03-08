@@ -51,6 +51,9 @@ export class StateReconciler {
   private lastKnownPositions: Map<string, Position> = new Map();
   private lastReconcileAt = 0;
   private _running = false;
+  /** Throttle: track when we last warned about zero-position RPC results */
+  private lastZeroPosWarnAt = 0;
+  private static readonly ZERO_POS_WARN_INTERVAL_MS = 300_000; // warn at most every 5 minutes
 
   constructor(client: IFlashClient) {
     this.client = client;
@@ -129,7 +132,12 @@ export class StateReconciler {
       // likely an RPC issue than all positions being liquidated simultaneously.
       // Log a warning and preserve local state rather than wiping it.
       if (onChainMap.size === 0 && this.lastKnownPositions.size > 0) {
-        logger.warn('RECONCILE', `RPC returned 0 positions but we had ${this.lastKnownPositions.size} — possible RPC failure, preserving local state`);
+        // Throttle this warning — it can fire every 60s during transient RPC issues
+        const now2 = Date.now();
+        if (now2 - this.lastZeroPosWarnAt >= StateReconciler.ZERO_POS_WARN_INTERVAL_MS) {
+          this.lastZeroPosWarnAt = now2;
+          logger.warn('RECONCILE', `RPC returned 0 positions but we had ${this.lastKnownPositions.size} — possible RPC failure, preserving local state`);
+        }
         return {
           hadDiscrepancy: false,
           onChainCount: this.lastKnownPositions.size,

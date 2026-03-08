@@ -83,6 +83,11 @@ export class RpcManager {
     return this.failoverCount;
   }
 
+  /** Last known latency (ms) for the active endpoint, or -1 if unknown. */
+  get activeLatencyMs(): number {
+    return this.latencyHistory.get(this.activeEndpoint.url) ?? -1;
+  }
+
   /**
    * Register a callback invoked whenever the active connection changes (failover).
    * Used by FlashClient to pick up the new connection automatically.

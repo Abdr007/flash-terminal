@@ -22,6 +22,30 @@ import { RpcManager, buildRpcEndpoints, initRpcManager } from '../network/rpc-ma
 import { initSystemDiagnostics } from '../system/system-diagnostics.js';
 import { initReconciler, getReconciler } from '../core/state-reconciliation.js';
 import { loadPlugins, shutdownPlugins } from '../plugins/plugin-loader.js';
+import { StatusBar } from './status-bar.js';
+
+/** Resolve common market name aliases to canonical Flash Trade symbols */
+const MARKET_ALIASES: Record<string, string> = {
+  JITO: 'JTO', RAYDIUM: 'RAY', KAMINO: 'KMNO',
+  METAPLEX: 'MET', SOLANA: 'SOL', BITCOIN: 'BTC',
+  ETHEREUM: 'ETH', ETHER: 'ETH', GOLD: 'XAU',
+  SILVER: 'XAG', CRUDE: 'CRUDEOIL', OIL: 'CRUDEOIL',
+  'CRUDE OIL': 'CRUDEOIL',
+  PENGUIN: 'PENGU', ZCASH: 'ZEC', EURO: 'EUR',
+  POUND: 'GBP', STERLING: 'GBP', YEN: 'USDJPY',
+  YUAN: 'USDCNH', HYPERLIQUID: 'HYPE', PUMPFUN: 'PUMP',
+};
+
+function resolveMarketAlias(input: string): string {
+  const trimmed = input.trim();
+  const upper = trimmed.toUpperCase();
+  // Try exact match first (handles multi-word like "CRUDE OIL")
+  if (MARKET_ALIASES[upper]) return MARKET_ALIASES[upper];
+  // Try with spaces removed (e.g. "crude oil" → "CRUDEOIL")
+  const collapsed = upper.replace(/\s+/g, '');
+  if (MARKET_ALIASES[collapsed]) return MARKET_ALIASES[collapsed];
+  return collapsed;
+}
 
 const COMMAND_TIMEOUT_MS = 120_000;
 const SLOW_COMMAND_MS = 3_000;
@@ -132,10 +156,14 @@ export class FlashTerminal {
   private pendingConfirmation: ((answer: string) => void) | null = null;
   /** Prevent concurrent command processing */
   private processing = false;
+  /** Suppress repeated "Please wait" messages during a single command */
+  private processingWarnShown = false;
   /** Cleanup callback for risk monitor on shutdown */
   private riskMonitorCleanup: (() => void) | null = null;
   /** RPC manager for failover support */
   private rpcManager!: RpcManager;
+  /** Live status bar */
+  private statusBar: StatusBar | null = null;
 
   constructor(config: FlashConfig) {
     this.config = config;
@@ -348,6 +376,13 @@ export class FlashTerminal {
     // ─── Display Intelligence Screen ─────────────────────────────────
     await this.showIntelligenceScreen(walletInfo?.name ?? null);
 
+    // ─── Start Status Bar ─────────────────────────────────────────────
+    this.statusBar = new StatusBar(this.rl, this.flashClient, this.rpcManager, {
+      simulationMode: this.config.simulationMode,
+      walletName: walletInfo?.name ?? (this.config.simulationMode ? 'paper' : 'N/A'),
+    });
+    this.statusBar.start();
+
     // ─── Signal Handlers ──────────────────────────────────────────────
     process.on('SIGINT', () => this.shutdown());
     process.on('SIGTERM', () => this.shutdown());
@@ -386,17 +421,24 @@ export class FlashTerminal {
       }
 
       if (this.processing) {
-        console.log(chalk.dim('  Please wait for the current command to finish.'));
+        if (!this.processingWarnShown) {
+          this.processingWarnShown = true;
+          console.log(chalk.dim('  Please wait for the current command to finish.'));
+        }
         return;
       }
 
       this.processing = true;
+      this.processingWarnShown = false;
+      this.statusBar?.suspend();
       try {
         await this.handleInput(trimmed);
       } catch (error: unknown) {
         console.log(chalk.red(`  Error: ${getErrorMessage(error)}`));
       } finally {
         this.processing = false;
+        this.processingWarnShown = false;
+        this.statusBar?.resume();
         this.rl.prompt();
       }
     });
@@ -1318,6 +1360,11 @@ export class FlashTerminal {
 
     this.saveHistory();
     try {
+      if (this.statusBar) this.statusBar.stop();
+    } catch {
+      // Best-effort cleanup
+    }
+    try {
       const autopilot = getAutopilot(this.context);
       if (autopilot.state.active) autopilot.stop();
     } catch {
@@ -1381,8 +1428,11 @@ export class FlashTerminal {
         return;
       }
       intent = { action: ActionType.InspectPool, pool } as ParsedIntent;
-    } else if (lower.startsWith('inspect market ')) {
-      const market = input.slice('inspect market '.length).trim().toUpperCase();
+    } else if (lower.startsWith('inspect market ') || (lower.startsWith('inspect ') && !lower.startsWith('inspect pool ') && !lower.startsWith('inspect protocol') && lower !== 'inspect')) {
+      // Handle both "inspect market crude oil" and "inspect crude oil"
+      const prefix = lower.startsWith('inspect market ') ? 'inspect market ' : 'inspect ';
+      const rawMarket = input.slice(prefix.length).trim();
+      const market = resolveMarketAlias(rawMarket);
       const { getPoolForMarket } = await import('../config/index.js');
       if (!getPoolForMarket(market)) {
         console.log(chalk.red(`  Unknown market: ${market}`));
@@ -1623,8 +1673,9 @@ export class FlashTerminal {
       // Sort by total OI descending (most active markets first)
       rows.sort((a, b) => b.totalOi - a.totalOi);
 
-      // Clear screen and render
-      process.stdout.write('\x1B[2J\x1B[H');
+      // Move cursor to top-left and clear from cursor to end of screen
+      // This avoids the flicker caused by full screen clear (\x1B[2J)
+      process.stdout.write('\x1B[H\x1B[J');
       const now = new Date().toLocaleTimeString();
       console.log('');
       console.log(chalk.bold.yellow('  MARKET MONITOR'));
@@ -1695,7 +1746,7 @@ export class FlashTerminal {
           process.stdin.setRawMode(wasRaw ?? false);
         }
         // Clear screen and return to prompt
-        process.stdout.write('\x1B[2J\x1B[H');
+        process.stdout.write('\x1B[H\x1B[J');
         console.log(chalk.dim('  Market monitor stopped.\n'));
         resolve();
       };
@@ -1710,12 +1761,19 @@ export class FlashTerminal {
    * SAFETY: No transaction is ever signed or sent.
    */
   private async handleDryRun(innerCommand: string): Promise<void> {
+    // Normalize: if inner command doesn't start with an action keyword, prepend "open"
+    // This handles natural language like "dryrun sol 2x long $500"
+    const lowerInner = innerCommand.toLowerCase().trim();
+    const actionKeywords = ['open', 'close', 'add', 'remove', 'long', 'short'];
+    const hasAction = actionKeywords.some(k => lowerInner.startsWith(k));
+    const normalizedCommand = hasAction ? innerCommand : `open ${innerCommand}`;
+
     // Parse the inner command using the interpreter
     process.stdout.write(chalk.dim('  Parsing inner command...\r'));
     let innerIntent: ParsedIntent;
     try {
       innerIntent = await withTimeout(
-        this.interpreter.parseIntent(innerCommand),
+        this.interpreter.parseIntent(normalizedCommand),
         COMMAND_TIMEOUT_MS,
         'dryrun-parse',
       );
@@ -1739,6 +1797,14 @@ export class FlashTerminal {
 
     if (innerIntent.action !== ActionType.OpenPosition) return;
     const { market, side, collateral, leverage, collateral_token } = innerIntent;
+
+    // Check if virtual market is currently open before building preview
+    const { getMarketStatus, formatMarketClosedMessage } = await import('../data/market-hours.js');
+    const mktStatus = getMarketStatus(market);
+    if (!mktStatus.isOpen) {
+      console.log(chalk.yellow(formatMarketClosedMessage(market)));
+      return;
+    }
 
     process.stdout.write(chalk.dim('  Building transaction preview...\r'));
 

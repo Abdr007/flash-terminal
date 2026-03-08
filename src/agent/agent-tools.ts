@@ -519,9 +519,10 @@ export const aiDashboard: ToolDefinition = {
     }
     lines.push('');
 
-    // Top Opportunities
+    // Top Opportunities (fresh scan — don't reuse cached scan results)
     try {
       const scanner = getScanner(context);
+      scanner.clearCache();
       const balance = context.flashClient.getBalance();
       const opportunities = await scanner.scan(balance, 3);
       if (opportunities.length > 0) {
