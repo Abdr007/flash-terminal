@@ -89,6 +89,11 @@ export const theme = {
     return chalk.yellow(text);
   },
 
+  /** Market symbol highlight — always cyan */
+  market(text: string): string {
+    return chalk.cyan(text);
+  },
+
   /** Command syntax highlight */
   command(text: string): string {
     return chalk.cyan(text);

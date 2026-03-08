@@ -26,6 +26,7 @@ import { StatusBar } from './status-bar.js';
 import { runDoctor } from '../tools/doctor.js';
 import { startWatch } from './watch.js';
 import { theme } from './theme.js';
+import { completer, getSuggestions } from './completer.js';
 
 /** Resolve common market name aliases to canonical Flash Trade symbols */
 const MARKET_ALIASES: Record<string, string> = {
@@ -167,6 +168,10 @@ export class FlashTerminal {
   private rpcManager!: RpcManager;
   /** Live status bar */
   private statusBar: StatusBar | null = null;
+  /** Last executed command text (for context line) */
+  private lastCommand = '';
+  /** Last command execution time in ms (for context line) */
+  private lastCommandMs = 0;
 
   constructor(config: FlashConfig) {
     this.config = config;
@@ -207,6 +212,7 @@ export class FlashTerminal {
       input: process.stdin,
       output: process.stdout,
       historySize: MAX_HISTORY,
+      completer,
     });
 
     this.loadHistory();
@@ -434,6 +440,7 @@ export class FlashTerminal {
       this.processing = true;
       this.processingWarnShown = false;
       this.statusBar?.suspend();
+      const cmdStart = Date.now();
       try {
         await this.handleInput(trimmed);
       } catch (error: unknown) {
@@ -441,6 +448,9 @@ export class FlashTerminal {
       } finally {
         this.processing = false;
         this.processingWarnShown = false;
+        this.lastCommand = trimmed;
+        this.lastCommandMs = Date.now() - cmdStart;
+        this.renderContextLine();
         this.statusBar?.resume();
         this.rl.prompt();
       }
@@ -1482,6 +1492,27 @@ export class FlashTerminal {
     // If the interpreter returned Help (meaning it couldn't parse the input),
     // and the user didn't explicitly type "help", show an unknown command message.
     if (intent.action === ActionType.Help && !fastIntent) {
+      // Try position-aware suggestions first
+      let positions: { market: string; side: string; sizeUsd: number }[] | undefined;
+      try {
+        const posList = await this.flashClient.getPositions();
+        positions = posList.map(p => ({
+          market: p.market ?? '',
+          side: p.side ?? '',
+          sizeUsd: p.sizeUsd ?? 0,
+        })).filter(p => p.market && p.side);
+      } catch {
+        // Non-critical — proceed without position context
+      }
+
+      const suggestion = getSuggestions(input, positions);
+      if (suggestion) {
+        console.log('');
+        console.log(theme.warning(`  Unknown command: ${input}`));
+        console.log(suggestion);
+        return;
+      }
+
       console.log('');
       console.log(theme.warning(`  Unknown command: ${input}`));
       console.log('');
@@ -1581,6 +1612,32 @@ export class FlashTerminal {
     if (elapsed > SLOW_COMMAND_MS) {
       console.log(chalk.dim(`  [${(elapsed / 1000).toFixed(1)}s]`));
     }
+  }
+
+  // ─── Command Context Line ────────────────────────────────────
+
+  /**
+   * Render a Bloomberg-style context line after command execution.
+   * Shows last command and execution time in muted styling.
+   */
+  private renderContextLine(): void {
+    if (!this.lastCommand) return;
+
+    // Don't render for trivial commands
+    const skip = ['help', 'commands', '?', 'exit', 'quit'];
+    if (skip.includes(this.lastCommand.toLowerCase())) return;
+
+    const timeStr = this.lastCommandMs >= 1000
+      ? `${(this.lastCommandMs / 1000).toFixed(1)}s`
+      : `${this.lastCommandMs}ms`;
+
+    const sep = theme.separator(56);
+    const ctx = theme.dim(`Last: ${this.lastCommand}`) + theme.dim('  |  ') + theme.dim(`${timeStr}`);
+
+    console.log(sep);
+    console.log(`  ${ctx}`);
+    console.log(sep);
+    console.log('');
   }
 
   // ─── Usage Hints ──────────────────────────────────────────────
