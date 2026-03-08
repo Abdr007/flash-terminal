@@ -1,3 +1,4 @@
+import * as readline from 'readline';
 import chalk from 'chalk';
 import { Interface as ReadlineInterface } from 'readline';
 import { IFlashClient } from '../types/index.js';
@@ -15,10 +16,12 @@ import { theme } from './theme.js';
 // Design constraints:
 //   • No new network calls — reuses cached data from existing systems
 //   • Suspends during command execution or monitor mode
-//   • Uses readline cursor control for flicker-free updates
+//   • Updates in-place using ANSI cursor control — never appends new lines
 //   • Timer is unref'd so it doesn't prevent Node exit
 
 const STATUS_INTERVAL_MS = 10_000;
+/** Number of terminal lines the status bar occupies (status + separator) */
+const STATUS_LINE_COUNT = 2;
 
 interface StatusBarConfig {
   simulationMode: boolean;
@@ -45,6 +48,11 @@ export class StatusBar {
   private suspended = false;
   private lastStatus: CachedStatus | null = null;
   private active = false;
+  /** Whether the status bar lines have been printed at least once */
+  private rendered = false;
+  /** Previous display string for change detection */
+  private prevStatusText = '';
+  private prevSeparatorText = '';
 
   constructor(
     rl: ReadlineInterface,
@@ -96,9 +104,10 @@ export class StatusBar {
     this.suspended = true;
   }
 
-  /** Resume rendering after suspension. */
+  /** Resume rendering after suspension. Resets rendered flag so next render prints fresh. */
   resume(): void {
     this.suspended = false;
+    this.rendered = false;
   }
 
   /** Update the client reference (e.g. after wallet reconnect). */
@@ -179,14 +188,41 @@ export class StatusBar {
       `${theme.dim('Mode:')} ${modeColor}`,
     ];
 
-    const statusLine = parts.join(theme.dim('  |  '));
-    const separator = theme.fullSeparator();
+    const statusText = parts.join(theme.dim('  |  '));
+    const separatorText = theme.fullSeparator();
 
-    // Write status below the current prompt line without disrupting readline.
-    process.stdout.write('\n');
-    process.stdout.write(`${statusLine}\n`);
-    process.stdout.write(`${separator}\n`);
-    process.stdout.write('\n');
+    // Skip redraw if nothing changed
+    if (this.rendered && statusText === this.prevStatusText && separatorText === this.prevSeparatorText) {
+      return;
+    }
+    this.prevStatusText = statusText;
+    this.prevSeparatorText = separatorText;
+
+    if (!this.rendered) {
+      // First render: print the status lines below the prompt
+      process.stdout.write('\n');
+      process.stdout.write(`${statusText}\n`);
+      process.stdout.write(`${separatorText}\n`);
+      this.rendered = true;
+    } else {
+      // Subsequent renders: move cursor up over the existing status lines and overwrite
+      // Lines to move up: STATUS_LINE_COUNT (status + separator) + 1 (blank line after prompt)
+      readline.moveCursor(process.stdout, 0, -(STATUS_LINE_COUNT + 1));
+
+      // Overwrite status line
+      readline.cursorTo(process.stdout, 0);
+      readline.clearLine(process.stdout, 0);
+      process.stdout.write(`${statusText}`);
+
+      // Overwrite separator line
+      process.stdout.write('\n');
+      readline.cursorTo(process.stdout, 0);
+      readline.clearLine(process.stdout, 0);
+      process.stdout.write(`${separatorText}`);
+
+      // Move to the line after separator
+      process.stdout.write('\n');
+    }
 
     // Re-display the readline prompt so the cursor is in the right place
     this.rl.prompt(true);
