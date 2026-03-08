@@ -31,7 +31,16 @@ What actually happened. Include the full error message or terminal output.
 - **OS:** (macOS / Linux / Windows)
 - **Mode:** Simulation / Live
 - **RPC provider:** (public / Helius / Triton / other)
+- **Flash AI Terminal version:** (run `npm ls flash-ai-terminal` or check `package.json`)
+
+## Logs
+
+If applicable, include relevant log output. Ensure no private keys or API keys are included.
+
+```
+Paste log output here
+```
 
 ## Additional Context
 
-Any other relevant information (log output, screenshots, configuration).
+Any other relevant information (configuration, screenshots, related issues).

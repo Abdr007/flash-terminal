@@ -4,102 +4,104 @@ Flash AI Terminal interacts with the Solana blockchain and manages cryptographic
 
 ---
 
-## Wallet Security
+## Reporting Vulnerabilities
 
-### Key Storage
+If you discover a security vulnerability, please report it responsibly.
+
+### How to Report
+
+1. **Do not** open a public GitHub issue for security vulnerabilities.
+2. Email a description of the issue to the repository maintainers (see the GitHub profile for contact information).
+3. Include:
+   - A description of the vulnerability and its potential impact
+   - Steps to reproduce the issue
+   - Affected files or components
+   - Any suggested fix, if you have one
+4. Use the subject line: `[SECURITY] Flash AI Terminal - <brief description>`
+
+### Response Timeline
+
+| Stage | Expected Timeline |
+|-------|-------------------|
+| Acknowledgment | Within 48 hours of report |
+| Initial assessment | Within 5 business days |
+| Fix development | Within 14 business days for critical issues |
+| Disclosure coordination | Agreed upon with reporter before public disclosure |
+
+We will coordinate with the reporter on disclosure timing. Please allow reasonable time for a fix before any public disclosure.
+
+---
+
+## Security Architecture
+
+### Critical Invariants
+
+The following security properties must never be violated:
+
+1. **Private keys must never be logged.** No secret key material may appear in console output, log files, error messages, or audit trails.
+2. **Signing confirmation gates must not be bypassed.** Every trade must display a full position summary and receive explicit user confirmation before signing.
+3. **RPC URLs must be validated.** All RPC endpoints must use HTTPS (except localhost). Embedded credentials in URLs are rejected.
+4. **Wallet file access must be restricted.** Wallet paths are validated within the home directory with symlink resolution. File size limits prevent reading non-wallet files.
+5. **Transaction dry-run must never sign.** The `previewOpenPosition` method must never call `.sign()` on the transaction.
+
+### Wallet Security
+
+#### Key Storage
 
 - Wallet files are stored in `~/.flash/wallets/` with `0600` permissions (owner-only read/write)
 - The `~/.flash/` directory is created with `0700` permissions
-- Wallet names are sanitized to alphanumeric characters, hyphens, and underscores only (max 64 characters) to prevent path traversal attacks
+- Wallet names are sanitized to alphanumeric characters, hyphens, and underscores (max 64 chars) to prevent path traversal
 
-### Key Handling
+#### Key Handling
 
-- Private keys are **never** printed to the terminal
-- Private keys are **never** written to log files
-- Private key bytes are zeroed from memory immediately after use
+- Private keys are never printed to the terminal
+- Private keys are never written to log files
+- Private key bytes are zeroed from memory after use
 - During interactive wallet import, key input is hidden (no echo)
-- Secret key arrays are validated as exactly 64 bytes, each 0-255
+- Secret key arrays are validated as exactly 64 bytes, each value 0-255
 
-### Path Security
+#### Path Security
 
 - Wallet file paths are restricted to the user's home directory
-- Symlinks are resolved and verified to prevent traversal outside the home directory
-- File paths are resolved to absolute paths before any file operations
+- Symlinks are resolved via `realpathSync()` and verified to prevent directory traversal
+- File size limited to 1024 bytes to prevent reading arbitrary files
+
+### Transaction Signing
+
+- **Confirmation gate**: Full position summary (market, side, leverage, collateral, size, fees, wallet) displayed before every trade
+- **Rate limiter**: Configurable `MAX_TRADES_PER_MINUTE` and `MIN_DELAY_BETWEEN_TRADES_MS`
+- **Trade limits**: Configurable `MAX_COLLATERAL_PER_TRADE`, `MAX_POSITION_SIZE`, `MAX_LEVERAGE`
+- **Trade mutex**: Per-market/side lock prevents concurrent transaction submissions
+- **Signature cache**: 60-second TTL cache prevents duplicate trade submissions
+- **Audit log**: All trade attempts logged to `~/.flash/signing-audit.log` (never includes key material)
+
+### API Key Safety
+
+The logger automatically scrubs sensitive patterns from all file log output:
+
+- `api_key=...` --> `api_key=***`
+- `sk-ant-...` (Anthropic keys) --> `sk-ant-***`
+- `gsk_...` (Groq keys) --> `gsk_***`
+
+API keys should only be set in `.env` files, never in shell history or command arguments. The `.env` file is listed in `.gitignore`.
+
+### Network Security
+
+- RPC URLs validated for HTTPS protocol (HTTP allowed only for localhost)
+- RPC URLs rejected if they contain embedded credentials
+- All API calls have timeouts (8-10s for data, 120s for transactions)
+- Response body size limits prevent OOM from oversized responses (2MB fstats, 1MB CoinGecko)
+- Slot lag monitoring triggers automatic failover when an endpoint falls >50 slots behind
+- Log files rotate at 10MB with `.old` backup
 
 ---
 
-## API Key Safety
+## Simulation Mode
 
-### Log Scrubbing
-
-The logger automatically scrubs sensitive patterns from all log output:
-
-- `api_key=...` → `api_key=***`
-- `sk-ant-...` (AI provider keys) → `sk-ant-***`
-- `gsk_...` (Groq keys) → `gsk_***`
-
-### Environment Variables
-
-- API keys should only be set in `.env` files, never in shell history or command arguments
-- The `.env` file is listed in `.gitignore` and must never be committed
-- `.env.example` contains placeholder values with no real credentials
-
----
-
-## Environment Configuration
-
-### RPC Provider
-
-The default `https://api.mainnet-beta.solana.com` is rate-limited and not suitable for production trading. For live trading, use a premium RPC provider:
-
-- [Helius](https://helius.dev)
-- [Triton](https://triton.one)
-- [QuickNode](https://quicknode.com)
-
-### RPC Connection Security
-
-- The connection factory validates that RPC URLs use HTTPS
-- WebSocket endpoints are derived from the HTTP URL (no separate configuration required)
-- Connection timeouts prevent hanging on unresponsive endpoints
-
-### Simulation Mode
-
-- `SIMULATION_MODE` defaults to `true` — the system starts in paper trading mode
-- Autopilot is only available in simulation mode
+- `SIMULATION_MODE` defaults to `true` -- the system starts in paper trading mode
+- Autopilot trading is only available in simulation mode
 - Live mode requires explicit opt-in (`SIMULATION_MODE=false`)
-
----
-
-## Risk Warnings
-
-### Live Trading
-
-- **Real money is at risk.** Live trading executes real on-chain transactions with your funds
-- Start with small positions to verify the system works correctly with your setup
-- High leverage (20x+) can result in rapid liquidation — the terminal warns about this
-- Transaction fees (SOL) and trading fees (Flash Trade protocol fees) apply to every trade
-- Network congestion can cause transaction delays or failures
-
-### No Financial Advice
-
-Flash AI Terminal is a tool for interacting with DeFi protocols. It does not provide financial advice. All strategy signals, confidence scores, and trade suggestions are algorithmic computations, not recommendations.
-
-### Data Integrity
-
-- The system uses only live market data — no hardcoded prices or synthetic signals
-- Markets without reliable price data are excluded from analysis
-- If CoinGecko or fstats.io is unreachable, affected data degrades gracefully rather than producing incorrect results
-
----
-
-## Reporting Security Issues
-
-If you discover a security vulnerability, please report it responsibly:
-
-1. **Do not** open a public GitHub issue for security vulnerabilities
-2. Email the maintainers with a description of the issue
-3. Include steps to reproduce if possible
-4. Allow reasonable time for a fix before public disclosure
+- Simulation and live modes are locked for the entire session once selected
 
 ---
 
@@ -107,10 +109,19 @@ If you discover a security vulnerability, please report it responsibly:
 
 Key dependencies with security implications:
 
-| Package | Purpose | Trust Level |
-|---------|---------|-------------|
+| Package | Purpose | Maintainer |
+|---------|---------|------------|
 | `@solana/web3.js` | Solana RPC and transaction signing | Solana Foundation |
-| `flash-sdk` | Flash Trade protocol interaction | Flash Trade team |
+| `flash-sdk` | Flash Trade protocol interaction | Flash Trade |
 | `@pythnetwork/client` | Oracle price feeds | Pyth Network |
-| AI SDK (optional) | LLM-powered command parsing | AI provider |
+| `@anthropic-ai/sdk` | LLM-powered command parsing (optional) | Anthropic |
 | `zod` | Input validation schemas | Community standard |
+
+---
+
+## Data Integrity
+
+- The system uses only live market data -- no hardcoded prices or synthetic signals
+- Markets without reliable price data are excluded from analysis
+- If external data sources (CoinGecko, fstats.io) are unreachable, affected features degrade gracefully rather than producing incorrect results
+- Oracle price validation rejects zero or negative values from Pyth
