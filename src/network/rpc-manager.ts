@@ -49,6 +49,8 @@ export class RpcManager {
   private latencyHistory: Map<string, number> = new Map();
   /** Last observed slot per endpoint (for slot lag detection) */
   private slotHistory: Map<string, number> = new Map();
+  /** Consecutive monitor failures — suppress log spam during prolonged outages */
+  private consecutiveMonitorFailures = 0;
 
   constructor(endpoints: RpcEndpoint[]) {
     if (endpoints.length === 0) {
@@ -286,6 +288,10 @@ export class RpcManager {
 
   /**
    * Get a connection, checking health first. If unhealthy or high failure rate, attempt failover.
+   *
+   * Optimized for chaos conditions: checks cached failure rate first (no network call).
+   * Only performs a live health check if failure rate data is insufficient (< 3 samples).
+   * This prevents doubling latency under degraded RPC conditions.
    */
   async getHealthyConnection(): Promise<Connection> {
     // Check failure rate first (fast, no network call)
@@ -297,14 +303,22 @@ export class RpcManager {
       if (didFailover) return this._connection;
     }
 
-    const health = await this.checkHealth(this.activeEndpoint);
+    // Only perform a live health check if we have insufficient failure rate data.
+    // The background health monitor already checks every 30s — adding a check
+    // on every getHealthyConnection() call doubles latency under degraded conditions
+    // and can itself time out, causing cascading failures.
+    const history = this.failureHistory.get(this.activeEndpoint.url);
+    const hasSufficientData = history && history.length >= 3;
 
-    if (!health.healthy || health.latencyMs > LATENCY_THRESHOLD_MS) {
-      const didFailover = await this.failover();
-      if (didFailover) {
-        return this._connection;
+    if (!hasSufficientData) {
+      const health = await this.checkHealth(this.activeEndpoint);
+      if (!health.healthy || health.latencyMs > LATENCY_THRESHOLD_MS) {
+        const didFailover = await this.failover();
+        if (didFailover) {
+          return this._connection;
+        }
+        // No backup available — return current connection anyway
       }
-      // No backup available — return current connection anyway
     }
 
     return this._connection;
@@ -325,21 +339,34 @@ export class RpcManager {
         this.recordResult(health.healthy);
 
         if (!health.healthy) {
-          logger.warn('RPC', `Active RPC ${this.activeEndpoint.label} unhealthy — attempting failover`);
+          this.consecutiveMonitorFailures++;
+          // Suppress log spam during prolonged outages — log every 5th failure
+          if (this.consecutiveMonitorFailures <= 3 || this.consecutiveMonitorFailures % 5 === 0) {
+            logger.warn('RPC', `Active RPC ${this.activeEndpoint.label} unhealthy (${this.consecutiveMonitorFailures} consecutive) — attempting failover`);
+          }
           await this.failover();
         } else if (health.latencyMs > LATENCY_THRESHOLD_MS) {
           logger.warn('RPC', `Active RPC ${this.activeEndpoint.label} latency ${health.latencyMs}ms > ${LATENCY_THRESHOLD_MS}ms threshold`);
           if (this.fallbackCount > 0) {
             await this.failover();
           }
+          this.consecutiveMonitorFailures = 0;
         } else if (health.slotLag !== undefined && health.slotLag > SLOT_LAG_THRESHOLD) {
           logger.warn('RPC', `Active RPC ${this.activeEndpoint.label} is ${health.slotLag} slots behind (threshold: ${SLOT_LAG_THRESHOLD}) — attempting failover`);
           if (this.fallbackCount > 0) {
             await this.failover();
           }
+          this.consecutiveMonitorFailures = 0;
+        } else {
+          // Healthy — reset consecutive failure counter
+          if (this.consecutiveMonitorFailures > 0) {
+            logger.info('RPC', `Active RPC ${this.activeEndpoint.label} recovered after ${this.consecutiveMonitorFailures} consecutive failures`);
+          }
+          this.consecutiveMonitorFailures = 0;
         }
       } catch {
         // Monitor must never crash
+        this.consecutiveMonitorFailures++;
       }
     }, HEALTH_MONITOR_INTERVAL_MS);
 

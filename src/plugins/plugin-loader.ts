@@ -75,7 +75,11 @@ export async function loadPlugins(context: ToolContext): Promise<ToolDefinition[
 
     const pluginFiles = files.filter(f =>
       (f.endsWith('.js') || f.endsWith('.ts')) &&
+      !f.endsWith('.d.ts') &&
+      !f.endsWith('.js.map') &&
       !f.startsWith('_') &&
+      !f.includes('/') &&
+      !f.includes('\\') &&
       f !== 'plugin-loader.ts' &&
       f !== 'plugin-loader.js'
     );
@@ -83,8 +87,9 @@ export async function loadPlugins(context: ToolContext): Promise<ToolDefinition[
     for (const file of pluginFiles) {
       try {
         const modulePath = join(pluginsDir, file);
-        // Use file:// URL for ESM dynamic import
-        const moduleUrl = `file://${modulePath}`;
+        // Use pathToFileURL for correct cross-platform URL encoding
+        const { pathToFileURL } = await import('url');
+        const moduleUrl = pathToFileURL(modulePath).href;
         const mod = await import(moduleUrl);
         const plugin: FlashPlugin | undefined = mod.default ?? mod.plugin;
 

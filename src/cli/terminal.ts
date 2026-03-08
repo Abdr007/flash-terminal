@@ -13,7 +13,7 @@ import { WalletStore } from '../wallet/wallet-store.js';
 import { getLastWallet, updateLastWallet } from '../wallet/session.js';
 import { shortAddress } from '../utils/format.js';
 import { getErrorMessage } from '../utils/retry.js';
-import { initLogger } from '../utils/logger.js';
+import { initLogger, getLogger } from '../utils/logger.js';
 import { getAutopilot, setAiApiKey, getInspector, getScanner, getRegimeDetector } from '../agent/agent-tools.js';
 import { formatUsd, formatPrice, colorPercent } from '../utils/format.js';
 import { MarketRegime } from '../regime/regime-types.js';
@@ -164,6 +164,8 @@ export class FlashTerminal {
         hasGroqKey ? config.groqApiKey : undefined,
       );
     } else {
+      console.log(chalk.yellow('\n  AI features disabled — no API key configured.'));
+      console.log(chalk.dim('  Set ANTHROPIC_API_KEY or GROQ_API_KEY in .env to enable AI analysis.'));
       this.interpreter = new OfflineInterpreter();
     }
   }
@@ -303,15 +305,21 @@ export class FlashTerminal {
     }
 
     // Load plugins and register their tools
-    try {
-      const pluginTools = await loadPlugins(this.context);
-      if (pluginTools.length > 0) {
-        for (const tool of pluginTools) {
-          this.engine.registerTool(tool);
+    if (this.config.noPlugins) {
+      console.log(chalk.dim('  Plugins disabled (--no-plugins).'));
+    } else {
+      try {
+        const pluginTools = await loadPlugins(this.context);
+        if (pluginTools.length > 0) {
+          for (const tool of pluginTools) {
+            this.engine.registerTool(tool);
+          }
+          console.log(chalk.yellow('  Plugins loaded with full system access.'));
+          console.log(chalk.dim('  Only install plugins from trusted sources. Use --no-plugins to disable.'));
         }
+      } catch {
+        // Plugin loading is non-critical
       }
-    } catch {
-      // Plugin loading is non-critical
     }
 
     // Register risk monitor cleanup
@@ -324,6 +332,18 @@ export class FlashTerminal {
 
     // Set prompt based on mode
     this.updatePrompt();
+
+    // Log startup readiness (structured, for operational visibility)
+    {
+      const logger = getLogger();
+      logger.info('STARTUP', 'Terminal ready', {
+        mode: this.config.simulationMode ? 'simulation' : 'live',
+        wallet: walletInfo?.address ?? 'none',
+        rpc: this.rpcManager.activeEndpoint.label,
+        backupRpcs: this.rpcManager.fallbackCount,
+        plugins: this.config.noPlugins ? 'disabled' : 'enabled',
+      });
+    }
 
     // ─── Display Intelligence Screen ─────────────────────────────────
     await this.showIntelligenceScreen(walletInfo?.name ?? null);
@@ -444,6 +464,11 @@ export class FlashTerminal {
     let defaultWallet = store.getDefault();
     const sessionWallet = getLastWallet();
 
+    // No wallets saved — first-time setup
+    if (wallets.length === 0) {
+      return this.showFirstTimeWalletSetup(store);
+    }
+
     // Auto-set default if there's exactly one wallet saved
     if (!defaultWallet && wallets.length === 1) {
       store.setDefault(wallets[0]);
@@ -453,20 +478,40 @@ export class FlashTerminal {
     // Check session for previous wallet
     const targetWallet = defaultWallet ?? sessionWallet;
 
-    // Auto-connect target wallet
+    // Wallets exist — show saved wallets menu
     if (targetWallet && wallets.includes(targetWallet)) {
-      console.log('');
-      console.log(chalk.dim(`  Previous wallet detected: ${chalk.bold(targetWallet)}`));
-      console.log('');
-      console.log(`    ${chalk.cyan('1)')} Reconnect previous wallet`);
-      console.log(`    ${chalk.cyan('2)')} Choose different wallet`);
-      console.log(`    ${chalk.cyan('3)')} Continue without wallet ${chalk.dim('(read-only)')}`);
-      console.log('');
+      return this.showSavedWalletsMenu(store, wallets, targetWallet);
+    }
 
-      while (true) {
-        const choice = (await this.ask(`  ${chalk.yellow('>')} `)).trim();
+    // Wallets exist but no target — go straight to picker
+    return this.showWalletPicker(store, wallets);
+  }
 
-        if (choice === '1') {
+  /**
+   * Show the saved wallets menu when wallets already exist.
+   * Options: use previous, select another, import new, create new.
+   */
+  private async showSavedWalletsMenu(
+    store: WalletStore,
+    wallets: string[],
+    targetWallet: string,
+  ): Promise<{ address: string; name: string } | null> {
+    console.log('');
+    console.log(chalk.bold('  Saved Wallets'));
+    console.log(chalk.dim('  ────────────'));
+    console.log('');
+    console.log(`    ${chalk.cyan('1)')} Use previous wallet ${chalk.dim(`(${targetWallet})`)}`);
+    console.log(`    ${chalk.cyan('2)')} Select another saved wallet`);
+    console.log(`    ${chalk.cyan('3)')} Import new wallet`);
+    console.log(`    ${chalk.cyan('4)')} Create new wallet`);
+    console.log('');
+
+    while (true) {
+      const choice = (await this.ask(`  ${chalk.yellow('>')} `)).trim();
+
+      switch (choice) {
+        case '1': {
+          // Reconnect previous wallet
           try {
             const walletPath = store.getWalletPath(targetWallet);
             const info = this.tryConnectWallet(walletPath);
@@ -478,42 +523,34 @@ export class FlashTerminal {
           } catch {
             console.log(chalk.dim(`  Wallet "${targetWallet}" could not be loaded.`));
           }
-          break; // Fall through to picker
-        } else if (choice === '2') {
-          break; // Fall through to picker
-        } else if (choice === '3') {
-          // Read-only mode: no wallet
-          console.log(chalk.yellow('\n  Continuing in READ-ONLY mode.'));
-          console.log(chalk.dim('  You can view data but cannot execute trades.'));
-          return { address: 'read-only', name: 'read-only' };
-        } else {
-          console.log(chalk.dim('  Enter 1, 2, or 3.'));
+          // Fall through to picker on failure
+          return this.showWalletPicker(store, wallets);
+        }
+
+        case '2': {
+          // Show wallet picker (excludes the target wallet from being auto-selected)
+          return this.showWalletPicker(store, wallets);
+        }
+
+        case '3': {
+          // Import new wallet
+          const importedName = await this.handleWalletImportFlow(store);
+          if (importedName) return { address: this.walletManager.address!, name: importedName };
           continue;
         }
-      }
-    }
 
-    // Multiple wallets saved — pick by number
-    if (wallets.length > 1) {
-      return this.showWalletPicker(store, wallets);
-    }
-
-    if (wallets.length === 1) {
-      try {
-        const walletPath = store.getWalletPath(wallets[0]);
-        const info = this.tryConnectWallet(walletPath);
-        if (info && this.walletManager.isConnected) {
-          console.log(chalk.green(`\n  Wallet connected: ${wallets[0]}`));
-          updateLastWallet(wallets[0]);
-          return { ...info, name: wallets[0] };
+        case '4': {
+          // Create new wallet
+          const created = await this.handleWalletCreateFlow(store);
+          if (created) return created;
+          continue;
         }
-      } catch {
-        console.log(chalk.dim(`\n  Wallet "${wallets[0]}" could not be loaded.`));
+
+        default:
+          console.log(chalk.dim('  Enter 1, 2, 3, or 4.'));
+          continue;
       }
     }
-
-    // No wallets — first-time setup
-    return this.showFirstTimeWalletSetup(store);
   }
 
   /** Pick from multiple saved wallets by number. */
@@ -522,10 +559,16 @@ export class FlashTerminal {
     console.log(chalk.bold('  Select wallet:'));
     console.log('');
     for (let i = 0; i < wallets.length; i++) {
-      console.log(`    ${chalk.cyan(String(i + 1) + ')')} ${wallets[i]}`);
+      try {
+        const addr = store.getAddress(wallets[i]);
+        console.log(`    ${chalk.cyan(String(i + 1) + ')')} ${wallets[i]} ${chalk.dim(`(${shortAddress(addr)})`)}`);
+      } catch {
+        console.log(`    ${chalk.cyan(String(i + 1) + ')')} ${wallets[i]}`);
+      }
     }
     console.log('');
-    console.log(`    ${chalk.cyan('0)')} Import new wallet`);
+    console.log(`    ${chalk.cyan('i)')} Import new wallet`);
+    console.log(`    ${chalk.cyan('c)')} Create new wallet`);
     console.log(`    ${chalk.dim('q)')} Exit`);
     console.log('');
 
@@ -534,9 +577,15 @@ export class FlashTerminal {
 
       if (choice === 'q') return null;
 
-      if (choice === '0') {
+      if (choice === 'i') {
         const importedName = await this.handleWalletImportFlow(store);
         if (importedName) return { address: this.walletManager.address!, name: importedName };
+        continue;
+      }
+
+      if (choice === 'c') {
+        const created = await this.handleWalletCreateFlow(store);
+        if (created) return created;
         continue;
       }
 
@@ -547,6 +596,7 @@ export class FlashTerminal {
           const info = this.tryConnectWallet(walletPath);
           if (info) {
             store.setDefault(wallets[idx]);
+            updateLastWallet(wallets[idx]);
             console.log(chalk.green(`\n  Wallet connected: ${wallets[idx]}`));
             return { ...info, name: wallets[idx] };
           }
@@ -554,7 +604,7 @@ export class FlashTerminal {
           console.log(chalk.red(`  ${getErrorMessage(error)}`));
         }
       } else {
-        console.log(chalk.dim(`  Enter 1-${wallets.length}, 0, or q.`));
+        console.log(chalk.dim(`  Enter 1-${wallets.length}, i, c, or q.`));
       }
     }
   }
@@ -563,11 +613,13 @@ export class FlashTerminal {
   private async showFirstTimeWalletSetup(store: WalletStore): Promise<{ address: string; name: string } | null> {
     console.log('');
     console.log(chalk.bold('  Wallet Setup'));
+    console.log(chalk.dim('  ────────────'));
+    console.log('');
     console.log(chalk.dim('  A wallet is required for live trading.'));
     console.log('');
-    console.log(`    ${chalk.cyan('1)')} Import wallet (paste private key)`);
-    console.log(`    ${chalk.cyan('2)')} Connect wallet file (JSON path)`);
-    console.log(`    ${chalk.cyan('3)')} Exit`);
+    console.log(`    ${chalk.cyan('1)')} Create new wallet`);
+    console.log(`    ${chalk.cyan('2)')} Import wallet file`);
+    console.log(`    ${chalk.cyan('3)')} Connect existing Solana keypair`);
     console.log('');
 
     while (true) {
@@ -575,24 +627,84 @@ export class FlashTerminal {
 
       switch (choice) {
         case '1': {
+          const created = await this.handleWalletCreateFlow(store);
+          if (created) return created;
+          continue;
+        }
+
+        case '2': {
           const importedName = await this.handleWalletImportFlow(store);
           if (importedName) return { address: this.walletManager.address!, name: importedName };
           continue;
         }
 
-        case '2': {
+        case '3': {
           const connected = await this.handleWalletConnectFlow();
           if (connected) return { address: this.walletManager.address!, name: 'wallet' };
           continue;
         }
 
-        case '3':
-          return null;
-
         default:
           console.log(chalk.dim('  Enter 1, 2, or 3.'));
           continue;
       }
+    }
+  }
+
+  /**
+   * Create a new Solana wallet, save it, and connect.
+   */
+  private async handleWalletCreateFlow(store: WalletStore): Promise<{ address: string; name: string } | null> {
+    console.log('');
+
+    const name = (await this.ask(`  ${chalk.yellow('Wallet name:')} `)).trim();
+    if (!name) {
+      console.log(chalk.red('  Wallet name cannot be empty.'));
+      return null;
+    }
+
+    if (!/^[a-zA-Z0-9_-]{1,64}$/.test(name)) {
+      console.log(chalk.red('  Name must be 1-64 alphanumeric/hyphen/underscore characters.'));
+      return null;
+    }
+
+    try {
+      const { Keypair } = await import('@solana/web3.js');
+      const keypair = Keypair.generate();
+      const secretKeyArray = Array.from(keypair.secretKey);
+      const address = keypair.publicKey.toBase58();
+
+      const result = store.importWallet(name, secretKeyArray);
+      store.setDefault(name);
+
+      // Connect the wallet
+      this.walletManager.loadFromFile(result.path);
+      updateLastWallet(name);
+
+      // Zero sensitive data
+      secretKeyArray.fill(0);
+
+      console.log('');
+      console.log(chalk.green(`  Wallet "${name}" created successfully`));
+      console.log(`  Address: ${chalk.cyan(address)}`);
+      console.log('');
+      console.log(chalk.bold('  Wallet stored at:'));
+      console.log(chalk.dim(`    ~/.flash/wallets/${name}.json`));
+      console.log('');
+      console.log(chalk.yellow.bold('  Security Tips'));
+      console.log(chalk.dim('    Keep this file private'));
+      console.log(chalk.dim('    Back up this file securely'));
+      console.log(chalk.dim('    Loss of this file means permanent loss of funds'));
+      console.log(chalk.dim('    Never share your wallet file with anyone'));
+      console.log(chalk.dim('    Consider using a hardware wallet for large balances'));
+      console.log('');
+      console.log(chalk.dim('  Fund this wallet with SOL (for fees) and USDC (for collateral).'));
+      console.log('');
+
+      return { address, name };
+    } catch (error: unknown) {
+      console.log(chalk.red(`  Create failed: ${getErrorMessage(error)}`));
+      return null;
     }
   }
 
@@ -620,17 +732,39 @@ export class FlashTerminal {
     console.log('');
     console.log(chalk.bgRed.white.bold(' LIVE TRADING MODE '));
     console.log('');
+    const walletAddr = this.walletManager.address;
     console.log(`  Wallet:  ${chalk.cyan(walletName)}`);
+    if (walletAddr) {
+      console.log(`  Address: ${chalk.dim(shortAddress(walletAddr))}`);
+    }
     console.log(`  Network: ${chalk.bold(this.config.network)}`);
+    console.log('');
 
+    let usdcBal: number | null = null;
     try {
-      const bal = await this.walletManager.getBalance();
-      console.log(`  Balance: ${chalk.green(bal.toFixed(4))} SOL`);
+      const tokenData = await this.walletManager.getTokenBalances();
+      console.log(`  SOL Balance:  ${chalk.green(tokenData.sol.toFixed(4))} SOL`);
+      const usdcToken = tokenData.tokens.find(
+        (t) => t.mint === 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
+      );
+      usdcBal = usdcToken?.amount ?? 0;
+      const usdcColor = usdcBal > 0 ? chalk.green : chalk.yellow;
+      console.log(`  USDC Balance: ${usdcColor(usdcBal.toFixed(2))} USDC`);
     } catch {
-      // silently ignore balance fetch errors at startup
+      try {
+        const bal = await this.walletManager.getBalance();
+        console.log(`  SOL Balance: ${chalk.green(bal.toFixed(4))} SOL`);
+      } catch {
+        // best-effort
+      }
     }
 
     console.log('');
+    if (usdcBal !== null && usdcBal === 0) {
+      console.log(chalk.yellow('  Flash Trade requires USDC collateral to open positions.'));
+      console.log(chalk.dim('  Run "wallet tokens" to view all token balances.'));
+      console.log('');
+    }
     console.log(chalk.yellow('  WARNING'));
     console.log(chalk.dim('  Transactions executed here are real.'));
     console.log('');
@@ -660,25 +794,60 @@ export class FlashTerminal {
       console.log(`  Balance: ${chalk.green('$' + this.flashClient.getBalance().toFixed(2))}`);
       console.log(chalk.dim('  Trades are simulated. No real transactions.'));
     } else if (walletName) {
+      const walletAddr = this.walletManager.address;
       console.log(`  Wallet:  ${chalk.cyan(walletName)}`);
-      console.log(`  Network: ${chalk.bold(this.config.network)}`);
-      try {
-        const bal = await this.walletManager.getBalance();
-        console.log(`  Balance: ${chalk.green(bal.toFixed(4))} SOL`);
-      } catch {
-        // best-effort
+      if (walletAddr) {
+        console.log(`  Address: ${chalk.dim(walletAddr)}`);
       }
+      console.log(`  Network: ${chalk.bold(this.config.network)}`);
       console.log('');
+
+      // Fetch SOL + USDC balances
+      let solBal: number | null = null;
+      let usdcBal: number | null = null;
+      try {
+        const tokenData = await this.walletManager.getTokenBalances();
+        solBal = tokenData.sol;
+        const usdcToken = tokenData.tokens.find(
+          (t) => t.mint === 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
+        );
+        usdcBal = usdcToken?.amount ?? 0;
+      } catch {
+        // Fall back to SOL-only balance
+        try {
+          solBal = await this.walletManager.getBalance();
+        } catch {
+          // best-effort
+        }
+      }
+
+      if (solBal !== null) {
+        console.log(`  SOL Balance:  ${chalk.green(solBal.toFixed(4))} SOL`);
+      }
+      if (usdcBal !== null) {
+        const usdcColor = usdcBal > 0 ? chalk.green : chalk.yellow;
+        console.log(`  USDC Balance: ${usdcColor(usdcBal.toFixed(2))} USDC`);
+      }
+
+      console.log('');
+      if (usdcBal !== null && usdcBal === 0) {
+        console.log(chalk.yellow('  Flash Trade requires USDC collateral to open positions.'));
+        console.log(chalk.dim('  Run "wallet tokens" to view all token balances.'));
+        console.log('');
+      }
       console.log(chalk.yellow('  WARNING'));
       console.log(chalk.dim('  Transactions executed here are real.'));
-      console.log('');
-      console.log(chalk.dim('  Flash Trade requires USDC collateral.'));
-      console.log(chalk.dim('  Ensure your wallet holds USDC before opening positions.'));
-      console.log(chalk.dim('  Run "wallet tokens" to check balances.'));
     }
     console.log('');
 
-    console.log(chalk.dim('  Type "help" for commands, "scan" for opportunities.'));
+    // ─── Quick Start Hints ───────────────────────────────────────
+    console.log(chalk.bold('  Quick Start'));
+    console.log(`    ${chalk.cyan('help')}           List all commands`);
+    console.log(`    ${chalk.cyan('scan')}           Find trading opportunities`);
+    console.log(`    ${chalk.cyan('monitor')}        Live market monitoring`);
+    console.log(`    ${chalk.cyan('wallet tokens')}  View token balances`);
+    console.log(`    ${chalk.cyan('markets')}        View available markets`);
+    console.log('');
     console.log(chalk.dim('  Type "exit" to close the terminal.'));
     console.log('');
   }
@@ -888,6 +1057,12 @@ export class FlashTerminal {
       return null;
     }
 
+    // Reject excessively long input (keypairs are ~88 chars base58 or ~200 chars JSON)
+    if (keyInput.length > 2048) {
+      console.log(chalk.red('  Input too long. Expected a keypair (base58, JSON array, or file path).'));
+      return null;
+    }
+
     let secretKey: number[] | undefined;
     const trimmed = keyInput.trim();
 
@@ -968,6 +1143,16 @@ export class FlashTerminal {
 
       console.log('');
       console.log(chalk.green(`  Wallet "${name}" imported successfully`));
+      console.log('');
+      console.log(chalk.bold('  Wallet stored at:'));
+      console.log(chalk.dim(`    ~/.flash/wallets/${name}.json`));
+      console.log('');
+      console.log(chalk.yellow.bold('  Security Tips'));
+      console.log(chalk.dim('    Keep this file private'));
+      console.log(chalk.dim('    Back up this file securely'));
+      console.log(chalk.dim('    Loss of this file means permanent loss of funds'));
+      console.log(chalk.dim('    Never share your wallet file with anyone'));
+      console.log(chalk.dim('    Consider using a hardware wallet for large balances'));
       console.log('');
 
       return name;
@@ -1124,6 +1309,13 @@ export class FlashTerminal {
   private shutdown(): void {
     if (this.isShuttingDown) return;
     this.isShuttingDown = true;
+
+    const logger = getLogger();
+    logger.info('SHUTDOWN', 'Graceful shutdown initiated', {
+      mode: this.config.simulationMode ? 'simulation' : 'live',
+      uptime: Math.floor(process.uptime()),
+    });
+
     this.saveHistory();
     try {
       const autopilot = getAutopilot(this.context);
@@ -1152,6 +1344,11 @@ export class FlashTerminal {
     } catch {
       // Best-effort cleanup
     }
+    // Flush shutdown log synchronously before exit
+    logger.flushSync('SHUTDOWN', 'Shutdown complete', {
+      uptime: Math.floor(process.uptime()),
+    });
+
     console.log(chalk.dim('\n  Goodbye.\n'));
     this.rl.close();
     process.exit(0);
@@ -1169,6 +1366,8 @@ export class FlashTerminal {
 
     if (fastIntent) {
       intent = fastIntent;
+    } else if (this.showUsageHint(lower)) {
+      return;
     } else if (lower.startsWith('dryrun ') || lower.startsWith('dry-run ') || lower.startsWith('dry run ')) {
       const prefix = lower.startsWith('dryrun ') ? 'dryrun ' : lower.startsWith('dry-run ') ? 'dry-run ' : 'dry run ';
       const innerCmd = input.slice(prefix.length).trim();
@@ -1207,6 +1406,25 @@ export class FlashTerminal {
         console.log(chalk.red(`  Parse error: ${getErrorMessage(error)}`));
         return;
       }
+    }
+
+    // ─── Unknown Command Intercept ──────────────────────────────────
+    // If the interpreter returned Help (meaning it couldn't parse the input),
+    // and the user didn't explicitly type "help", show an unknown command message.
+    if (intent.action === ActionType.Help && !fastIntent) {
+      console.log('');
+      console.log(chalk.yellow(`  Unknown command: ${input}`));
+      console.log('');
+      console.log(chalk.bold('  Try'));
+      console.log(`    ${chalk.cyan('help')}       List all commands`);
+      console.log(`    ${chalk.cyan('scan')}       Find trading opportunities`);
+      console.log(`    ${chalk.cyan('markets')}    View available markets`);
+      console.log(`    ${chalk.cyan('positions')}  View open positions`);
+      console.log(`    ${chalk.cyan('monitor')}    Live market monitoring`);
+      console.log('');
+      console.log(chalk.dim('  You can also type natural language, e.g. "what is the price of SOL?"'));
+      console.log('');
+      return;
     }
 
     // ─── Market Monitor Intercept ────────────────────────────────────
@@ -1293,6 +1511,76 @@ export class FlashTerminal {
     if (elapsed > SLOW_COMMAND_MS) {
       console.log(chalk.dim(`  [${(elapsed / 1000).toFixed(1)}s]`));
     }
+  }
+
+  // ─── Usage Hints ──────────────────────────────────────────────
+
+  /**
+   * Show usage hint for commands typed without required parameters.
+   * Returns true if a hint was shown (caller should return early).
+   */
+  private showUsageHint(lower: string): boolean {
+    const hints: Record<string, string[]> = {
+      'open': [
+        '',
+        chalk.bold('  Usage'),
+        `    ${chalk.cyan('open <leverage>x <long|short> <asset> $<collateral>')}`,
+        '',
+        chalk.bold('  Examples'),
+        chalk.dim('    open 5x long SOL $500'),
+        chalk.dim('    open 3x short ETH $200'),
+        chalk.dim('    open 10x long BTC $1000'),
+        '',
+      ],
+      'close': [
+        '',
+        chalk.bold('  Usage'),
+        `    ${chalk.cyan('close <asset> <long|short>')}`,
+        '',
+        chalk.bold('  Examples'),
+        chalk.dim('    close SOL long'),
+        chalk.dim('    close ETH short'),
+        '',
+      ],
+      'analyze': [
+        '',
+        chalk.bold('  Usage'),
+        `    ${chalk.cyan('analyze <asset>')}`,
+        '',
+        chalk.bold('  Examples'),
+        chalk.dim('    analyze SOL'),
+        chalk.dim('    analyze BTC'),
+        chalk.dim('    analyze ETH'),
+        '',
+      ],
+      'dryrun': [
+        '',
+        chalk.bold('  Usage'),
+        `    ${chalk.cyan('dryrun <command>')}`,
+        '',
+        chalk.bold('  Examples'),
+        chalk.dim('    dryrun open 5x long SOL $500'),
+        chalk.dim('    dryrun close ETH short'),
+        '',
+      ],
+      'dry-run': [
+        '',
+        chalk.bold('  Usage'),
+        `    ${chalk.cyan('dryrun <command>')}`,
+        '',
+        chalk.bold('  Examples'),
+        chalk.dim('    dryrun open 5x long SOL $500'),
+        chalk.dim('    dryrun close ETH short'),
+        '',
+      ],
+    };
+
+    const hint = hints[lower];
+    if (hint) {
+      console.log(hint.join('\n'));
+      return true;
+    }
+    return false;
   }
 
   // ─── Dry Run Handler ─────────────────────────────────────────────

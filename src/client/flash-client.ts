@@ -200,6 +200,53 @@ function isNetworkError(msg: string): boolean {
     lower.includes('502');
 }
 
+// ─── Program ID Whitelist ──────────────────────────────────────────────────
+//
+// Only transactions interacting with these known programs are allowed.
+// Any instruction targeting an unknown program ID is rejected before signing.
+
+const SYSTEM_PROGRAM = '11111111111111111111111111111111';
+const TOKEN_PROGRAM = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA';
+const TOKEN_2022_PROGRAM = 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb';
+const ATA_PROGRAM = 'ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL';
+const COMPUTE_BUDGET_PROGRAM = 'ComputeBudget111111111111111111111111111111';
+const SYSVAR_RENT = 'SysvarRent111111111111111111111111111111111';
+const SYSVAR_CLOCK = 'SysvarC1ock11111111111111111111111111111111';
+const SYSVAR_INSTRUCTIONS = 'Sysvar1nstructions1111111111111111111111111';
+const MEMO_PROGRAM = 'MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr';
+const EVENT_AUTHORITY = 'Ce6TQqeHC9p8KetsN6JsjHK7UTZk7nasjjnr7XxXp18C'; // Flash event CPI
+
+// Flash Trade program IDs are loaded dynamically from PoolConfig.
+// This set stores the allowed IDs — populated during construction.
+const ALLOWED_PROGRAM_IDS = new Set<string>([
+  SYSTEM_PROGRAM,
+  TOKEN_PROGRAM,
+  TOKEN_2022_PROGRAM,
+  ATA_PROGRAM,
+  COMPUTE_BUDGET_PROGRAM,
+  SYSVAR_RENT,
+  SYSVAR_CLOCK,
+  SYSVAR_INSTRUCTIONS,
+  MEMO_PROGRAM,
+  EVENT_AUTHORITY,
+]);
+
+/**
+ * Validate that every instruction in a transaction targets an approved program.
+ * Throws if any instruction uses an unknown program ID.
+ */
+function validateInstructionPrograms(instructions: TransactionInstruction[], context: string): void {
+  for (let i = 0; i < instructions.length; i++) {
+    const progId = instructions[i].programId.toBase58();
+    if (!ALLOWED_PROGRAM_IDS.has(progId)) {
+      throw new Error(
+        `Transaction rejected: instruction ${i} targets unknown program ${progId} (${context}). ` +
+        `Only approved Flash Trade and Solana system programs are allowed.`
+      );
+    }
+  }
+}
+
 // ─── FlashClient ─────────────────────────────────────────────────────────────
 
 export class FlashClient implements IFlashClient {
@@ -256,6 +303,18 @@ export class FlashClient implements IFlashClient {
       { prioritizationFee: config.computeUnitPrice }
     );
 
+    // Register Flash Trade program IDs in the whitelist
+    ALLOWED_PROGRAM_IDS.add(this.poolConfig.programId.toBase58());
+    if (this.poolConfig.perpComposibilityProgramId) {
+      ALLOWED_PROGRAM_IDS.add(this.poolConfig.perpComposibilityProgramId.toBase58());
+    }
+    if (this.poolConfig.fbNftRewardProgramId) {
+      ALLOWED_PROGRAM_IDS.add(this.poolConfig.fbNftRewardProgramId.toBase58());
+    }
+    if (this.poolConfig.rewardDistributionProgram?.programId) {
+      ALLOWED_PROGRAM_IDS.add(this.poolConfig.rewardDistributionProgram.programId.toBase58());
+    }
+
     this.priceService = new PythPriceService(config.pythnetUrl);
   }
 
@@ -269,23 +328,32 @@ export class FlashClient implements IFlashClient {
    * local `conn` reference at the start of each attempt, so swapping
    * this.connection here does not disrupt confirmation polling.
    * The new connection takes effect on the next attempt or next trade.
+   *
+   * Builds the new provider and perpClient BEFORE swapping references —
+   * this ensures concurrent reads of this.perpClient never see a partially
+   * constructed state (e.g. new connection but old provider).
    */
   replaceConnection(connection: Connection): void {
-    this.connection = connection;
-    // Rebuild AnchorProvider with the new connection so perpClient uses it too
+    // Build replacements BEFORE swapping — prevents mid-trade reads from
+    // seeing inconsistent state (new connection + old perpClient)
     const walletAdapter = new Wallet(this.wallet);
-    this.provider = new AnchorProvider(connection, walletAdapter, {
+    const newProvider = new AnchorProvider(connection, walletAdapter, {
       commitment: 'confirmed',
       preflightCommitment: 'confirmed',
     });
-    this.perpClient = new PerpetualsClient(
-      this.provider,
+    const newPerpClient = new PerpetualsClient(
+      newProvider,
       this.poolConfig.programId,
       this.poolConfig.perpComposibilityProgramId,
       this.poolConfig.fbNftRewardProgramId,
       this.poolConfig.rewardDistributionProgram.programId,
       { prioritizationFee: this.config.computeUnitPrice }
     );
+    // Swap all references together — minimizes the window where concurrent
+    // reads could see mismatched connection/provider/perpClient
+    this.connection = connection;
+    this.provider = newProvider;
+    this.perpClient = newPerpClient;
     getLogger().info('CLIENT', 'Connection replaced (RPC failover)');
   }
 
@@ -322,7 +390,13 @@ export class FlashClient implements IFlashClient {
     const poolName = getPoolForMarket(market);
     if (!poolName) throw new Error(`Unknown market: ${market}`);
     if (poolName !== this.poolConfig.poolName) {
-      return PoolConfig.fromIdsByName(poolName, this.config.network);
+      const pc = PoolConfig.fromIdsByName(poolName, this.config.network);
+      // Register this pool's program IDs in the whitelist
+      ALLOWED_PROGRAM_IDS.add(pc.programId.toBase58());
+      if (pc.perpComposibilityProgramId) ALLOWED_PROGRAM_IDS.add(pc.perpComposibilityProgramId.toBase58());
+      if (pc.fbNftRewardProgramId) ALLOWED_PROGRAM_IDS.add(pc.fbNftRewardProgramId.toBase58());
+      if (pc.rewardDistributionProgram?.programId) ALLOWED_PROGRAM_IDS.add(pc.rewardDistributionProgram.programId.toBase58());
+      return pc;
     }
     return this.poolConfig;
   }
@@ -413,6 +487,16 @@ export class FlashClient implements IFlashClient {
       throw new Error('Wallet keypair is invalid or disconnected. Reconnect your wallet before signing.');
     }
 
+    // ── Instruction Validation ──
+    // Validate ALL instructions target approved programs BEFORE any signing attempt.
+    // This is the critical security gate — if any instruction targets an unknown program,
+    // the transaction is rejected immediately.
+    validateInstructionPrograms(instructions, 'sendTx');
+
+    // Freeze the instruction array to prevent mutation after validation.
+    // Any attempt to push/splice instructions after this point will throw.
+    const validatedInstructions = Object.freeze([...instructions]);
+
     const maxAttempts = 3;
     const cuLimitIx = ComputeBudgetProgram.setComputeUnitLimit({ units: this.config.computeUnitLimit });
     const cuPriceIx = ComputeBudgetProgram.setComputeUnitPrice({ microLamports: this.config.computeUnitPrice });
@@ -451,8 +535,16 @@ export class FlashClient implements IFlashClient {
       }
 
       try {
+        const bhStart = Date.now();
         const latestBlockhash = await conn.getLatestBlockhash('confirmed');
-        const allIxs = [cuLimitIx, cuPriceIx, ...instructions];
+        const bhLatency = Date.now() - bhStart;
+        // If blockhash fetch took abnormally long (>10s), the retrieved blockhash
+        // may already be near expiry. Log a warning for observability — the
+        // transaction may still succeed but confirmation window is reduced.
+        if (bhLatency > 10_000) {
+          logger.warn('CLIENT', `Blockhash fetch took ${(bhLatency / 1000).toFixed(1)}s — confirmation window may be reduced`);
+        }
+        const allIxs = [cuLimitIx, cuPriceIx, ...validatedInstructions];
         const message = MessageV0.compile({
           payerKey: this.wallet.publicKey,
           instructions: allIxs,
@@ -461,6 +553,31 @@ export class FlashClient implements IFlashClient {
         });
         const vtx = new VersionedTransaction(message);
         vtx.sign([this.wallet, ...additionalSigners]);
+
+        // Pre-send simulation on first attempt to catch program errors early.
+        // Subsequent retries skip simulation since the blockhash changes.
+        if (attempt === 1) {
+          try {
+            const simResult = await conn.simulateTransaction(vtx, {
+              sigVerify: false,
+              replaceRecentBlockhash: true,
+            });
+            if (simResult.value.err) {
+              const simErr = JSON.stringify(simResult.value.err);
+              // Program errors (InstructionError) are terminal — don't retry
+              if (simErr.includes('InstructionError') || simErr.includes('Custom')) {
+                throw new Error(`Transaction simulation failed: ${simErr}`);
+              }
+              logger.warn('CLIENT', `Pre-send simulation warning: ${simErr}`);
+            }
+          } catch (simError: unknown) {
+            const simMsg = getErrorMessage(simError);
+            if (simMsg.includes('simulation failed')) throw simError;
+            // Non-critical simulation failures (RPC timeout etc) — proceed with send
+            logger.debug('CLIENT', `Pre-send simulation skipped: ${scrubSensitive(simMsg)}`);
+          }
+        }
+
         const txBytes = Buffer.from(vtx.serialize());
 
         const signatureStr = await conn.sendRawTransaction(txBytes, {
@@ -687,7 +804,7 @@ export class FlashClient implements IFlashClient {
       const collateralSymbol = collateralToken ?? DEFAULT_COLLATERAL_TOKEN;
       const inputToken = this.findToken(poolConfig, collateralSymbol);
 
-      logger.debug('TRADE', 'Trade Request', {
+      logger.info('TRADE', 'Trade Request', {
         market, side, collateralToken: inputToken.symbol,
         collateralAmount, leverage, size: collateralAmount * leverage,
       });
@@ -940,6 +1057,9 @@ export class FlashClient implements IFlashClient {
         poolConfig, Privilege.None,
       );
     }
+
+    // Validate instructions target approved programs (even in preview)
+    validateInstructionPrograms(result.instructions, 'dryrun');
 
     // Build the transaction WITHOUT signing
     const cuLimitIx = ComputeBudgetProgram.setComputeUnitLimit({ units: this.config.computeUnitLimit });

@@ -36,6 +36,9 @@ Thumbs.db
 !src/**/*.d.ts
 *.tsbuildinfo
 
+# Auto-generated build metadata
+src/build-info.ts
+
 # Test coverage
 coverage/
 

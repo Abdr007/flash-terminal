@@ -44,12 +44,25 @@ function parseNetwork(value: string | undefined): Network {
 function validateRpcUrl(url: string): string {
   try {
     const parsed = new URL(url);
-    const isLocal = parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1';
+    const isLocal = parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1' || parsed.hostname === '[::1]';
     if (parsed.protocol !== 'https:' && !(parsed.protocol === 'http:' && isLocal)) {
-      throw new Error(`RPC URL must use HTTPS (got ${parsed.protocol}). Only localhost may use HTTP.`);
+      throw new Error(`RPC URL must use HTTPS (got ${parsed.protocol}). Only localhost/127.0.0.1 may use HTTP.`);
     }
     if (parsed.username || parsed.password) {
       throw new Error('RPC URL must not contain embedded credentials — use headers instead');
+    }
+    // Block internal/metadata IP ranges (SSRF protection)
+    const host = parsed.hostname;
+    if (
+      host.startsWith('169.254.') || // link-local / cloud metadata
+      host.startsWith('10.') ||       // private class A
+      host.startsWith('192.168.') ||  // private class C
+      host === '0.0.0.0' ||
+      /^172\.(1[6-9]|2\d|3[01])\./.test(host) // private class B
+    ) {
+      if (!isLocal) {
+        throw new Error(`RPC URL points to a private/internal IP (${host}). This is not allowed.`);
+      }
     }
   } catch (e) {
     if (e instanceof Error && (e.message.includes('credentials') || e.message.includes('HTTPS') || e.message.includes('RPC URL must'))) throw e;

@@ -119,11 +119,31 @@ async function safeFetchJson<T>(path: string): Promise<T | null> {
       logger.warn('ANALYTICS', `fstats response too large for ${path}: ${contentLength} bytes`);
       return null;
     }
-    const text = await res.text();
-    if (text.length > MAX_RESPONSE_BYTES) {
-      logger.warn('ANALYTICS', `fstats response body too large for ${path}: ${text.length} bytes`);
-      return null;
+    // Stream response body with incremental size check to prevent OOM
+    // even when content-length header is missing or spoofed
+    const reader = res.body?.getReader();
+    if (!reader) {
+      const text = await res.text();
+      if (text.length > MAX_RESPONSE_BYTES) {
+        logger.warn('ANALYTICS', `fstats response body too large for ${path}: ${text.length} bytes`);
+        return null;
+      }
+      return JSON.parse(text) as T;
     }
+    const chunks: Uint8Array[] = [];
+    let totalBytes = 0;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      totalBytes += value.byteLength;
+      if (totalBytes > MAX_RESPONSE_BYTES) {
+        reader.cancel();
+        logger.warn('ANALYTICS', `fstats response body too large for ${path}: >${MAX_RESPONSE_BYTES} bytes (streaming abort)`);
+        return null;
+      }
+      chunks.push(value);
+    }
+    const text = new TextDecoder().decode(Buffer.concat(chunks));
     return JSON.parse(text) as T;
   } catch (error: unknown) {
     logger.warn('ANALYTICS', `fstats fetch failed for ${path}: ${getErrorMessage(error)}`);

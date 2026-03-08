@@ -44,6 +44,7 @@ const TARGET_SAFE_DISTANCE = 0.35; // collateral suggestion target
 // Tiered refresh intervals
 const PRICE_INTERVAL_MS = 5_000;     // price/risk checks every 5s
 const POSITION_INTERVAL_MS = 20_000; // full position refresh every 20s
+const MAX_POSITION_STALE_MS = 120_000; // cached positions expire after 2 minutes
 
 const BINARY_SEARCH_MAX_ITER = 20;
 const BINARY_SEARCH_TOLERANCE = 0.005; // 0.5% tolerance for early break
@@ -113,11 +114,15 @@ export class RiskMonitor {
     this.lastPositionFetch = 0;
     this.tickCount = 0;
     this.timer = setInterval(() => {
-      this.tick().catch(() => {}); // fire-and-forget
+      this.tick().catch((err) => {
+        getLogger().debug('RISK_MONITOR', `Tick error: ${getErrorMessage(err)}`);
+      });
     }, PRICE_INTERVAL_MS);
     this.timer.unref();
     // Run first tick immediately
-    this.tick().catch(() => {});
+    this.tick().catch((err) => {
+      getLogger().debug('RISK_MONITOR', `Initial tick error: ${getErrorMessage(err)}`);
+    });
     return chalk.green('  Risk monitor started.') + chalk.dim(' (prices every 5s, positions every 20s)');
   }
 
@@ -147,14 +152,28 @@ export class RiskMonitor {
     try {
       // Tiered refresh: full position fetch every POSITION_INTERVAL_MS, use cache otherwise
       const now = Date.now();
-      const needsFullRefresh = now - this.lastPositionFetch >= POSITION_INTERVAL_MS || this.cachedPositions.length === 0;
-      const positions = needsFullRefresh
-        ? await this.client.getPositions()
-        : this.cachedPositions;
+      const positionAge = now - this.lastPositionFetch;
+      const needsFullRefresh = positionAge >= POSITION_INTERVAL_MS || this.cachedPositions.length === 0;
+      let positions: Position[];
 
       if (needsFullRefresh) {
-        this.cachedPositions = positions;
-        this.lastPositionFetch = now;
+        try {
+          positions = await this.client.getPositions();
+          this.cachedPositions = positions;
+          this.lastPositionFetch = now;
+        } catch (fetchErr: unknown) {
+          // If fetch fails and cached data is stale beyond the hard limit,
+          // skip this tick entirely — don't assess risk with ancient data
+          if (positionAge > MAX_POSITION_STALE_MS) {
+            logger.warn('RISK_MONITOR', `Position data stale (${Math.round(positionAge / 1000)}s) and refresh failed — skipping tick`);
+            return;
+          }
+          // Use cached data for now — it's still within the staleness window
+          positions = this.cachedPositions;
+          logger.debug('RISK_MONITOR', `Position refresh failed, using cached data (${Math.round(positionAge / 1000)}s old): ${getErrorMessage(fetchErr)}`);
+        }
+      } else {
+        positions = this.cachedPositions;
       }
 
       // Auto-stop when no positions
@@ -335,8 +354,12 @@ export class RiskMonitor {
   // ─── Alert Emission ──────────────────────────────────────────────────
 
   private emitAlerts(positions: PositionRisk[]): void {
+    // Collect current position keys to prune stale entries
+    const currentKeys = new Set<string>();
+
     for (const r of positions) {
       const key = `${r.market}:${r.side}`;
+      currentKeys.add(key);
       const prevLevel = this.lastAlertLevel.get(key);
 
       // Only emit if risk level worsened or is first check
@@ -361,6 +384,13 @@ export class RiskMonitor {
         this.emitCriticalAlert(r);
       } else if (r.riskLevel === RiskLevel.Warning) {
         this.emitWarningAlert(r);
+      }
+    }
+
+    // Prune stale entries for positions that no longer exist (closed/liquidated)
+    for (const key of this.lastAlertLevel.keys()) {
+      if (!currentKeys.has(key)) {
+        this.lastAlertLevel.delete(key);
       }
     }
   }

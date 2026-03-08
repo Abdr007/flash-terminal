@@ -20,6 +20,7 @@ import { getLogger } from '../utils/logger.js';
 import { getErrorMessage } from '../utils/retry.js';
 
 const MAX_TRADE_HISTORY = 500;
+const MAX_LIVE_PRICE_ENTRIES = 100;
 
 // Simulated trading fee: 0.08% of position size (Flash Trade typical)
 const SIM_FEE_BPS = 8;
@@ -55,6 +56,15 @@ export class SimulatedFlashClient implements IFlashClient {
 
   private async refreshPrices(): Promise<void> {
     const logger = getLogger();
+
+    // Bound livePrices map to prevent unbounded growth during long sessions
+    if (this.livePrices.size > MAX_LIVE_PRICE_ENTRIES) {
+      const excess = Array.from(this.livePrices.keys()).slice(0, 20);
+      for (const k of excess) {
+        this.livePrices.delete(k);
+        this.priceChanges24h.delete(k);
+      }
+    }
 
     // Primary: CoinGecko via PriceService
     try {

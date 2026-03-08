@@ -74,7 +74,9 @@ export class StateReconciler {
     if (this._running) return;
     this._running = true;
     this.timer = setInterval(() => {
-      this.reconcile().catch(() => {});
+      this.reconcile().catch((err) => {
+        getLogger().debug('RECONCILER', `Periodic sync error: ${getErrorMessage(err)}`);
+      });
     }, RECONCILE_INTERVAL_MS);
     // Don't let the reconciler keep Node alive after user exits
     if (this.timer.unref) {
@@ -120,6 +122,21 @@ export class StateReconciler {
         }
         const key = `${pos.market}:${pos.side}`;
         onChainMap.set(key, pos);
+      }
+
+      // Guard against RPC returning empty results during transient failures.
+      // If we had known positions and RPC suddenly returns zero, it's more
+      // likely an RPC issue than all positions being liquidated simultaneously.
+      // Log a warning and preserve local state rather than wiping it.
+      if (onChainMap.size === 0 && this.lastKnownPositions.size > 0) {
+        logger.warn('RECONCILE', `RPC returned 0 positions but we had ${this.lastKnownPositions.size} — possible RPC failure, preserving local state`);
+        return {
+          hadDiscrepancy: false,
+          onChainCount: this.lastKnownPositions.size,
+          added: [],
+          removed: [],
+          timestamp: now,
+        };
       }
 
       // Compare with local state
@@ -192,9 +209,16 @@ export class StateReconciler {
         logger.warn('RECONCILE', `Trade verification failed: ${key} not found on-chain`);
       }
 
-      // Refresh local state
+      // Refresh local state — apply same numeric integrity checks as reconcile()
       const posMap = new Map<string, Position>();
       for (const p of positions) {
+        if (
+          !Number.isFinite(p.sizeUsd) || p.sizeUsd <= 0 ||
+          !Number.isFinite(p.entryPrice) || p.entryPrice <= 0 ||
+          !Number.isFinite(p.collateralUsd) || p.collateralUsd <= 0
+        ) {
+          continue; // Skip corrupt positions
+        }
         posMap.set(`${p.market}:${p.side}`, p);
       }
       this.lastKnownPositions = posMap;

@@ -1,4 +1,4 @@
-import { appendFile, mkdirSync, existsSync, writeFileSync, chmodSync, statSync, renameSync } from 'fs';
+import { appendFile, appendFileSync, mkdirSync, existsSync, writeFileSync, chmodSync, statSync, renameSync } from 'fs';
 import { join, dirname } from 'path';
 import chalk from 'chalk';
 
@@ -127,9 +127,9 @@ export class Logger {
 
   private writeToFile(entry: LogEntry): void {
     if (!this.logFilePath) return;
-    const dataStr = entry.data ? ` ${JSON.stringify(entry.data)}` : '';
-    const raw = `[${entry.timestamp}] ${LEVEL_LABELS[entry.level]} [${entry.category}] ${entry.message}${dataStr}\n`;
-    const line = this.scrub(raw);
+    const dataStr = entry.data ? ` ${this.scrub(JSON.stringify(entry.data))}` : '';
+    const raw = `[${entry.timestamp}] ${LEVEL_LABELS[entry.level]} [${entry.category}] ${this.scrub(entry.message)}${dataStr}\n`;
+    const line = raw;
 
     // Check log size periodically (every ~100 writes) and rotate if needed
     if (++this.logRotationChecked % 100 === 0) {
@@ -147,6 +147,28 @@ export class Logger {
     appendFile(this.logFilePath, line, () => {
       // Fire-and-forget — silently ignore write errors to avoid crashing the CLI
     });
+  }
+
+  /**
+   * Write a final log entry synchronously (for shutdown).
+   * Ensures the entry is flushed to disk before process.exit().
+   */
+  flushSync(category: string, message: string, data?: Record<string, unknown>): void {
+    if (!this.logFilePath) return;
+    const entry: LogEntry = {
+      timestamp: new Date().toISOString(),
+      level: LogLevel.Info,
+      category,
+      message,
+      data,
+    };
+    const dataStr = entry.data ? ` ${this.scrub(JSON.stringify(entry.data))}` : '';
+    const line = `[${entry.timestamp}] ${LEVEL_LABELS[entry.level]} [${entry.category}] ${this.scrub(entry.message)}${dataStr}\n`;
+    try {
+      appendFileSync(this.logFilePath, line);
+    } catch {
+      // Best-effort
+    }
   }
 
   private writeToConsole(entry: LogEntry): void {

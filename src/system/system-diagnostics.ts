@@ -3,6 +3,7 @@ import { ToolContext } from '../types/index.js';
 import { RpcManager } from '../network/rpc-manager.js';
 import { formatUsd } from '../utils/format.js';
 import { getErrorMessage } from '../utils/retry.js';
+import { BUILD_INFO } from '../build-info.js';
 
 // ─── Singleton ───────────────────────────────────────────────────────────────
 
@@ -39,6 +40,14 @@ export class SystemDiagnostics {
       chalk.dim('  ────────────────────────────'),
       '',
     ];
+
+    // Build
+    lines.push(chalk.bold('  Build'));
+    lines.push(`    Version: ${chalk.cyan(`v${BUILD_INFO.version}`)}`);
+    lines.push(`    Commit:  ${chalk.dim(BUILD_INFO.gitHash)}`);
+    lines.push(`    Branch:  ${chalk.dim(BUILD_INFO.branch)}`);
+    lines.push(`    Built:   ${chalk.dim(BUILD_INFO.buildDate)}`);
+    lines.push('');
 
     // RPC
     const activeRpc = this.rpcManager.activeEndpoint;

@@ -64,8 +64,8 @@ export const flashOpenPosition: ToolDefinition = {
   parameters: z.object({
     market: z.string(),
     side: z.nativeEnum(TradeSide),
-    collateral: z.number().positive(),
-    leverage: z.number().min(1).max(500),
+    collateral: z.number().positive().max(10_000_000),
+    leverage: z.number().min(1).max(100),
     collateral_token: z.string().optional(),
   }),
   execute: async (params, context): Promise<ToolResult> => {
@@ -203,8 +203,9 @@ export const flashOpenPosition: ToolDefinition = {
                 '',
                 chalk.green('  Position Opened'),
                 chalk.dim('  ─────────────────'),
-                `  Entry Price: ${formatPrice(result.entryPrice)}`,
-                `  Size:        ${formatUsd(result.sizeUsd)}`,
+                `  Entry Price:       ${formatPrice(result.entryPrice)}`,
+                `  Size:              ${formatUsd(result.sizeUsd)}`,
+                `  Liquidation Price: ${result.liquidationPrice ? chalk.yellow(formatPrice(result.liquidationPrice)) : chalk.dim('N/A')}`,
                 `  TX: ${chalk.dim(txLink)}`,
                 '',
               ].join('\n'),
@@ -334,7 +335,7 @@ export const flashAddCollateral: ToolDefinition = {
   parameters: z.object({
     market: z.string(),
     side: z.nativeEnum(TradeSide),
-    amount: z.number().positive(),
+    amount: z.number().positive().max(10_000_000),
   }),
   execute: async (params, context): Promise<ToolResult> => {
     const { market, side, amount } = params as { market: string; side: TradeSide; amount: number };
@@ -424,7 +425,7 @@ export const flashRemoveCollateral: ToolDefinition = {
   parameters: z.object({
     market: z.string(),
     side: z.nativeEnum(TradeSide),
-    amount: z.number().positive(),
+    amount: z.number().positive().max(10_000_000),
   }),
   execute: async (params, context): Promise<ToolResult> => {
     const { market, side, amount } = params as { market: string; side: TradeSide; amount: number };
@@ -842,7 +843,7 @@ export const flashGetTraderProfile: ToolDefinition = {
 // ─── Wallet Tools ───────────────────────────────────────────────────────────
 
 import { WalletStore } from '../wallet/wallet-store.js';
-import { readFileSync, realpathSync } from 'fs';
+import { readFileSync, realpathSync, statSync } from 'fs';
 import { resolve } from 'path';
 import { homedir } from 'os';
 
@@ -893,8 +894,14 @@ export const walletImport: ToolDefinition = {
         return { success: false, message: chalk.red('  Wallet path resolves outside home directory (symlink?).') };
       }
 
-      const raw = readFileSync(realPath, 'utf-8');
+      // Reject suspiciously large files (keypair JSON should be < 1KB)
+      const fileSize = statSync(realPath).size;
+      if (fileSize > 1024) {
+        return { success: false, message: chalk.red(`  File too large (${fileSize} bytes). Expected a 64-byte keypair JSON.`) };
+      }
+      let raw = readFileSync(realPath, 'utf-8');
       secretKey = JSON.parse(raw);
+      raw = ''; // Clear raw secret key material from memory
       const result = walletStore.importWallet(name, secretKey!);
 
       // Auto-set as default
@@ -924,6 +931,18 @@ export const walletImport: ToolDefinition = {
 
       if (canSign) {
         lines.push(chalk.bgRed.white.bold('  LIVE TRADING ENABLED '));
+        lines.push('');
+        lines.push(chalk.bold('  Wallet stored at:'));
+        lines.push(chalk.dim(`    ~/.flash/wallets/${name}.json`));
+        lines.push('');
+        lines.push(chalk.yellow.bold('  Security Tips'));
+        lines.push(chalk.dim('    Keep this file private'));
+        lines.push(chalk.dim('    Back up this file securely'));
+        lines.push(chalk.dim('    Loss of this file means permanent loss of funds'));
+        lines.push(chalk.dim('    Never share your wallet file with anyone'));
+        lines.push(chalk.dim('    Consider using a hardware wallet for large balances'));
+        lines.push('');
+        lines.push(chalk.dim('  Fund with SOL (for fees) and USDC (for collateral) before trading.'));
         lines.push('');
       }
 
@@ -1003,12 +1022,14 @@ export const walletUse: ToolDefinition = {
         const lines = [
           '',
           chalk.green(`  Switched to wallet: ${chalk.bold(name)}`),
+          `  Address: ${chalk.dim(result.address)}`,
           '',
         ];
 
         // Signal live mode switch if wallet can sign
         if (wm.isConnected) {
           lines.push(chalk.bgRed.white.bold('  LIVE TRADING ENABLED '));
+          lines.push(chalk.dim('  Transactions executed from this wallet are real.'));
           lines.push('');
         }
 

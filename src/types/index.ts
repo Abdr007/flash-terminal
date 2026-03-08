@@ -85,7 +85,7 @@ export const OpenPositionSchema = z.object({
   action: z.literal(ActionType.OpenPosition),
   market: z.string(),
   side: z.nativeEnum(TradeSide),
-  collateral: z.number().positive(),
+  collateral: z.number().positive().max(10_000_000),
   leverage: z.number().min(1).max(100),
   collateral_token: z.string().optional(),
 });
@@ -100,14 +100,14 @@ export const AddCollateralSchema = z.object({
   action: z.literal(ActionType.AddCollateral),
   market: z.string(),
   side: z.nativeEnum(TradeSide),
-  amount: z.number().positive(),
+  amount: z.number().positive().max(10_000_000),
 });
 
 export const RemoveCollateralSchema = z.object({
   action: z.literal(ActionType.RemoveCollateral),
   market: z.string(),
   side: z.nativeEnum(TradeSide),
-  amount: z.number().positive(),
+  amount: z.number().positive().max(10_000_000),
 });
 
 export const GetPositionsSchema = z.object({
@@ -757,6 +757,8 @@ export interface FlashConfig {
   maxLeverage: number;
   maxTradesPerMinute: number;
   minDelayBetweenTradesMs: number;
+  /** Disable plugin loading (--no-plugins flag) */
+  noPlugins?: boolean;
 }
 
 // ─── Simulation Types ────────────────────────────────────────────────────────

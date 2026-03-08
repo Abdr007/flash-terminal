@@ -4,12 +4,17 @@ import { Command } from 'commander';
 import { loadConfig } from './config/index.js';
 import { FlashTerminal } from './cli/terminal.js';
 import { getErrorMessage } from './utils/retry.js';
+import { BUILD_INFO } from './build-info.js';
 import chalk from 'chalk';
 
 // Global error handlers — prevent crashes from leaking to the user
+// NOTE: unhandledRejection must NOT call process.exit() — background subsystems
+// (health monitor, reconciler, risk monitor) fire-and-forget promises that may
+// reject during RPC outages. Crashing the terminal for a background task error
+// would bypass graceful shutdown (history save, autopilot stop, cleanup).
 process.on('unhandledRejection', (reason) => {
-  console.error(chalk.red(`\n  Unhandled error: ${getErrorMessage(reason)}\n`));
-  process.exit(1);
+  console.error(chalk.red(`\n  Unhandled async error: ${getErrorMessage(reason)}`));
+  console.error(chalk.dim('  The terminal is still running. If this persists, restart with "exit".\n'));
 });
 
 process.on('uncaughtException', (err) => {
@@ -17,18 +22,24 @@ process.on('uncaughtException', (err) => {
   process.exit(1);
 });
 
-// Graceful shutdown on SIGTERM (e.g., Docker, system shutdown)
-process.on('SIGTERM', () => {
-  console.log(chalk.dim('\n  Received SIGTERM, shutting down...\n'));
-  process.exit(0);
-});
+// NOTE: SIGTERM is handled by FlashTerminal.start() once the terminal is
+// running. Registering it here would bypass the terminal's graceful shutdown
+// (autopilot stop, history save, monitor cleanup). For non-interactive
+// commands (markets, stats, etc.), Node exits naturally when done.
 
 const program = new Command();
+
+const versionString = [
+  `Flash AI Terminal v${BUILD_INFO.version}`,
+  `Commit: ${BUILD_INFO.gitHash}`,
+  `Branch: ${BUILD_INFO.branch}`,
+  `Built:  ${BUILD_INFO.buildDate}`,
+].join('\n');
 
 program
   .name('flash')
   .description('Flash AI Terminal — AI-powered CLI for Flash Trade on Solana')
-  .version('1.0.0');
+  .version(versionString, '-v, --version');
 
 // Default command: launch the interactive terminal
 program
@@ -36,11 +47,13 @@ program
   .description('Start the interactive Flash AI Terminal')
   .option('-p, --pool <name>', 'Default pool name')
   .option('--rpc <url>', 'Solana RPC URL')
-  .action(async (opts: { pool?: string; rpc?: string }) => {
+  .option('--no-plugins', 'Disable plugin loading')
+  .action(async (opts: { pool?: string; rpc?: string; plugins?: boolean }) => {
     const config = loadConfig();
 
     if (opts.pool) config.defaultPool = opts.pool;
     if (opts.rpc) config.rpcUrl = opts.rpc;
+    if (opts.plugins === false) config.noPlugins = true;
 
     const terminal = new FlashTerminal(config);
     await terminal.start();

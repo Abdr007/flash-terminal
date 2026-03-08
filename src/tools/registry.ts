@@ -1,5 +1,6 @@
 import { ToolDefinition, ToolContext, ToolResult } from '../types/index.js';
 import { getErrorMessage } from '../utils/retry.js';
+import { getLogger } from '../utils/logger.js';
 
 /**
  * Tool Registry — tools are registered by name and dispatched by the engine.
@@ -7,9 +8,22 @@ import { getErrorMessage } from '../utils/retry.js';
  */
 export class ToolRegistry {
   private tools = new Map<string, ToolDefinition>();
+  private coreTools = new Set<string>();
 
   register(tool: ToolDefinition): void {
+    // Prevent plugins from overriding core tools
+    if (this.coreTools.has(tool.name)) {
+      getLogger().warn('REGISTRY', `Blocked attempt to override core tool: ${tool.name}`);
+      return;
+    }
     this.tools.set(tool.name, tool);
+  }
+
+  /** Mark all currently registered tools as core (call after initial registration). */
+  lockCore(): void {
+    for (const name of this.tools.keys()) {
+      this.coreTools.add(name);
+    }
   }
 
   get(name: string): ToolDefinition | undefined {

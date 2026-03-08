@@ -199,12 +199,12 @@ export class Autopilot {
       return;
     }
     this.cycleRunning = true;
-
     const logger = getLogger();
-    this.state.cycleCount++;
-    this.state.lastCycleAt = Date.now();
 
     try {
+      this.state.cycleCount++;
+      this.state.lastCycleAt = Date.now();
+
       // Active check: abort if stopped mid-cycle
       if (!this.state.active) return;
 
@@ -356,8 +356,16 @@ export class Autopilot {
 
       if (this.onTrade) {
         this.log(chalk.cyan(msg + ' — auto-executing in simulation'));
-        await this.onTrade(suggestion);
+        // Set cooldown BEFORE executing — prevents tight retry loops if onTrade
+        // throws (e.g. RPC outage). Without this, the next cycle immediately
+        // retries the same trade instead of waiting for cooldown.
         this.lastTradeAt = Date.now();
+        try {
+          await this.onTrade(suggestion);
+        } catch (tradeErr: unknown) {
+          logger.error('AUTOPILOT', `Trade execution failed: ${getErrorMessage(tradeErr)}`);
+          this.log(chalk.red(`  [Autopilot] Trade failed: ${getErrorMessage(tradeErr)}`));
+        }
       } else {
         this.log(chalk.cyan(msg));
       }
