@@ -1,4 +1,3 @@
-import chalk from 'chalk';
 import { FStatsClient } from '../data/fstats.js';
 import {
   FLASH_PROGRAM_ID,
@@ -8,6 +7,7 @@ import {
 import { formatUsd, formatPrice, shortAddress } from '../utils/format.js';
 import { getLogger } from '../utils/logger.js';
 import { getErrorMessage } from '../utils/retry.js';
+import { theme } from '../cli/theme.js';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -48,35 +48,33 @@ export class ProtocolInspector {
   async inspectProtocol(): Promise<string> {
     const snap = await this.getSnapshot();
     const lines: string[] = [
+      theme.titleBlock('FLASH TRADE PROTOCOL STATE'),
       '',
-      chalk.bold('  FLASH TRADE PROTOCOL STATE'),
-      chalk.dim('  ────────────────────────────'),
+      `  ${theme.section('Program ID')}`,
+      theme.pair('Flash Program', theme.accent(FLASH_PROGRAM_ID)),
       '',
-      chalk.bold('  Program ID'),
-      `    Flash Program: ${chalk.cyan(FLASH_PROGRAM_ID)}`,
-      '',
-      chalk.bold('  Pools'),
+      `  ${theme.section('Pools')}`,
     ];
 
     for (const pool of snap.pools) {
       const markets = snap.markets[pool];
-      lines.push(`    ${chalk.cyan(pool)} ${chalk.dim('→')} ${markets ? markets.join(', ') : 'N/A'}`);
+      lines.push(`    ${theme.accent(pool)} ${theme.dim('→')} ${markets ? markets.join(', ') : 'N/A'}`);
     }
 
     // Overview stats
     if (snap.overviewStats) {
       lines.push('');
-      lines.push(chalk.bold('  Protocol Stats (30d)'));
-      lines.push(`    Volume:  ${formatUsd(snap.overviewStats.volumeUsd)}`);
-      lines.push(`    Trades:  ${snap.overviewStats.trades.toLocaleString()}`);
-      lines.push(`    Traders: ${snap.overviewStats.uniqueTraders.toLocaleString()}`);
-      lines.push(`    Fees:    ${formatUsd(snap.overviewStats.feesUsd)}`);
+      lines.push(`  ${theme.section('Protocol Stats (30d)')}`);
+      lines.push(theme.pair('Volume', formatUsd(snap.overviewStats.volumeUsd)));
+      lines.push(theme.pair('Trades', snap.overviewStats.trades.toLocaleString()));
+      lines.push(theme.pair('Traders', snap.overviewStats.uniqueTraders.toLocaleString()));
+      lines.push(theme.pair('Fees', formatUsd(snap.overviewStats.feesUsd)));
     }
 
     // Open Interest
     if (snap.openInterest.length > 0) {
       lines.push('');
-      lines.push(chalk.bold('  Open Interest'));
+      lines.push(`  ${theme.section('Open Interest')}`);
       let totalLong = 0;
       let totalShort = 0;
       const sorted = [...snap.openInterest].sort((a, b) => (b.longOi + b.shortOi) - (a.longOi + a.shortOi));
@@ -92,8 +90,8 @@ export class ProtocolInspector {
         const longPct = ((totalLong / grandTotal) * 100).toFixed(0);
         const shortPct = ((totalShort / grandTotal) * 100).toFixed(0);
         lines.push('');
-        lines.push(chalk.bold('  Long/Short Ratio'));
-        lines.push(`    ${chalk.green(longPct + '%')} / ${chalk.red(shortPct + '%')}`);
+        lines.push(`  ${theme.section('Long/Short Ratio')}`);
+        lines.push(`    ${theme.positive(longPct + '%')} / ${theme.negative(shortPct + '%')}`);
       }
     }
 
@@ -106,18 +104,16 @@ export class ProtocolInspector {
   async inspectPool(poolName: string): Promise<string> {
     const matched = POOL_NAMES.find(p => p.toLowerCase() === poolName.toLowerCase());
     if (!matched) {
-      return chalk.red(`  Unknown pool: ${poolName}. Available: ${POOL_NAMES.join(', ')}`);
+      return theme.negative(`  Unknown pool: ${poolName}. Available: ${POOL_NAMES.join(', ')}`);
     }
 
     const snap = await this.getSnapshot();
     const markets = POOL_MARKETS[matched] ?? [];
 
     const lines: string[] = [
+      theme.titleBlock(`POOL: ${matched}`),
       '',
-      chalk.bold(`  POOL: ${matched}`),
-      chalk.dim('  ────────────────────────────'),
-      '',
-      chalk.bold('  Markets'),
+      `  ${theme.section('Markets')}`,
       `    ${markets.join(', ')}`,
       '',
     ];
@@ -125,7 +121,7 @@ export class ProtocolInspector {
     // OI per market in this pool
     const poolOi = snap.openInterest.filter(m => markets.some(mk => mk.toUpperCase() === m.market.toUpperCase()));
     if (poolOi.length > 0) {
-      lines.push(chalk.bold('  Open Interest'));
+      lines.push(`  ${theme.section('Open Interest')}`);
       let poolLong = 0;
       let poolShort = 0;
       for (const m of poolOi) {
@@ -141,7 +137,7 @@ export class ProtocolInspector {
       const poolTotal = poolLong + poolShort;
       if (poolTotal > 0) {
         lines.push('');
-        lines.push(`  Pool Long/Short: ${chalk.green(((poolLong / poolTotal) * 100).toFixed(0) + '%')} / ${chalk.red(((poolShort / poolTotal) * 100).toFixed(0) + '%')}`);
+        lines.push(`  ${theme.dim('Pool L/S:')} ${theme.positive(((poolLong / poolTotal) * 100).toFixed(0) + '%')} / ${theme.negative(((poolShort / poolTotal) * 100).toFixed(0) + '%')}`);
       }
       lines.push('');
     }
@@ -155,7 +151,7 @@ export class ProtocolInspector {
       }).slice(0, 5);
 
       if (poolWhales.length > 0) {
-        lines.push(chalk.bold('  Recent Whale Activity'));
+        lines.push(`  ${theme.section('Recent Whale Activity')}`);
         for (const w of poolWhales) {
           const sym = (w.market_symbol ?? w.market ?? '?').toUpperCase();
           const side = (w.side ?? '?').toUpperCase();
@@ -183,7 +179,7 @@ export class ProtocolInspector {
       }
     }
     if (!pool) {
-      return chalk.red(`  Market not found: ${market}. Use 'markets' to see available markets.`);
+      return theme.negative(`  Market not found: ${market}. Use 'markets' to see available markets.`);
     }
 
     // Market status (virtual vs crypto)
@@ -195,28 +191,26 @@ export class ProtocolInspector {
 
     let statusDisplay: string;
     if (!mktStatus.isVirtual) {
-      statusDisplay = chalk.green('OPEN') + chalk.dim(' (24/7)');
+      statusDisplay = theme.positive('OPEN') + theme.dim(' (24/7)');
     } else if (mktStatus.isOpen) {
-      statusDisplay = chalk.green('OPEN');
+      statusDisplay = theme.positive('OPEN');
     } else {
-      statusDisplay = chalk.red('CLOSED');
+      statusDisplay = theme.negative('CLOSED');
     }
 
     const lines: string[] = [
+      theme.titleBlock(`${upper} MARKET STATE`),
       '',
-      chalk.bold(`  ${upper} MARKET STATE`),
-      chalk.dim('  ──────────────────'),
-      '',
-      `  Pool:          ${chalk.cyan(pool)}`,
-      `  Oracle Source:  ${chalk.dim('Pyth')}`,
-      `  Status:        ${statusDisplay}`,
+      theme.pair('Pool', theme.accent(pool)),
+      theme.pair('Oracle Source', theme.dim('Pyth')),
+      theme.pair('Status', statusDisplay),
     ];
 
     if (mktStatus.isVirtual) {
       const details = getScheduleDetails(upper);
       if (details) {
         lines.push('');
-        lines.push(chalk.bold('  Trading Hours'));
+        lines.push(`  ${theme.section('Trading Hours')}`);
         lines.push(`    ${details.sessionHours}`);
         if (details.dailyBreak) {
           lines.push(`    Daily Break: ${details.dailyBreak}`);
@@ -227,8 +221,8 @@ export class ProtocolInspector {
         const nextOpen = getNextSessionOpen(upper);
         if (nextOpen) {
           lines.push('');
-          lines.push(chalk.bold('  Next Session'));
-          lines.push(`    Opens at: ${chalk.yellow(nextOpen.toUTCString())}`);
+          lines.push(`  ${theme.section('Next Session')}`);
+          lines.push(`    Opens at: ${theme.warning(nextOpen.toUTCString())}`);
         }
       }
     }
@@ -238,10 +232,10 @@ export class ProtocolInspector {
       const lPct = totalOi > 0 ? ((oi.longOi / totalOi) * 100).toFixed(0) : '0';
       const sPct = totalOi > 0 ? ((oi.shortOi / totalOi) * 100).toFixed(0) : '0';
       lines.push('');
-      lines.push(chalk.bold('  Open Interest'));
-      lines.push(`    Total:       ${formatUsd(totalOi)}`);
-      lines.push(`    Long:        ${formatUsd(oi.longOi)} (${lPct}%)`);
-      lines.push(`    Short:       ${formatUsd(oi.shortOi)} (${sPct}%)`);
+      lines.push(`  ${theme.section('Open Interest')}`);
+      lines.push(theme.pair('Total', formatUsd(totalOi)));
+      lines.push(theme.pair('Long', `${formatUsd(oi.longOi)} (${lPct}%)`));
+      lines.push(theme.pair('Short', `${formatUsd(oi.shortOi)} (${sPct}%)`));
     }
 
     // Largest positions (whale data)
@@ -254,7 +248,7 @@ export class ProtocolInspector {
 
       if (marketPositions.length > 0) {
         lines.push('');
-        lines.push(chalk.bold('  Largest Positions'));
+        lines.push(`  ${theme.section('Largest Positions')}`);
         for (let i = 0; i < marketPositions.length; i++) {
           const p = marketPositions[i];
           const addr = shortAddress(String(p.address ?? p.owner ?? 'unknown'));
@@ -278,9 +272,7 @@ export class ProtocolInspector {
     const snap = await this.getSnapshot();
 
     const lines: string[] = [
-      '',
-      chalk.bold('  PROTOCOL RISK METRICS'),
-      chalk.dim('  ────────────────────────────'),
+      theme.titleBlock('PROTOCOL RISK METRICS'),
       '',
     ];
 
@@ -289,7 +281,7 @@ export class ProtocolInspector {
     const active = sorted.filter(m => m.longOi + m.shortOi > 0);
 
     if (active.length > 0) {
-      lines.push(chalk.bold('  Markets by Open Interest'));
+      lines.push(`  ${theme.section('Markets by Open Interest')}`);
       for (const m of active.slice(0, 10)) {
         lines.push(`    ${m.market.padEnd(10)} ${formatUsd(m.longOi + m.shortOi)}`);
       }
@@ -301,7 +293,7 @@ export class ProtocolInspector {
     if (totalOi > 0 && active.length > 0) {
       const topMarketOi = active[0].longOi + active[0].shortOi;
       const concentrationPct = ((topMarketOi / totalOi) * 100).toFixed(1);
-      lines.push(chalk.bold('  Concentration'));
+      lines.push(`  ${theme.section('Concentration')}`);
       lines.push(`    Largest market (${active[0].market}): ${concentrationPct}% of total OI`);
       lines.push(`    Total OI: ${formatUsd(totalOi)}`);
       lines.push('');
@@ -313,7 +305,7 @@ export class ProtocolInspector {
     if (totalLong + totalShort > 0) {
       const ratio = totalLong / (totalLong + totalShort);
       const imbalance = Math.abs(ratio - 0.5) * 200; // 0% = balanced, 100% = all one side
-      lines.push(chalk.bold('  Directional Imbalance'));
+      lines.push(`  ${theme.section('Directional Imbalance')}`);
       lines.push(`    Long: ${formatUsd(totalLong)}  Short: ${formatUsd(totalShort)}`);
       lines.push(`    Imbalance: ${imbalance.toFixed(1)}% ${ratio > 0.5 ? 'long-heavy' : 'short-heavy'}`);
       lines.push('');

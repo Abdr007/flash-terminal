@@ -10,6 +10,7 @@ import { allFlashTools } from './flash-tools.js';
 import { allAgentTools } from '../agent/agent-tools.js';
 import { runMiddleware } from '../core/execution-middleware.js';
 import chalk from 'chalk';
+import { theme } from '../cli/theme.js';
 
 /**
  * ToolEngine maps parsed intents to tool invocations.
@@ -54,8 +55,8 @@ export class ToolEngine {
         success: false,
         message: [
           '',
-          chalk.red('  Autopilot disabled in LIVE mode.'),
-          chalk.dim('  Restart terminal and select Simulation to use autopilot.'),
+          theme.negative('  Autopilot disabled in LIVE mode.'),
+          theme.dim('  Restart terminal and select Simulation to use autopilot.'),
           '',
         ].join('\n'),
       };
@@ -300,88 +301,85 @@ export class ToolEngine {
   }
 
   private handleHelp(): ToolResult {
+    const cmd = theme.command;
+    const dim = theme.dim;
+    const sec = theme.section;
+
     const lines = [
       '',
-      chalk.bold('  FLASH AI TERMINAL — Commands'),
-      chalk.dim('  ─────────────────────────────────────────────'),
+      `  ${theme.accentBold('FLASH AI TERMINAL')}  ${dim('— Commands')}`,
+      `  ${theme.separator(48)}`,
       '',
-      // ── Trading ──
-      chalk.bold('  Trading'),
-      `    ${chalk.cyan('open 5x long SOL $500')}     Open a leveraged position`,
-      `    ${chalk.cyan('close SOL long')}            Close a position`,
-      `    ${chalk.cyan('add $200 to SOL long')}      Add collateral to position`,
-      `    ${chalk.cyan('remove $100 from ETH long')} Remove collateral`,
-      `    ${chalk.cyan('positions')}                 View open positions`,
-      `    ${chalk.cyan('trade history')}              View recent trades`,
+      `  ${sec('Trading')}`,
+      `    ${cmd('open 5x long SOL $500')}     Open a leveraged position`,
+      `    ${cmd('close SOL long')}            Close a position`,
+      `    ${cmd('add $200 to SOL long')}      Add collateral to position`,
+      `    ${cmd('remove $100 from ETH long')} Remove collateral`,
+      `    ${cmd('positions')}                 View open positions`,
+      `    ${cmd('trade history')}              View recent trades`,
       '',
-      // ── Market Intelligence ──
-      chalk.bold('  Market Intelligence'),
-      `    ${chalk.cyan('scan')}                      Find trading opportunities`,
-      `    ${chalk.cyan('monitor')}                   Live market monitor (prices, OI)`,
-      `    ${chalk.cyan('analyze <asset>')}            Deep analysis of a market`,
-      `    ${chalk.cyan('markets')}                   List available markets`,
-      `    ${chalk.cyan('suggest trade')}              AI trade suggestion`,
-      `    ${chalk.cyan('whale activity')}             Recent large positions`,
+      `  ${sec('Market Intelligence')}`,
+      `    ${cmd('scan')}                      Find trading opportunities`,
+      `    ${cmd('monitor')}                   Live market monitor`,
+      `    ${cmd('analyze <asset>')}            Deep analysis of a market`,
+      `    ${cmd('markets')}                   List available markets`,
+      `    ${cmd('suggest trade')}              AI trade suggestion`,
+      `    ${cmd('whale activity')}             Recent large positions`,
       '',
-      // ── Portfolio & Risk ──
-      chalk.bold('  Portfolio & Risk'),
-      `    ${chalk.cyan('portfolio')}                 Portfolio overview`,
-      `    ${chalk.cyan('dashboard')}                 Full system dashboard`,
-      `    ${chalk.cyan('risk report')}                Position risk assessment`,
-      `    ${chalk.cyan('risk monitor on')}            Start real-time risk alerts`,
-      `    ${chalk.cyan('risk monitor off')}           Stop risk monitoring`,
+      `  ${sec('Portfolio & Risk')}`,
+      `    ${cmd('portfolio')}                 Portfolio overview`,
+      `    ${cmd('dashboard')}                 Full system dashboard`,
+      `    ${cmd('risk report')}                Position risk assessment`,
+      `    ${cmd('risk monitor on')}            Start real-time risk alerts`,
+      `    ${cmd('risk monitor off')}           Stop risk monitoring`,
       '',
-      // ── Market Data ──
-      chalk.bold('  Market Data'),
-      `    ${chalk.cyan('volume')}                    Trading volume data`,
-      `    ${chalk.cyan('open interest')}              OI breakdown by market`,
-      `    ${chalk.cyan('leaderboard')}               Top traders by PnL or volume`,
+      `  ${sec('Market Data')}`,
+      `    ${cmd('volume')}                    Trading volume data`,
+      `    ${cmd('open interest')}              OI breakdown by market`,
+      `    ${cmd('leaderboard')}               Top traders by PnL or volume`,
       '',
     ];
 
     if (this.context.simulationMode) {
       lines.push(
-        chalk.bold('  Autopilot') + chalk.dim(' (simulation only)'),
-        `    ${chalk.cyan('autopilot start')}          Start automated trading`,
-        `    ${chalk.cyan('autopilot stop')}           Stop autopilot`,
-        `    ${chalk.cyan('autopilot status')}         Autopilot status & signals`,
+        `  ${sec('Autopilot')} ${dim('(simulation only)')}`,
+        `    ${cmd('autopilot start')}          Start automated trading`,
+        `    ${cmd('autopilot stop')}           Stop autopilot`,
+        `    ${cmd('autopilot status')}         Autopilot status & signals`,
         '',
       );
     }
 
     lines.push(
-      // ── Wallet ──
-      chalk.bold('  Wallet'),
-      `    ${chalk.cyan('wallet')}                    Wallet status`,
-      `    ${chalk.cyan('wallet tokens')}             View all token balances`,
-      `    ${chalk.cyan('wallet balance')}            Show SOL balance`,
-      `    ${chalk.cyan('wallet list')}               List saved wallets`,
-      `    ${chalk.cyan('wallet import')}             Import & store a wallet`,
-      `    ${chalk.cyan('wallet use <name>')}         Switch to a saved wallet`,
-      `    ${chalk.cyan('wallet connect <path>')}     Connect wallet file`,
-      `    ${chalk.cyan('wallet disconnect')}         Disconnect active wallet`,
+      `  ${sec('Wallet')}`,
+      `    ${cmd('wallet')}                    Wallet status`,
+      `    ${cmd('wallet tokens')}             View all token balances`,
+      `    ${cmd('wallet balance')}            Show SOL balance`,
+      `    ${cmd('wallet list')}               List saved wallets`,
+      `    ${cmd('wallet import')}             Import & store a wallet`,
+      `    ${cmd('wallet use <name>')}         Switch to a saved wallet`,
+      `    ${cmd('wallet connect <path>')}     Connect wallet file`,
+      `    ${cmd('wallet disconnect')}         Disconnect active wallet`,
       '',
-      // ── Protocol Inspector ──
-      chalk.bold('  Protocol Inspector'),
-      `    ${chalk.cyan('inspect protocol')}          Flash Trade protocol overview`,
-      `    ${chalk.cyan('inspect pool <name>')}       Inspect a specific pool`,
-      `    ${chalk.cyan('inspect market <asset>')}    Deep market inspection`,
+      `  ${sec('Protocol Inspector')}`,
+      `    ${cmd('inspect protocol')}          Flash Trade protocol overview`,
+      `    ${cmd('inspect pool <name>')}       Inspect a specific pool`,
+      `    ${cmd('inspect market <asset>')}    Deep market inspection`,
       '',
-      // ── System ──
-      chalk.bold('  System'),
-      `    ${chalk.cyan('system status')}             System health overview`,
-      `    ${chalk.cyan('rpc status')}                Active RPC info`,
-      `    ${chalk.cyan('rpc test')}                  Test all RPC endpoints`,
-      `    ${chalk.cyan('tx inspect <sig>')}          Inspect a transaction`,
-      `    ${chalk.cyan('dryrun <command>')}          Preview without executing`,
-      `    ${chalk.cyan('doctor')}                  Run terminal diagnostic`,
-      `    ${chalk.cyan('watch <command>')}          Auto-refresh a command (e.g. watch positions)`,
+      `  ${sec('System')}`,
+      `    ${cmd('system status')}             System health overview`,
+      `    ${cmd('rpc status')}                Active RPC info`,
+      `    ${cmd('rpc test')}                  Test all RPC endpoints`,
+      `    ${cmd('tx inspect <sig>')}          Inspect a transaction`,
+      `    ${cmd('dryrun <command>')}          Preview without executing`,
+      `    ${cmd('doctor')}                  Run terminal diagnostic`,
+      `    ${cmd('watch <command>')}          Auto-refresh a command`,
       '',
-      chalk.dim('  ─────────────────────────────────────────────'),
-      `  ${chalk.cyan('exit')}                        Close the terminal`,
+      `  ${theme.separator(48)}`,
+      `  ${cmd('exit')}                        Close the terminal`,
       '',
-      chalk.dim('  You can also type natural language commands.'),
-      chalk.dim('  Example: "what\'s the price of SOL?" or "show me BTC analysis"'),
+      `  ${dim('You can also type natural language commands.')}`,
+      `  ${dim('Example: "what\'s the price of SOL?" or "show me BTC analysis"')}`,
       '',
     );
 

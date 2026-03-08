@@ -1,5 +1,6 @@
 import chalk from 'chalk';
 import { TradeSide, Position, MarketData, ToolResult } from '../types/index.js';
+import { theme } from '../cli/theme.js';
 
 export function formatUsd(value: number): string {
   if (!Number.isFinite(value)) return 'N/A';
@@ -24,25 +25,25 @@ export function formatPercent(value: number): string {
 
 export function colorPnl(value: number): string {
   const formatted = formatUsd(value);
-  if (value > 0) return chalk.green(formatted);
-  if (value < 0) return chalk.red(formatted);
-  return chalk.gray(formatted);
+  if (value > 0) return theme.positive(formatted);
+  if (value < 0) return theme.negative(formatted);
+  return theme.dim(formatted);
 }
 
 export function colorPercent(value: number): string {
   const formatted = formatPercent(value);
-  if (value > 0) return chalk.green(formatted);
-  if (value < 0) return chalk.red(formatted);
-  return chalk.gray(formatted);
+  if (value > 0) return theme.positive(formatted);
+  if (value < 0) return theme.negative(formatted);
+  return theme.dim(formatted);
 }
 
 export function colorSide(side: TradeSide): string {
-  return side === TradeSide.Long ? chalk.green('LONG') : chalk.red('SHORT');
+  return side === TradeSide.Long ? theme.long('LONG') : theme.short('SHORT');
 }
 
 export function formatPosition(pos: Position): string {
   const lines = [
-    `  ${chalk.bold(pos.market)} ${colorSide(pos.side)} ${chalk.dim(`${pos.leverage.toFixed(1)}x`)}`,
+    `  ${chalk.bold(pos.market)} ${colorSide(pos.side)} ${theme.dim(`${pos.leverage.toFixed(1)}x`)}`,
     `    Entry: ${formatPrice(pos.entryPrice)}  Mark: ${formatPrice(pos.markPrice)}`,
     `    Size: ${formatUsd(pos.sizeUsd)}  Collateral: ${formatUsd(pos.collateralUsd)}`,
     `    PnL: ${colorPnl(pos.unrealizedPnl)} (${colorPercent(pos.unrealizedPnlPercent)})`,
@@ -64,7 +65,7 @@ export function formatMarketRow(m: MarketData): string {
 
 export function formatToolResult(result: ToolResult): string {
   if (!result.success) {
-    return chalk.red(`Error: ${result.message}`);
+    return theme.negative(`Error: ${result.message}`);
   }
   return result.message;
 }
@@ -73,8 +74,8 @@ export function formatTable(headers: string[], rows: string[][]): string {
   const colWidths = headers.map((h, i) =>
     Math.max(h.length, ...rows.map(r => stripAnsi(r[i] || '').length))
   );
-  const headerLine = headers.map((h, i) => chalk.bold(h.padEnd(colWidths[i]))).join('  ');
-  const separator = colWidths.map(w => '─'.repeat(w)).join('──');
+  const headerLine = headers.map((h, i) => theme.tableHeader(h.padEnd(colWidths[i]))).join('  ');
+  const separator = theme.tableSeparator(colWidths.reduce((a, b) => a + b + 2, -2));
   const bodyLines = rows.map(row =>
     row.map((cell, i) => {
       const stripped = stripAnsi(cell);
@@ -92,8 +93,8 @@ function stripAnsi(str: string): string {
 export function banner(): string {
   return [
     '',
-    chalk.yellow.bold('  ⚡ FLASH AI TERMINAL ⚡'),
-    chalk.yellow('  ━━━━━━━━━━━━━━━━━━━━━━━━'),
+    `  ${theme.accentBold('FLASH AI TERMINAL')}`,
+    `  ${theme.separator(32)}`,
     '',
   ].join('\n');
 }

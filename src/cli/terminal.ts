@@ -25,6 +25,7 @@ import { loadPlugins, shutdownPlugins } from '../plugins/plugin-loader.js';
 import { StatusBar } from './status-bar.js';
 import { runDoctor } from '../tools/doctor.js';
 import { startWatch } from './watch.js';
+import { theme } from './theme.js';
 
 /** Resolve common market name aliases to canonical Flash Trade symbols */
 const MARKET_ALIASES: Record<string, string> = {
@@ -452,30 +453,23 @@ export class FlashTerminal {
 
   private async showModeSelection(): Promise<'live' | 'simulation' | 'exit'> {
     console.log('');
-    console.log(chalk.yellow.bold('  ⚡ FLASH AI TERMINAL ⚡'));
-    console.log(chalk.yellow('  ━━━━━━━━━━━━━━━━━━━━━━━━'));
+    console.log(`  ${theme.accentBold('FLASH AI TERMINAL')}`);
+    console.log(`  ${theme.separator(32)}`);
     console.log('');
-    console.log(chalk.dim('  AI Trading Interface for Flash Trade'));
+    console.log(theme.dim('  AI Trading Interface for Flash Trade'));
     console.log('');
-    console.log(chalk.dim('  This terminal provides real-time market intelligence'));
-    console.log(chalk.dim('  and trading tools using live blockchain data.'));
+    console.log(theme.dim('  Real-time market intelligence and trading tools'));
+    console.log(theme.dim('  powered by live blockchain data.'));
     console.log('');
-    console.log(chalk.bold('  Modes Available'));
+    console.log(theme.section('  Select Mode'));
     console.log('');
-    console.log(`    ${chalk.cyan('1)')} ${chalk.bold('LIVE TRADING')}`);
-    console.log(chalk.dim('       Execute real transactions on Flash Trade.'));
+    console.log(`    ${theme.command('1)')} ${theme.section('LIVE TRADING')}`);
+    console.log(theme.dim('       Execute real transactions on Flash Trade.'));
     console.log('');
-    console.log(`    ${chalk.cyan('2)')} ${chalk.bold('SIMULATION')}`);
-    console.log(chalk.dim('       Test strategies using paper trading.'));
+    console.log(`    ${theme.command('2)')} ${theme.section('SIMULATION')}`);
+    console.log(theme.dim('       Test strategies using paper trading.'));
     console.log('');
-    console.log(chalk.dim('  All market data shown in this terminal is real-time.'));
-    console.log(chalk.dim('  No synthetic or fabricated values are used.'));
-    console.log('');
-    console.log(chalk.bold('  Select mode:'));
-    console.log('');
-    console.log(`    ${chalk.cyan('1')} → Live Trading`);
-    console.log(`    ${chalk.cyan('2')} → Simulation`);
-    console.log(`    ${chalk.cyan('3')} → Exit`);
+    console.log(`    ${theme.command('3)')} ${theme.dim('Exit')}`);
     console.log('');
 
     while (true) {
@@ -821,29 +815,28 @@ export class FlashTerminal {
 
   private async showIntelligenceScreen(walletName: string | null): Promise<void> {
     const isSim = this.config.simulationMode;
-    const modeColor = isSim ? chalk.yellow : chalk.red;
     const modeLabel = isSim ? 'SIMULATION' : 'LIVE TRADING';
-    const modeBg = isSim ? chalk.bgYellow.black : chalk.bgRed.white.bold;
+    const modeBg = isSim ? theme.simBadge : theme.liveBadge;
 
     // Header
     console.log('');
-    console.log(modeColor.bold('  ⚡ FLASH AI TERMINAL ⚡'));
-    console.log(modeColor('  ━━━━━━━━━━━━━━━━━━━━━━━━'));
+    console.log(`  ${theme.accentBold('FLASH AI TERMINAL')}`);
+    console.log(`  ${theme.separator(32)}`);
     console.log('');
-    console.log(`  ${modeBg(` ${modeLabel} `)}`);
+    console.log(`  ${modeBg(modeLabel)}`);
     console.log('');
 
     // Wallet / Balance
     if (isSim) {
-      console.log(`  Balance: ${chalk.green('$' + this.flashClient.getBalance().toFixed(2))}`);
-      console.log(chalk.dim('  Trades are simulated. No real transactions.'));
+      console.log(theme.pair('Balance', theme.positive('$' + this.flashClient.getBalance().toFixed(2))));
+      console.log(theme.dim('  Trades are simulated. No real transactions.'));
     } else if (walletName) {
       const walletAddr = this.walletManager.address;
-      console.log(`  Wallet:  ${chalk.cyan(walletName)}`);
+      console.log(theme.pair('Wallet', theme.accent(walletName)));
       if (walletAddr) {
-        console.log(`  Address: ${chalk.dim(walletAddr)}`);
+        console.log(theme.pair('Address', theme.dim(walletAddr)));
       }
-      console.log(`  Network: ${chalk.bold(this.config.network)}`);
+      console.log(theme.pair('Network', theme.value(this.config.network)));
       console.log('');
 
       // Fetch SOL + USDC balances
@@ -857,7 +850,6 @@ export class FlashTerminal {
         );
         usdcBal = usdcToken?.amount ?? 0;
       } catch {
-        // Fall back to SOL-only balance
         try {
           solBal = await this.walletManager.getBalance();
         } catch {
@@ -866,33 +858,33 @@ export class FlashTerminal {
       }
 
       if (solBal !== null) {
-        console.log(`  SOL Balance:  ${chalk.green(solBal.toFixed(4))} SOL`);
+        console.log(theme.pair('SOL Balance', theme.positive(solBal.toFixed(4) + ' SOL')));
       }
       if (usdcBal !== null) {
-        const usdcColor = usdcBal > 0 ? chalk.green : chalk.yellow;
-        console.log(`  USDC Balance: ${usdcColor(usdcBal.toFixed(2))} USDC`);
+        const val = usdcBal > 0 ? theme.positive(usdcBal.toFixed(2) + ' USDC') : theme.warning(usdcBal.toFixed(2) + ' USDC');
+        console.log(theme.pair('USDC Balance', val));
       }
 
       console.log('');
       if (usdcBal !== null && usdcBal === 0) {
-        console.log(chalk.yellow('  Flash Trade requires USDC collateral to open positions.'));
-        console.log(chalk.dim('  Run "wallet tokens" to view all token balances.'));
+        console.log(theme.warning('  Flash Trade requires USDC collateral to open positions.'));
+        console.log(theme.dim('  Run "wallet tokens" to view all token balances.'));
         console.log('');
       }
-      console.log(chalk.yellow('  WARNING'));
-      console.log(chalk.dim('  Transactions executed here are real.'));
+      console.log(theme.warning('  WARNING'));
+      console.log(theme.dim('  Transactions executed here are real.'));
     }
     console.log('');
 
     // ─── Quick Start Hints ───────────────────────────────────────
-    console.log(chalk.bold('  Quick Start'));
-    console.log(`    ${chalk.cyan('help')}           List all commands`);
-    console.log(`    ${chalk.cyan('scan')}           Find trading opportunities`);
-    console.log(`    ${chalk.cyan('monitor')}        Live market monitoring`);
-    console.log(`    ${chalk.cyan('wallet tokens')}  View token balances`);
-    console.log(`    ${chalk.cyan('markets')}        View available markets`);
+    console.log(theme.section('  Quick Start'));
+    console.log(`    ${theme.command('help')}           List all commands`);
+    console.log(`    ${theme.command('scan')}           Find trading opportunities`);
+    console.log(`    ${theme.command('monitor')}        Live market monitoring`);
+    console.log(`    ${theme.command('wallet tokens')}  View token balances`);
+    console.log(`    ${theme.command('markets')}        View available markets`);
     console.log('');
-    console.log(chalk.dim('  Type "exit" to close the terminal.'));
+    console.log(theme.dim('  Type "exit" to close the terminal.'));
     console.log('');
   }
 
@@ -1312,9 +1304,9 @@ export class FlashTerminal {
   /** Update prompt prefix based on current mode */
   private updatePrompt(): void {
     const prefix = this.config.simulationMode
-      ? chalk.yellow('flash [sim]')
-      : chalk.red('flash [live]');
-    this.rl.setPrompt(`${prefix} > `);
+      ? theme.warning('flash') + theme.dim(' [sim]')
+      : theme.negative('flash') + theme.dim(' [live]');
+    this.rl.setPrompt(`${prefix} ${theme.accent('>')} `);
   }
 
   // ─── History ───────────────────────────────────────────────────────
@@ -1491,16 +1483,16 @@ export class FlashTerminal {
     // and the user didn't explicitly type "help", show an unknown command message.
     if (intent.action === ActionType.Help && !fastIntent) {
       console.log('');
-      console.log(chalk.yellow(`  Unknown command: ${input}`));
+      console.log(theme.warning(`  Unknown command: ${input}`));
       console.log('');
-      console.log(chalk.bold('  Try'));
-      console.log(`    ${chalk.cyan('help')}       List all commands`);
-      console.log(`    ${chalk.cyan('scan')}       Find trading opportunities`);
-      console.log(`    ${chalk.cyan('markets')}    View available markets`);
-      console.log(`    ${chalk.cyan('positions')}  View open positions`);
-      console.log(`    ${chalk.cyan('monitor')}    Live market monitoring`);
+      console.log(theme.section('  Try'));
+      console.log(`    ${theme.command('help')}       List all commands`);
+      console.log(`    ${theme.command('scan')}       Find trading opportunities`);
+      console.log(`    ${theme.command('markets')}    View available markets`);
+      console.log(`    ${theme.command('positions')}  View open positions`);
+      console.log(`    ${theme.command('monitor')}    Live market monitoring`);
       console.log('');
-      console.log(chalk.dim('  You can also type natural language, e.g. "what is the price of SOL?"'));
+      console.log(theme.dim('  You can also type natural language, e.g. "what is the price of SOL?"'));
       console.log('');
       return;
     }
@@ -1706,24 +1698,24 @@ export class FlashTerminal {
       process.stdout.write('\x1B[H\x1B[J');
       const now = new Date().toLocaleTimeString();
       console.log('');
-      console.log(chalk.bold.yellow('  MARKET MONITOR'));
-      console.log(chalk.dim(`  ${now}  |  Refreshing every 5s  |  Press any key to exit`));
-      console.log(chalk.dim('  ' + '─'.repeat(68)));
+      console.log(`  ${theme.accentBold('MARKET MONITOR')}`);
+      console.log(theme.dim(`  ${now}  |  Refresh 5s  |  Press any key to exit`));
+      console.log(`  ${theme.separator(68)}`);
       console.log('');
 
       // Header
       const hdr = [
-        chalk.bold('  Asset'.padEnd(12)),
-        chalk.bold('Price'.padStart(12)),
-        chalk.bold('24h Change'.padStart(12)),
-        chalk.bold('Open Interest'.padStart(15)),
-        chalk.bold('Long / Short'.padStart(14)),
+        theme.tableHeader('  Asset'.padEnd(12)),
+        theme.tableHeader('Price'.padStart(12)),
+        theme.tableHeader('24h Change'.padStart(12)),
+        theme.tableHeader('Open Interest'.padStart(15)),
+        theme.tableHeader('Long / Short'.padStart(14)),
       ].join('  ');
       console.log(hdr);
-      console.log(chalk.dim('  ' + '─'.repeat(68)));
+      console.log(`  ${theme.separator(68)}`);
 
       if (rows.length === 0) {
-        console.log(chalk.dim('\n  Waiting for price data...\n'));
+        console.log(theme.dim('\n  Waiting for price data...\n'));
       } else {
         for (const r of rows) {
           const sym = chalk.bold(('  ' + r.symbol).padEnd(12));
@@ -1731,7 +1723,7 @@ export class FlashTerminal {
           const change = colorPercent(r.change).padStart(12);
           const oiStr = formatUsd(r.totalOi).padStart(15);
           const ratio = `${r.longPct} / ${r.shortPct}`.padStart(14);
-          const ratioColored = r.longPct > 60 ? chalk.green(ratio) : r.shortPct > 60 ? chalk.red(ratio) : chalk.gray(ratio);
+          const ratioColored = r.longPct > 60 ? theme.positive(ratio) : r.shortPct > 60 ? theme.negative(ratio) : theme.dim(ratio);
           console.log(`${sym}  ${price}  ${change}  ${oiStr}  ${ratioColored}`);
         }
       }
@@ -1775,7 +1767,7 @@ export class FlashTerminal {
         }
         // Clear screen and return to prompt
         process.stdout.write('\x1B[H\x1B[J');
-        console.log(chalk.dim('  Market monitor stopped.\n'));
+        console.log(theme.dim('  Market monitor stopped.\n'));
         resolve();
       };
 

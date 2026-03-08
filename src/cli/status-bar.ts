@@ -5,6 +5,7 @@ import { RpcManager } from '../network/rpc-manager.js';
 import { formatUsd } from '../utils/format.js';
 import { getLogger } from '../utils/logger.js';
 import { getErrorMessage } from '../utils/retry.js';
+import { theme } from './theme.js';
 
 // ─── Status Bar ──────────────────────────────────────────────────────────────
 //
@@ -165,26 +166,23 @@ export class StatusBar {
 
     // Build the status line
     const latStr = s.latencyMs > 0
-      ? (s.latencyMs < 500 ? chalk.green(`${s.latencyMs}ms`) : s.latencyMs < 1500 ? chalk.yellow(`${s.latencyMs}ms`) : chalk.red(`${s.latencyMs}ms`))
-      : chalk.dim('--');
+      ? (s.latencyMs < 500 ? theme.positive(`${s.latencyMs}ms`) : s.latencyMs < 1500 ? theme.warning(`${s.latencyMs}ms`) : theme.negative(`${s.latencyMs}ms`))
+      : theme.dim('--');
 
-    const modeColor = s.mode === 'LIVE' ? chalk.red(s.mode) : chalk.yellow(s.mode);
+    const modeColor = s.mode === 'LIVE' ? theme.negative(s.mode) : theme.warning(s.mode);
 
     const parts = [
-      `RPC: ${chalk.cyan(s.rpcLabel)} (${latStr})`,
-      `Network: ${s.network}`,
-      `Wallet: ${chalk.bold(s.walletName)}`,
-      `Positions: ${s.positions}`,
-      `Exposure: ${formatUsd(s.exposureUsd)}`,
-      `Mode: ${modeColor}`,
+      `${theme.dim('RPC:')} ${theme.accent(s.rpcLabel)} ${theme.dim('(')}${latStr}${theme.dim(')')}`,
+      `${theme.dim('Wallet:')} ${chalk.bold(s.walletName)}`,
+      `${theme.dim('Pos:')} ${s.positions}`,
+      `${theme.dim('Exp:')} ${formatUsd(s.exposureUsd)}`,
+      `${theme.dim('Mode:')} ${modeColor}`,
     ];
 
-    const statusLine = parts.join(chalk.dim(' | '));
-    const separator = chalk.dim('─'.repeat(Math.min(process.stdout.columns || 80, 80)));
+    const statusLine = parts.join(theme.dim('  |  '));
+    const separator = theme.fullSeparator();
 
     // Write status below the current prompt line without disrupting readline.
-    // Strategy: print the status, then re-display the prompt.
-    // We use process.stdout.write to avoid extra newlines.
     process.stdout.write('\n');
     process.stdout.write(`${statusLine}\n`);
     process.stdout.write(`${separator}\n`);

@@ -24,6 +24,7 @@ import { getErrorMessage } from '../utils/retry.js';
 import { getSigningGuard, SigningAuditEntry } from '../security/signing-guard.js';
 import { updateLastWallet, clearLastWallet } from '../wallet/session.js';
 import chalk from 'chalk';
+import { theme } from '../cli/theme.js';
 
 // ─── Pre-Trade Validation ───────────────────────────────────────────────────
 
@@ -561,7 +562,7 @@ export const flashGetPositions: ToolDefinition = {
   execute: async (_params, context): Promise<ToolResult> => {
     const positions = await context.flashClient.getPositions();
     if (positions.length === 0) {
-      return { success: true, message: chalk.dim('\n  No open positions.\n') };
+      return { success: true, message: theme.dim('\n  No open positions.\n') };
     }
 
     const headers = ['Market', 'Side', 'Lev', 'Size', 'Collateral', 'Entry', 'Mark', 'PnL', 'Fees', 'Liq'];
@@ -573,14 +574,24 @@ export const flashGetPositions: ToolDefinition = {
       formatUsd(p.collateralUsd),
       formatPrice(p.entryPrice),
       formatPrice(p.markPrice),
-      `${colorPnl(p.unrealizedPnl)} ${chalk.dim(`(${colorPercent(p.unrealizedPnlPercent)})`)}`,
-      p.totalFees > 0 ? formatUsd(p.totalFees) : chalk.dim('—'),
+      `${colorPnl(p.unrealizedPnl)} ${theme.dim(`(${colorPercent(p.unrealizedPnlPercent)})`)}`,
+      p.totalFees > 0 ? formatUsd(p.totalFees) : theme.dim('—'),
       formatPrice(p.liquidationPrice),
     ]);
 
+    const totalPnl = positions.reduce((s: number, p: Position) => s + p.unrealizedPnl, 0);
+    const totalExposure = positions.reduce((s: number, p: Position) => s + p.sizeUsd, 0);
+
     return {
       success: true,
-      message: '\n' + formatTable(headers, rows) + '\n',
+      message: [
+        theme.titleBlock('POSITIONS'),
+        '',
+        formatTable(headers, rows),
+        '',
+        `  ${theme.dim('Total PnL:')} ${colorPnl(totalPnl)}  ${theme.dim('|  Exposure:')} ${formatUsd(totalExposure)}  ${theme.dim('|  Open:')} ${positions.length}`,
+        '',
+      ].join('\n'),
       data: { positions },
     };
   },
@@ -598,7 +609,7 @@ export const flashGetMarketData: ToolDefinition = {
     const { market } = params as { market?: string };
     const markets = await context.flashClient.getMarketData(market);
     if (markets.length === 0) {
-      return { success: true, message: chalk.dim('\n  Market data unavailable. Try again later.\n') };
+      return { success: true, message: theme.dim('\n  Market data unavailable. Try again later.\n') };
     }
 
     // Enrich with fstats OI data and CoinGecko 24h change
@@ -636,7 +647,12 @@ export const flashGetMarketData: ToolDefinition = {
 
     return {
       success: true,
-      message: '\n' + formatTable(headers, rows) + '\n',
+      message: [
+        theme.titleBlock('MARKET DATA'),
+        '',
+        formatTable(headers, rows),
+        '',
+      ].join('\n'),
       data: { markets },
     };
   },
@@ -663,29 +679,27 @@ export const flashGetPortfolio: ToolDefinition = {
     const shortPct = totalExposure > 0 ? ((shortExposure / totalExposure) * 100).toFixed(0) : '0';
 
     const lines = [
+      theme.titleBlock('PORTFOLIO'),
       '',
-      chalk.bold('  Portfolio Summary'),
-      chalk.dim('  ─────────────────────────────────────────'),
-      '',
-      `  Total Positions:  ${portfolio.positions.length}`,
-      `  Total Exposure:   ${formatUsd(totalExposure)}`,
+      theme.pair('Positions', String(portfolio.positions.length)),
+      theme.pair('Exposure', formatUsd(totalExposure)),
       '',
     ];
 
     if (portfolio.positions.length > 0) {
-      lines.push(chalk.bold('  Directional Bias'));
-      lines.push(`  LONG:  ${longPct}%`);
-      lines.push(`  SHORT: ${shortPct}%`);
+      lines.push(`  ${theme.section('Directional Bias')}`);
+      lines.push(theme.pair('LONG', theme.positive(`${longPct}%`)));
+      lines.push(theme.pair('SHORT', theme.negative(`${shortPct}%`)));
       lines.push('');
     }
 
     lines.push(
       `  ${portfolio.balanceLabel}`,
-      portfolio.usdcBalance !== undefined ? `  USDC Available:   ${chalk.green('$' + portfolio.usdcBalance.toFixed(2))}` : '',
-      `  Collateral:       ${formatUsd(portfolio.totalCollateralUsd)}`,
-      `  Unrealized PnL:   ${colorPnl(portfolio.totalUnrealizedPnl)}`,
-      `  Realized PnL:     ${colorPnl(portfolio.totalRealizedPnl)}`,
-      portfolio.totalFees > 0 ? `  Fees Paid:        ${formatUsd(portfolio.totalFees)}` : '',
+      portfolio.usdcBalance !== undefined ? theme.pair('USDC Available', theme.positive('$' + portfolio.usdcBalance.toFixed(2))) : '',
+      theme.pair('Collateral', formatUsd(portfolio.totalCollateralUsd)),
+      theme.pair('Unrealized PnL', colorPnl(portfolio.totalUnrealizedPnl)),
+      theme.pair('Realized PnL', colorPnl(portfolio.totalRealizedPnl)),
+      portfolio.totalFees > 0 ? theme.pair('Fees Paid', formatUsd(portfolio.totalFees)) : '',
       '',
     );
 
@@ -713,7 +727,7 @@ export const flashGetVolume: ToolDefinition = {
 
       const recent = volume.dailyVolumes.slice(-7);
       if (recent.length === 0) {
-        return { success: true, message: chalk.dim('\n  Volume data unavailable.\n') };
+        return { success: true, message: theme.dim('\n  Volume data unavailable.\n') };
       }
 
       const headers = ['Date', 'Volume', 'Trades', 'Long', 'Short'];
@@ -728,11 +742,10 @@ export const flashGetVolume: ToolDefinition = {
       return {
         success: true,
         message: [
+          theme.titleBlock(`VOLUME (${volume.period})`),
           '',
-          chalk.bold(`  Volume (${volume.period})`),
-          chalk.dim('  ─────────────────────'),
-          `  Total: ${formatUsd(volume.totalVolumeUsd)}`,
-          `  Trades: ${volume.trades.toLocaleString()}`,
+          theme.pair('Total', formatUsd(volume.totalVolumeUsd)),
+          theme.pair('Trades', volume.trades.toLocaleString()),
           '',
           formatTable(headers, rows),
           '',
@@ -740,7 +753,7 @@ export const flashGetVolume: ToolDefinition = {
         data: { volume },
       };
     } catch (error: unknown) {
-      return { success: false, message: chalk.dim(`\n  Volume data unavailable.\n`) };
+      return { success: false, message: theme.dim(`\n  Volume data unavailable.\n`) };
     }
   },
 };
@@ -754,7 +767,7 @@ export const flashGetOpenInterest: ToolDefinition = {
       const oi = await context.dataClient.getOpenInterest();
 
       if (oi.markets.length === 0) {
-        return { success: true, message: chalk.dim('\n  Open interest data unavailable.\n') };
+        return { success: true, message: theme.dim('\n  Open interest data unavailable.\n') };
       }
 
       const headers = ['Market', 'Long OI', 'Short OI', 'L Positions', 'S Positions'];
@@ -768,11 +781,16 @@ export const flashGetOpenInterest: ToolDefinition = {
 
       return {
         success: true,
-        message: '\n' + formatTable(headers, rows) + '\n',
+        message: [
+          theme.titleBlock('OPEN INTEREST'),
+          '',
+          formatTable(headers, rows),
+          '',
+        ].join('\n'),
         data: { openInterest: oi },
       };
     } catch (error: unknown) {
-      return { success: false, message: chalk.dim(`\n  Open interest data unavailable.\n`) };
+      return { success: false, message: theme.dim(`\n  Open interest data unavailable.\n`) };
     }
   },
 };
@@ -799,7 +817,7 @@ export const flashGetLeaderboard: ToolDefinition = {
       const entries = await context.dataClient.getLeaderboard(metric, days, limit);
 
       if (entries.length === 0) {
-        return { success: true, message: chalk.dim('\n  Leaderboard data unavailable.\n') };
+        return { success: true, message: theme.dim('\n  Leaderboard data unavailable.\n') };
       }
 
       const headers = ['#', 'Trader', 'PnL', 'Volume', 'Trades', 'Win Rate'];
@@ -815,8 +833,7 @@ export const flashGetLeaderboard: ToolDefinition = {
       return {
         success: true,
         message: [
-          '',
-          chalk.bold(`  Leaderboard — ${metric.toUpperCase()} (${days}d)`),
+          theme.titleBlock(`LEADERBOARD — ${metric.toUpperCase()} (${days}d)`),
           '',
           formatTable(headers, rows),
           '',
@@ -824,7 +841,7 @@ export const flashGetLeaderboard: ToolDefinition = {
         data: { leaderboard: entries },
       };
     } catch (error: unknown) {
-      return { success: false, message: chalk.dim(`\n  Leaderboard data unavailable.\n`) };
+      return { success: false, message: theme.dim(`\n  Leaderboard data unavailable.\n`) };
     }
   },
 };
@@ -844,16 +861,15 @@ export const flashGetFees: ToolDefinition = {
       return {
         success: true,
         message: [
+          theme.titleBlock(`FEES (${fees.period})`),
           '',
-          chalk.bold(`  Fees (${fees.period})`),
-          chalk.dim('  ─────────────────'),
-          `  Total Fees: ${formatUsd(fees.totalFees)}`,
+          theme.pair('Total Fees', formatUsd(fees.totalFees)),
           '',
         ].join('\n'),
         data: { fees },
       };
     } catch (error: unknown) {
-      return { success: false, message: chalk.dim(`\n  Fee data unavailable.\n`) };
+      return { success: false, message: theme.dim(`\n  Fee data unavailable.\n`) };
     }
   },
 };
@@ -871,13 +887,12 @@ export const flashGetTraderProfile: ToolDefinition = {
     return {
       success: true,
       message: [
+        theme.titleBlock(`TRADER: ${shortAddress(profile.address)}`),
         '',
-        chalk.bold(`  Trader: ${shortAddress(profile.address)}`),
-        chalk.dim('  ─────────────────────'),
-        `  Total Trades: ${profile.totalTrades}`,
-        `  Total Volume: ${formatUsd(profile.totalVolume)}`,
-        `  Total PnL:    ${colorPnl(profile.totalPnl)}`,
-        `  Win Rate:     ${profile.winRate.toFixed(1)}%`,
+        theme.pair('Total Trades', String(profile.totalTrades)),
+        theme.pair('Total Volume', formatUsd(profile.totalVolume)),
+        theme.pair('Total PnL', colorPnl(profile.totalPnl)),
+        theme.pair('Win Rate', `${profile.winRate.toFixed(1)}%`),
         '',
       ].join('\n'),
       data: { traderProfile: profile },
@@ -1122,23 +1137,22 @@ export const walletStatus: ToolDefinition = {
     const storedCount = walletStore.listWallets().length;
 
     const lines = [
+      theme.titleBlock('WALLET STATUS'),
       '',
-      chalk.bold('  Wallet Status'),
-      chalk.dim('  ─────────────────'),
     ];
 
     if (wm && wm.isConnected) {
-      lines.push(`  Connected: ${chalk.green('Yes')}`);
+      lines.push(theme.pair('Connected', theme.positive('Yes')));
       if (defaultName) {
-        lines.push(`  Wallet:    ${chalk.bold(defaultName)}`);
+        lines.push(theme.pair('Wallet', chalk.bold(defaultName)));
       }
     } else if (wm && wm.hasAddress) {
-      lines.push(`  Connected: ${chalk.yellow('Read-only')}`);
+      lines.push(theme.pair('Connected', theme.warning('Read-only')));
     } else {
-      lines.push(`  Connected: ${chalk.red('No')}`);
+      lines.push(theme.pair('Connected', theme.negative('No')));
     }
 
-    lines.push(`  Stored:    ${storedCount} wallet(s)`);
+    lines.push(theme.pair('Stored', `${storedCount} wallet(s)`));
     lines.push('');
 
     if (!wm?.isConnected && storedCount === 0) {
@@ -1223,16 +1237,15 @@ export const walletBalance: ToolDefinition = {
     try {
       const { sol, tokens } = await wm.getTokenBalances();
       const lines = [
+        theme.titleBlock('WALLET BALANCE'),
         '',
-        chalk.bold('  Wallet Balance'),
-        chalk.dim('  ─────────────────'),
-        `  SOL:     ${chalk.green(sol.toFixed(4))} SOL`,
+        theme.pair('SOL', theme.positive(sol.toFixed(4) + ' SOL')),
       ];
       for (const t of tokens) {
-        lines.push(`  ${t.symbol.padEnd(7)}${chalk.green(t.amount.toFixed(t.symbol === 'USDC' || t.symbol === 'USDT' ? 2 : 4))} ${t.symbol}`);
+        lines.push(theme.pair(t.symbol, theme.positive(t.amount.toFixed(t.symbol === 'USDC' || t.symbol === 'USDT' ? 2 : 4) + ' ' + t.symbol)));
       }
       if (tokens.length === 0) {
-        lines.push(chalk.dim('  No SPL tokens found'));
+        lines.push(theme.dim('  No SPL tokens found'));
       }
       lines.push('');
       return { success: true, message: lines.join('\n') };
@@ -1254,17 +1267,16 @@ export const walletTokens: ToolDefinition = {
     try {
       const { sol, tokens } = await wm.getTokenBalances();
       const lines = [
+        theme.titleBlock('TOKENS IN WALLET'),
         '',
-        chalk.bold('  TOKENS IN WALLET'),
-        chalk.dim('  ─────────────────'),
-        `  SOL     ${chalk.green(sol.toFixed(4))}`,
+        theme.pair('SOL', theme.positive(sol.toFixed(4))),
       ];
       for (const t of tokens) {
         const decimals = t.symbol === 'USDC' || t.symbol === 'USDT' ? 2 : 4;
-        lines.push(`  ${t.symbol.padEnd(8)}${chalk.green(t.amount.toFixed(decimals))}`);
+        lines.push(theme.pair(t.symbol, theme.positive(t.amount.toFixed(decimals))));
       }
       if (tokens.length === 0) {
-        lines.push(chalk.dim('  No SPL tokens found'));
+        lines.push(theme.dim('  No SPL tokens found'));
       }
       lines.push('');
       return { success: true, message: lines.join('\n') };
@@ -1281,13 +1293,12 @@ export const flashMarkets: ToolDefinition = {
   execute: async (_params, _context): Promise<ToolResult> => {
     const { POOL_MARKETS } = await import('../config/index.js');
     const lines = [
+      theme.titleBlock('FLASH TRADE MARKETS'),
       '',
-      chalk.bold('  FLASH TRADE MARKETS'),
-      chalk.dim('  ─────────────────────'),
     ];
     for (const [pool, markets] of Object.entries(POOL_MARKETS)) {
       for (const market of markets) {
-        lines.push(`  ${market.padEnd(12)} → ${chalk.yellow(pool)}`);
+        lines.push(`  ${market.padEnd(12)} ${theme.dim('→')} ${theme.accent(pool)}`);
       }
     }
     lines.push('');
@@ -1529,30 +1540,28 @@ const tradeHistoryTool: ToolDefinition = {
     const recent = trades.slice(-20).reverse();
 
     const lines: string[] = [
+      theme.titleBlock('TRADE HISTORY'),
       '',
-      chalk.bold('  TRADE HISTORY'),
-      chalk.dim('  ──────────────────────────────────────────────────────────────────────'),
-      '',
-      chalk.dim('  Time       Action  Market  Side    Size        Entry       PnL'),
-      chalk.dim('  ──────────────────────────────────────────────────────────────────────'),
+      theme.dim('  Time       Action  Market  Side    Size        Entry       PnL'),
+      `  ${theme.separator(72)}`,
     ];
 
     for (const t of recent) {
       const time = new Date(t.timestamp).toLocaleTimeString('en-US', { hour12: false });
-      const action = t.action === 'open' ? chalk.cyan('OPEN ') : chalk.yellow('CLOSE');
+      const action = t.action === 'open' ? theme.command('OPEN ') : theme.warning('CLOSE');
       const market = t.market.padEnd(6);
-      const side = t.side === 'long' ? chalk.green('LONG ') : chalk.red('SHORT');
+      const side = t.side === 'long' ? theme.long('LONG ') : theme.short('SHORT');
       const size = formatUsd(t.sizeUsd).padStart(10);
       const entry = formatPrice(t.price).padStart(10);
       const pnl = t.pnl !== undefined
-        ? (t.pnl >= 0 ? chalk.green(`+${formatUsd(t.pnl)}`) : chalk.red(formatUsd(t.pnl)))
-        : chalk.dim('  —');
+        ? (t.pnl >= 0 ? theme.positive(`+${formatUsd(t.pnl)}`) : theme.negative(formatUsd(t.pnl)))
+        : theme.dim('  —');
 
       lines.push(`  ${time}  ${action}   ${market}  ${side}  ${size}  ${entry}  ${pnl}`);
     }
 
     lines.push('');
-    lines.push(chalk.dim(`  Showing ${recent.length} of ${trades.length} total trades`));
+    lines.push(theme.dim(`  Showing ${recent.length} of ${trades.length} total trades`));
     lines.push('');
 
     return { success: true, message: lines.join('\n') };

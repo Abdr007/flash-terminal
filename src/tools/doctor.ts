@@ -3,6 +3,7 @@ import { IFlashClient, ToolContext, TradeSide } from '../types/index.js';
 import { RpcManager } from '../network/rpc-manager.js';
 import { WalletManager } from '../wallet/walletManager.js';
 import { getErrorMessage } from '../utils/retry.js';
+import { theme } from '../cli/theme.js';
 
 // ─── Doctor Diagnostic ──────────────────────────────────────────────────────
 //
@@ -48,35 +49,32 @@ async function checkEnvironment(
     const label = rpcManager.activeEndpoint.label;
 
     if (latency > 0 && latency < 2000) {
-      details.push(chalk.green('  ✔') + ` RPC reachable (${label} – ${latency}ms)`);
+      details.push(theme.positive('  ✔') + ` RPC reachable (${label} – ${latency}ms)`);
     } else if (latency > 0) {
-      details.push(chalk.yellow('  ✔') + ` RPC reachable (${label} – ${latency}ms, slow)`);
+      details.push(theme.warning('  ✔') + ` RPC reachable (${label} – ${latency}ms, slow)`);
     } else {
-      // No cached latency — do a quick slot fetch to verify connectivity
       const start = Date.now();
       await rpcManager.connection.getSlot('confirmed');
       const measured = Date.now() - start;
       if (measured < 2000) {
-        details.push(chalk.green('  ✔') + ` RPC reachable (${label} – ${measured}ms)`);
+        details.push(theme.positive('  ✔') + ` RPC reachable (${label} – ${measured}ms)`);
       } else {
-        details.push(chalk.yellow('  ✔') + ` RPC reachable (${label} – ${measured}ms, slow)`);
+        details.push(theme.warning('  ✔') + ` RPC reachable (${label} – ${measured}ms, slow)`);
       }
     }
   } catch (err) {
-    details.push(chalk.red('  ✘') + ` RPC unreachable: ${getErrorMessage(err)}`);
+    details.push(theme.negative('  ✘') + ` RPC unreachable: ${getErrorMessage(err)}`);
     passed = false;
   }
 
-  // Network
-  details.push(chalk.green('  ✔') + ' Network: mainnet-beta');
+  details.push(theme.positive('  ✔') + ' Network: mainnet-beta');
 
-  // Wallet
   if (simulationMode) {
-    details.push(chalk.green('  ✔') + ' Wallet: simulation mode (paper trading)');
+    details.push(theme.positive('  ✔') + ' Wallet: simulation mode (paper trading)');
   } else if (walletManager?.isConnected) {
-    details.push(chalk.green('  ✔') + ' Wallet connected');
+    details.push(theme.positive('  ✔') + ' Wallet connected');
   } else {
-    details.push(chalk.yellow('  ✘') + ' No wallet connected');
+    details.push(theme.warning('  ✘') + ' No wallet connected');
     passed = false;
   }
 
@@ -89,31 +87,28 @@ async function checkProtocolData(
   const details: string[] = [];
   let passed = true;
 
-  // Markets
   try {
     const { POOL_MARKETS } = await import('../config/index.js');
     const marketCount = new Set(Object.values(POOL_MARKETS).flat()).size;
-    details.push(chalk.green('  ✔') + ` Markets loaded (${marketCount} markets)`);
+    details.push(theme.positive('  ✔') + ` Markets loaded (${marketCount} markets)`);
   } catch {
-    details.push(chalk.red('  ✘') + ' Markets failed to load');
+    details.push(theme.negative('  ✘') + ' Markets failed to load');
     passed = false;
   }
 
-  // Protocol state (overview stats)
   try {
     await fstats.getOverviewStats('30d');
-    details.push(chalk.green('  ✔') + ' Protocol state reachable');
+    details.push(theme.positive('  ✔') + ' Protocol state reachable');
   } catch {
-    details.push(chalk.yellow('  ✘') + ' Protocol state unreachable');
+    details.push(theme.warning('  ✘') + ' Protocol state unreachable');
     passed = false;
   }
 
-  // Open interest
   try {
     await fstats.getOpenInterest();
-    details.push(chalk.green('  ✔') + ' Open interest retrieved');
+    details.push(theme.positive('  ✔') + ' Open interest retrieved');
   } catch {
-    details.push(chalk.yellow('  ✘') + ' Open interest unavailable');
+    details.push(theme.warning('  ✘') + ' Open interest unavailable');
     passed = false;
   }
 
@@ -125,7 +120,7 @@ async function checkSimulationGuard(client: IFlashClient): Promise<CheckResult> 
   let passed = true;
 
   if (!client.previewOpenPosition) {
-    details.push(chalk.yellow('  ✘') + ' Preview not available for this client');
+    details.push(theme.warning('  ✘') + ' Preview not available for this client');
     return { name: 'Transaction Simulation', passed: false, details };
   }
 
@@ -133,24 +128,24 @@ async function checkSimulationGuard(client: IFlashClient): Promise<CheckResult> 
     const preview = await client.previewOpenPosition('SOL', TradeSide.Long, 10, 2);
 
     if (preview && preview.entryPrice > 0) {
-      details.push(chalk.green('  ✔') + ' Preview generated');
+      details.push(theme.positive('  ✔') + ' Preview generated');
     } else {
-      details.push(chalk.yellow('  ✘') + ' Preview returned empty data');
+      details.push(theme.warning('  ✘') + ' Preview returned empty data');
       passed = false;
     }
 
     if (preview && preview.liquidationPrice > 0) {
-      details.push(chalk.green('  ✔') + ' Liquidation price calculated');
+      details.push(theme.positive('  ✔') + ' Liquidation price calculated');
     } else {
-      details.push(chalk.yellow('  ✘') + ' Liquidation price not calculated');
+      details.push(theme.warning('  ✘') + ' Liquidation price not calculated');
       passed = false;
     }
 
     if (passed) {
-      details.push(chalk.green('  ✔') + ' Simulation guard working');
+      details.push(theme.positive('  ✔') + ' Simulation guard working');
     }
   } catch (err) {
-    details.push(chalk.red('  ✘') + ` Simulation failed: ${getErrorMessage(err)}`);
+    details.push(theme.negative('  ✘') + ` Simulation failed: ${getErrorMessage(err)}`);
     passed = false;
   }
 
@@ -164,13 +159,13 @@ async function checkPositionEngine(client: IFlashClient): Promise<CheckResult> {
   try {
     const positions = await client.getPositions();
     if (Array.isArray(positions)) {
-      details.push(chalk.green('  ✔') + ` Positions loaded successfully (${positions.length} open)`);
+      details.push(theme.positive('  ✔') + ` Positions loaded successfully (${positions.length} open)`);
     } else {
-      details.push(chalk.red('  ✘') + ' Position data malformed');
+      details.push(theme.negative('  ✘') + ' Position data malformed');
       passed = false;
     }
   } catch (err) {
-    details.push(chalk.red('  ✘') + ` Position load failed: ${getErrorMessage(err)}`);
+    details.push(theme.negative('  ✘') + ` Position load failed: ${getErrorMessage(err)}`);
     passed = false;
   }
 
@@ -185,32 +180,28 @@ function checkWalletSafety(
   let passed = true;
 
   if (simulationMode) {
-    details.push(chalk.green('  ✔') + ' Wallet address: simulation (no real keys)');
-    details.push(chalk.green('  ✔') + ' No sensitive key material exposed');
+    details.push(theme.positive('  ✔') + ' Wallet address: simulation (no real keys)');
+    details.push(theme.positive('  ✔') + ' No sensitive key material exposed');
     return { name: 'Wallet Safety', passed, details };
   }
 
   if (walletManager?.address) {
-    details.push(chalk.green('  ✔') + ' Wallet address loaded');
+    details.push(theme.positive('  ✔') + ' Wallet address loaded');
   } else {
-    details.push(chalk.yellow('  ✘') + ' No wallet address available');
+    details.push(theme.warning('  ✘') + ' No wallet address available');
     passed = false;
   }
 
-  // Verify getKeypair() doesn't leak through toString/JSON
   const kp = walletManager?.getKeypair?.();
   if (kp) {
     const jsonStr = JSON.stringify(kp);
-    // Secret key is a Uint8Array — should not appear as readable string in JSON
     if (jsonStr.includes('"secretKey"')) {
-      // Keypair serializes secretKey as array of numbers — that's internal,
-      // but verify it's not a plain text string
-      details.push(chalk.green('  ✔') + ' No sensitive key material exposed');
+      details.push(theme.positive('  ✔') + ' No sensitive key material exposed');
     } else {
-      details.push(chalk.green('  ✔') + ' No sensitive key material exposed');
+      details.push(theme.positive('  ✔') + ' No sensitive key material exposed');
     }
   } else {
-    details.push(chalk.green('  ✔') + ' No sensitive key material exposed');
+    details.push(theme.positive('  ✔') + ' No sensitive key material exposed');
   }
 
   return { name: 'Wallet Safety', passed, details };
@@ -225,13 +216,13 @@ async function checkMonitorEngine(): Promise<CheckResult> {
     const allSymbols = [...new Set(Object.values(POOL_MARKETS).flat().map((s: string) => s.toUpperCase()))];
 
     if (allSymbols.length > 0) {
-      details.push(chalk.green('  ✔') + ` Monitor initialization successful (${allSymbols.length} markets)`);
+      details.push(theme.positive('  ✔') + ` Monitor initialization successful (${allSymbols.length} markets)`);
     } else {
-      details.push(chalk.red('  ✘') + ' No markets available for monitoring');
+      details.push(theme.negative('  ✘') + ' No markets available for monitoring');
       passed = false;
     }
   } catch (err) {
-    details.push(chalk.red('  ✘') + ` Monitor init failed: ${getErrorMessage(err)}`);
+    details.push(theme.negative('  ✘') + ` Monitor init failed: ${getErrorMessage(err)}`);
     passed = false;
   }
 
@@ -255,15 +246,13 @@ export async function runDoctor(
 ): Promise<string> {
   const lines: string[] = [];
 
-  lines.push('');
-  lines.push(chalk.bold('  FLASH TERMINAL DIAGNOSTIC'));
-  lines.push(chalk.dim('  ────────────────────────────────'));
+  lines.push(theme.titleBlock('FLASH TERMINAL DIAGNOSTIC'));
   lines.push('');
 
   const checks: CheckResult[] = [];
 
   // 1. Environment
-  process.stdout.write(chalk.dim('  Running diagnostics...\r'));
+  process.stdout.write(theme.dim('  Running diagnostics...\r'));
 
   const envCheck = await checkEnvironment(rpcManager, walletManager, context.simulationMode);
   checks.push(envCheck);
@@ -295,7 +284,7 @@ export async function runDoctor(
 
   // Print detailed results
   for (const check of checks) {
-    lines.push(chalk.bold(`  ${check.name}`));
+    lines.push(`  ${theme.section(check.name)}`);
     for (const detail of check.details) {
       lines.push(detail);
     }
@@ -305,23 +294,23 @@ export async function runDoctor(
   // 7. System Health
   const health = gatherSystemHealth(rpcManager);
 
-  lines.push(chalk.bold('  System Health'));
-  lines.push(`  RPC latency: ${health.latencyMs > 0 ? health.latencyMs + 'ms' : chalk.dim('--')}`);
-  lines.push(`  Memory: ${health.memoryMb} MB`);
-  lines.push(`  Uptime: ${health.uptime}`);
-  lines.push(`  Version: ${health.version}`);
+  lines.push(`  ${theme.section('System Health')}`);
+  lines.push(theme.pair('RPC latency', health.latencyMs > 0 ? health.latencyMs + 'ms' : theme.dim('--')));
+  lines.push(theme.pair('Memory', health.memoryMb + ' MB'));
+  lines.push(theme.pair('Uptime', health.uptime));
+  lines.push(theme.pair('Version', health.version));
   lines.push('');
 
   // Summary
-  lines.push(chalk.dim('  ────────────────────────────────'));
+  lines.push(`  ${theme.separator(40)}`);
   lines.push('');
 
   const padName = (name: string) => name.padEnd(22);
 
   for (const check of checks) {
     const status = check.passed
-      ? chalk.green('✔ PASS')
-      : chalk.red('✘ FAIL');
+      ? theme.positive('✔ PASS')
+      : theme.negative('✘ FAIL');
     lines.push(`  ${padName(check.name)} ${status}`);
   }
 
@@ -329,10 +318,10 @@ export async function runDoctor(
 
   const allPassed = checks.every(c => c.passed);
   if (allPassed) {
-    lines.push(chalk.green('  All systems operational.'));
+    lines.push(theme.positive('  All systems operational.'));
   } else {
     const failCount = checks.filter(c => !c.passed).length;
-    lines.push(chalk.yellow(`  ${failCount} check(s) failed. Review details above.`));
+    lines.push(theme.warning(`  ${failCount} check(s) failed. Review details above.`));
   }
 
   lines.push('');

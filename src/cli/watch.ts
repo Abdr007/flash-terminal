@@ -3,6 +3,7 @@ import chalk from 'chalk';
 import { ToolEngine } from '../tools/engine.js';
 import { ParsedIntent, ToolResult } from '../types/index.js';
 import { getErrorMessage } from '../utils/retry.js';
+import { theme } from './theme.js';
 
 // ─── Watch Mode ─────────────────────────────────────────────────────────────
 //
@@ -70,7 +71,7 @@ export async function startWatch(
   const blockReason = validateWatchCommand(command);
   if (blockReason) {
     console.log('');
-    console.log(chalk.red(`  Error: ${blockReason}`));
+    console.log(theme.negative(`  Error: ${blockReason}`));
     console.log('');
     return;
   }
@@ -80,7 +81,7 @@ export async function startWatch(
   try {
     intent = await deps.parseCommand(command);
   } catch (err) {
-    console.log(chalk.red(`  Error parsing command: ${getErrorMessage(err)}`));
+    console.log(theme.negative(`  Error parsing command: ${getErrorMessage(err)}`));
     return;
   }
 
@@ -92,9 +93,9 @@ export async function startWatch(
     const now = new Date().toLocaleTimeString();
     return [
       '',
-      chalk.bold.yellow('  WATCH MODE'),
-      chalk.dim(`  ${now}  |  Watching: ${chalk.white(command)}  |  Refresh ${REFRESH_INTERVAL_MS / 1000}s  |  Press ${chalk.white('q')} to exit`),
-      chalk.dim('  ' + '─'.repeat(Math.min(process.stdout.columns || 80, 80))),
+      `  ${theme.accentBold('WATCH MODE')}`,
+      theme.dim(`  ${now}  |  Watching: ${theme.value(command)}  |  Refresh ${REFRESH_INTERVAL_MS / 1000}s  |  Press ${theme.value('q')} to exit`),
+      `  ${theme.separator(Math.min(process.stdout.columns || 80, 80))}`,
     ].join('\n');
   };
 
@@ -130,7 +131,7 @@ export async function startWatch(
       readline.cursorTo(process.stdout, 0, 0);
       readline.clearScreenDown(process.stdout);
       process.stdout.write(header() + '\n');
-      process.stdout.write(chalk.red(`\n  Refresh error: ${getErrorMessage(err)}\n`));
+      process.stdout.write(theme.negative(`\n  Refresh error: ${getErrorMessage(err)}\n`));
     } finally {
       refreshing = false;
     }
@@ -170,7 +171,7 @@ export async function startWatch(
         // Clear screen and show exit message
         readline.cursorTo(process.stdout, 0, 0);
         readline.clearScreenDown(process.stdout);
-        console.log(chalk.dim('  Watch mode stopped.\n'));
+        console.log(theme.dim('  Watch mode stopped.\n'));
         resolve();
       }
     };
