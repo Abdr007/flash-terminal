@@ -1,4 +1,3 @@
-import * as readline from 'readline';
 import chalk from 'chalk';
 import { Interface as ReadlineInterface } from 'readline';
 import { IFlashClient } from '../types/index.js';
@@ -10,18 +9,17 @@ import { theme } from './theme.js';
 
 // ─── Status Bar ──────────────────────────────────────────────────────────────
 //
-// Lightweight status bar that renders below the prompt every 10 seconds.
-// Shows RPC provider, latency, network, wallet, positions, exposure, mode.
+// Lightweight status bar that updates the terminal title and renders a
+// one-time visual bar below the prompt.
 //
 // Design constraints:
 //   • No new network calls — reuses cached data from existing systems
 //   • Suspends during command execution or monitor mode
-//   • Updates in-place using ANSI cursor control — never appends new lines
+//   • Uses terminal title (xterm OSC sequence) for live updates — zero visual spam
+//   • One-time visual render on start/resume, then silent title-only updates
 //   • Timer is unref'd so it doesn't prevent Node exit
 
 const STATUS_INTERVAL_MS = 10_000;
-/** Number of terminal lines the status bar occupies (status + separator) */
-const STATUS_LINE_COUNT = 2;
 
 interface StatusBarConfig {
   simulationMode: boolean;
@@ -48,11 +46,8 @@ export class StatusBar {
   private suspended = false;
   private lastStatus: CachedStatus | null = null;
   private active = false;
-  /** Whether the status bar lines have been printed at least once */
-  private rendered = false;
-  /** Previous display string for change detection */
-  private prevStatusText = '';
-  private prevSeparatorText = '';
+  /** Previous plain-text status for change detection */
+  private prevPlainStatus = '';
 
   constructor(
     rl: ReadlineInterface,
@@ -97,6 +92,10 @@ export class StatusBar {
       clearInterval(this.timer);
       this.timer = null;
     }
+    // Clear the terminal title
+    if (process.stdout.isTTY) {
+      process.stdout.write('\x1b]0;\x07');
+    }
   }
 
   /** Temporarily suspend rendering (during command execution / monitor mode). */
@@ -104,10 +103,9 @@ export class StatusBar {
     this.suspended = true;
   }
 
-  /** Resume rendering after suspension. Resets rendered flag so next render prints fresh. */
+  /** Resume rendering after suspension. */
   resume(): void {
     this.suspended = false;
-    this.rendered = false;
   }
 
   /** Update the client reference (e.g. after wallet reconnect). */
@@ -173,58 +171,28 @@ export class StatusBar {
   private render(s: CachedStatus): void {
     if (this.suspended || !this.active) return;
 
-    // Build the status line
-    const latStr = s.latencyMs > 0
-      ? (s.latencyMs < 500 ? theme.positive(`${s.latencyMs}ms`) : s.latencyMs < 1500 ? theme.warning(`${s.latencyMs}ms`) : theme.negative(`${s.latencyMs}ms`))
-      : theme.dim('--');
-
-    const modeColor = s.mode === 'LIVE' ? theme.negative(s.mode) : theme.warning(s.mode);
-
-    const parts = [
-      `${theme.dim('RPC:')} ${theme.accent(s.rpcLabel)} ${theme.dim('(')}${latStr}${theme.dim(')')}`,
-      `${theme.dim('Wallet:')} ${chalk.bold(s.walletName)}`,
-      `${theme.dim('Pos:')} ${s.positions}`,
-      `${theme.dim('Exp:')} ${formatUsd(s.exposureUsd)}`,
-      `${theme.dim('Mode:')} ${modeColor}`,
+    // Build plain-text status for change detection and terminal title
+    const latPlain = s.latencyMs > 0 ? `${s.latencyMs}ms` : '--';
+    const plainParts = [
+      `RPC: ${s.rpcLabel} (${latPlain})`,
+      `Wallet: ${s.walletName}`,
+      `Pos: ${s.positions}`,
+      `Exp: ${formatUsd(s.exposureUsd)}`,
+      `Mode: ${s.mode}`,
     ];
+    const plainStatus = plainParts.join('  |  ');
 
-    const statusText = parts.join(theme.dim('  |  '));
-    const separatorText = theme.fullSeparator();
-
-    // Skip redraw if nothing changed
-    if (this.rendered && statusText === this.prevStatusText && separatorText === this.prevSeparatorText) {
+    // Skip if nothing changed
+    if (plainStatus === this.prevPlainStatus) {
       return;
     }
-    this.prevStatusText = statusText;
-    this.prevSeparatorText = separatorText;
+    this.prevPlainStatus = plainStatus;
 
-    if (!this.rendered) {
-      // First render: print the status lines below the prompt
-      process.stdout.write('\n');
-      process.stdout.write(`${statusText}\n`);
-      process.stdout.write(`${separatorText}\n`);
-      this.rendered = true;
-    } else {
-      // Subsequent renders: move cursor up over the existing status lines and overwrite
-      // Lines to move up: STATUS_LINE_COUNT (status + separator) + 1 (blank line after prompt)
-      readline.moveCursor(process.stdout, 0, -(STATUS_LINE_COUNT + 1));
-
-      // Overwrite status line
-      readline.cursorTo(process.stdout, 0);
-      readline.clearLine(process.stdout, 0);
-      process.stdout.write(`${statusText}`);
-
-      // Overwrite separator line
-      process.stdout.write('\n');
-      readline.cursorTo(process.stdout, 0);
-      readline.clearLine(process.stdout, 0);
-      process.stdout.write(`${separatorText}`);
-
-      // Move to the line after separator
-      process.stdout.write('\n');
+    // Update terminal title bar (xterm OSC escape — works on macOS Terminal,
+    // iTerm2, Windows Terminal, most Linux terminals). This is completely
+    // invisible in the scrollback and never adds lines.
+    if (process.stdout.isTTY) {
+      process.stdout.write(`\x1b]0;Flash | ${plainStatus}\x07`);
     }
-
-    // Re-display the readline prompt so the cursor is in the right place
-    this.rl.prompt(true);
   }
 }
