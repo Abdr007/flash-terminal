@@ -26,6 +26,98 @@ import { updateLastWallet, clearLastWallet } from '../wallet/session.js';
 import chalk from 'chalk';
 import { theme } from '../cli/theme.js';
 
+// ─── Risk Preview Helpers ───────────────────────────────────────────────────
+
+type RiskLevel = 'LOW' | 'MEDIUM' | 'HIGH';
+
+function classifyRisk(distancePct: number): RiskLevel {
+  if (distancePct > 60) return 'LOW';
+  if (distancePct > 30) return 'MEDIUM';
+  return 'HIGH';
+}
+
+function colorRisk(level: RiskLevel): string {
+  switch (level) {
+    case 'LOW': return chalk.green(level);
+    case 'MEDIUM': return chalk.yellow(level);
+    case 'HIGH': return chalk.red(level);
+  }
+}
+
+function estimateLiqPrice(entryPrice: number, leverage: number, side: TradeSide): number {
+  // Approximate: 90% of the 1/leverage distance (10% maintenance margin buffer)
+  const liqDist = (1 / leverage) * 0.9;
+  return side === TradeSide.Long
+    ? entryPrice * (1 - liqDist)
+    : entryPrice * (1 + liqDist);
+}
+
+/** Build risk preview lines for the open position confirmation panel. */
+async function buildRiskPreview(
+  context: ToolContext,
+  market: string,
+  side: TradeSide,
+  leverage: number,
+  sizeUsd: number,
+): Promise<string[]> {
+  const lines: string[] = [];
+  try {
+    // Get current market price (uses cached data — no extra RPC call)
+    const marketData = await context.flashClient.getMarketData(market);
+    const md = marketData.find(m => m.symbol.toUpperCase() === market.toUpperCase());
+    if (!md || !Number.isFinite(md.price) || md.price <= 0) return lines;
+
+    const entryEst = md.price;
+    const liqEst = estimateLiqPrice(entryEst, leverage, side);
+    const distancePct = Math.abs(entryEst - liqEst) / entryEst * 100;
+    const risk = classifyRisk(distancePct);
+
+    lines.push('');
+    lines.push(chalk.dim('  Risk Preview:'));
+    lines.push(`    Est. Entry:   ${formatPrice(entryEst)}`);
+    lines.push(`    Est. Liq:     ${chalk.yellow(formatPrice(liqEst))}`);
+    lines.push(`    Distance:     ${distancePct.toFixed(1)}%`);
+    lines.push(`    Risk:         ${colorRisk(risk)}`);
+
+    // Portfolio impact — exposure before/after
+    const positions = await context.flashClient.getPositions();
+    const currentExposure = positions.reduce((sum, p) =>
+      sum + (Number.isFinite(p.sizeUsd) ? p.sizeUsd : 0), 0);
+    const newExposure = currentExposure + sizeUsd;
+
+    lines.push(`    Exposure:     ${formatUsd(currentExposure)} → ${chalk.bold(formatUsd(newExposure))}`);
+  } catch {
+    // Best effort — don't block trade if preview fails
+  }
+  return lines;
+}
+
+/** Build position details for close/modify confirmations. */
+async function buildPositionPreview(
+  context: ToolContext,
+  market: string,
+  side: TradeSide,
+): Promise<string[]> {
+  const lines: string[] = [];
+  try {
+    const positions = await context.flashClient.getPositions();
+    const pos = positions.find(p =>
+      p.market.toUpperCase() === market.toUpperCase() && p.side === side
+    );
+    if (!pos) return lines;
+
+    lines.push(`  Size:    ${formatUsd(pos.sizeUsd)}`);
+    lines.push(`  Entry:   ${formatPrice(pos.entryPrice)}`);
+    lines.push(`  PnL:     ${colorPnl(pos.unrealizedPnl)}`);
+    if (Number.isFinite(pos.liquidationPrice) && pos.liquidationPrice > 0) {
+      lines.push(`  Liq:     ${chalk.yellow(formatPrice(pos.liquidationPrice))}`);
+    }
+  } catch {
+    // Best effort
+  }
+  return lines;
+}
+
 // ─── Pre-Trade Validation ───────────────────────────────────────────────────
 
 function validateLiveTradeContext(context: ToolContext): string | null {
@@ -153,6 +245,10 @@ export const flashOpenPosition: ToolDefinition = {
       `  Est. Fee:    ${chalk.dim(formatUsd(estimatedFee))}`,
       `  Wallet:      ${chalk.dim(walletAddr)}`,
     ];
+
+    // Risk preview: entry estimate, liquidation estimate, distance, risk level, portfolio impact
+    const riskLines = await buildRiskPreview(context, market, side, leverage, sizeUsd);
+    lines.push(...riskLines);
 
     // Show configured limits
     const limits = guard.limits;
@@ -300,18 +396,23 @@ export const flashClosePosition: ToolDefinition = {
       return { success: false, message: chalk.red(`  ${rateCheck.reason}`) };
     }
 
+    // Position details for close confirmation
+    const posLines = await buildPositionPreview(context, market, side);
+    const closeLines = [
+      '',
+      isLive ? chalk.red.bold('  CONFIRM TRANSACTION — Close Position') : chalk.yellow('  CONFIRM TRANSACTION — Close Position'),
+      chalk.dim('  ─────────────────────────────────'),
+      `  Market:  ${chalk.bold(market)} ${colorSide(side)}`,
+      `  Pool:    ${chalk.cyan(pool)}`,
+      ...posLines,
+      `  Wallet:  ${chalk.dim(walletAddr)}`,
+      isLive ? `\n${chalk.red('  This will execute a REAL on-chain transaction.')}` : '',
+      '',
+    ];
+
     return {
       success: true,
-      message: [
-        '',
-        isLive ? chalk.red.bold('  CONFIRM TRANSACTION — Close Position') : chalk.yellow('  CONFIRM TRANSACTION — Close Position'),
-        chalk.dim('  ─────────────────────────────────'),
-        `  Market:  ${chalk.bold(market)} ${colorSide(side)}`,
-        `  Pool:    ${chalk.cyan(pool)}`,
-        `  Wallet:  ${chalk.dim(walletAddr)}`,
-        isLive ? `\n${chalk.red('  This will execute a REAL on-chain transaction.')}` : '',
-        '',
-      ].join('\n'),
+      message: closeLines.join('\n'),
       requiresConfirmation: true,
       confirmationPrompt: isLive ? 'Type "yes" to sign or "no" to cancel' : 'Confirm close?',
       data: {
@@ -409,6 +510,7 @@ export const flashAddCollateral: ToolDefinition = {
       return { success: false, message: chalk.red(`  ${rateCheck.reason}`) };
     }
 
+    const addPosLines = await buildPositionPreview(context, market, side);
     return {
       success: true,
       message: [
@@ -416,7 +518,8 @@ export const flashAddCollateral: ToolDefinition = {
         isLive ? chalk.red.bold('  CONFIRM TRANSACTION — Add Collateral') : chalk.yellow('  CONFIRM TRANSACTION — Add Collateral'),
         chalk.dim('  ─────────────────────────────────'),
         `  Market: ${chalk.bold(market)} ${colorSide(side)}`,
-        `  Amount: ${formatUsd(amount)} ${chalk.dim('USDC')}`,
+        ...addPosLines,
+        `  Add:    ${formatUsd(amount)} ${chalk.dim('USDC')}`,
         `  Wallet: ${chalk.dim(walletAddr)}`,
         '',
       ].join('\n'),
@@ -506,15 +609,17 @@ export const flashRemoveCollateral: ToolDefinition = {
       return { success: false, message: chalk.red(`  ${rateCheck.reason}`) };
     }
 
+    const rmPosLines = await buildPositionPreview(context, market, side);
     return {
       success: true,
       message: [
         '',
         isLive ? chalk.red.bold('  CONFIRM TRANSACTION — Remove Collateral') : chalk.yellow('  CONFIRM TRANSACTION — Remove Collateral'),
         chalk.dim('  ─────────────────────────────────'),
-        `  Market: ${chalk.bold(market)} ${colorSide(side)}`,
-        `  Amount: ${formatUsd(amount)}`,
-        `  Wallet: ${chalk.dim(walletAddr)}`,
+        `  Market:  ${chalk.bold(market)} ${colorSide(side)}`,
+        ...rmPosLines,
+        `  Remove:  ${formatUsd(amount)}`,
+        `  Wallet:  ${chalk.dim(walletAddr)}`,
         '',
       ].join('\n'),
       requiresConfirmation: true,
