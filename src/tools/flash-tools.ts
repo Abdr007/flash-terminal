@@ -1513,11 +1513,19 @@ const tradeHistoryTool: ToolDefinition = {
     const client = context.flashClient;
     if (!client.getTradeHistory) {
       return {
-        success: false,
+        success: true,
         message: [
           '',
-          chalk.yellow('  Trade history is only available in simulation mode.'),
-          chalk.dim('  Live trade history can be viewed on Solscan.'),
+          theme.section('  Trade History'),
+          theme.dim('  ─'.repeat(30)),
+          '',
+          theme.text('  Live trade history is tracked on-chain.'),
+          theme.text('  View your transactions on a Solana explorer:'),
+          '',
+          theme.dim('    • Solscan — https://solscan.io'),
+          theme.dim('    • Solana FM — https://solana.fm'),
+          '',
+          theme.dim('  Use your wallet address to look up past trades.'),
           '',
         ].join('\n'),
       };

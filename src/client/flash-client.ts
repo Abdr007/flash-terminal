@@ -111,7 +111,7 @@ class PythPriceService {
     for (const token of uncached) {
       const priceData: PriceData | undefined = pythData.productPrice.get(token.pythTicker);
       if (!priceData) {
-        logger.warn('PRICE', `No Pyth data for ${token.symbol} (${token.pythTicker})`);
+        logger.info('PRICE', `No Pyth data for ${token.symbol} (${token.pythTicker})`);
         continue;
       }
 
@@ -141,7 +141,7 @@ class PythPriceService {
       const uiPrice = priceData.aggregate.price ?? 0;
       // Reject zero or negative prices from oracle — prevents trades at invalid prices
       if (!Number.isFinite(uiPrice) || uiPrice <= 0) {
-        logger.warn('PRICE', `Invalid oracle price for ${token.symbol}: ${uiPrice} — skipping`);
+        logger.info('PRICE', `Invalid oracle price for ${token.symbol}: ${uiPrice} — skipping`);
         continue;
       }
 
@@ -582,7 +582,7 @@ export class FlashClient implements IFlashClient {
         // may already be near expiry. Log a warning for observability — the
         // transaction may still succeed but confirmation window is reduced.
         if (bhLatency > 10_000) {
-          logger.warn('CLIENT', `Blockhash fetch took ${(bhLatency / 1000).toFixed(1)}s — confirmation window may be reduced`);
+          logger.info('CLIENT', `Blockhash fetch took ${(bhLatency / 1000).toFixed(1)}s — confirmation window may be reduced`);
         }
         const allIxs = [cuLimitIx, cuPriceIx, ...validatedInstructions];
         const message = MessageV0.compile({
@@ -608,7 +608,7 @@ export class FlashClient implements IFlashClient {
               if (simErr.includes('InstructionError') || simErr.includes('Custom')) {
                 throw new Error(mapProgramError(simErr));
               }
-              logger.warn('CLIENT', `Pre-send simulation warning: ${simErr}`);
+              logger.info('CLIENT', `Pre-send simulation warning: ${simErr}`);
             }
           } catch (simError: unknown) {
             const simMsg = getErrorMessage(simError);
@@ -806,7 +806,7 @@ export class FlashClient implements IFlashClient {
           const eMsg = getErrorMessage(e);
           if (eMsg.includes('Insufficient USDC')) throw e;
           // RPC failure during balance check — warn but don't block the trade
-          logger.warn('CLIENT', `USDC balance check skipped (RPC error): ${scrubSensitive(eMsg)}`);
+          logger.info('CLIENT', `USDC balance check skipped (RPC error): ${scrubSensitive(eMsg)}`);
         }
       }
 
@@ -901,7 +901,7 @@ export class FlashClient implements IFlashClient {
         marketCollateralSymbol = this.resolveTokenSymbol(poolConfig, matchedMarket.collateralMint);
       } else {
         // Fallback: assume collateral = target (works for standard markets)
-        logger.warn('TRADE', `No market config found for ${market}/${sideStr}, assuming collateral = target`);
+        logger.info('TRADE', `No market config found for ${market}/${sideStr}, assuming collateral = target`);
         marketCollateralSymbol = targetToken.symbol;
       }
 
@@ -1003,7 +1003,7 @@ export class FlashClient implements IFlashClient {
       if (matchedMarket) {
         marketCollateralSymbol = this.resolveTokenSymbol(poolConfig, matchedMarket.collateralMint);
       } else {
-        logger.warn('TRADE', `No market config found for ${market}/${sideStr}, assuming collateral = target`);
+        logger.info('TRADE', `No market config found for ${market}/${sideStr}, assuming collateral = target`);
         marketCollateralSymbol = targetToken.symbol;
       }
 

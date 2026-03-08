@@ -1,3 +1,6 @@
+import { appendFileSync, mkdirSync, existsSync } from 'fs';
+import { join } from 'path';
+import { homedir } from 'os';
 import { IFlashClient, Position, Portfolio } from '../types/index.js';
 import { getLogger } from '../utils/logger.js';
 import { getErrorMessage } from '../utils/retry.js';
@@ -13,6 +16,39 @@ import { safeNumber } from '../utils/safe-math.js';
 //   4. Periodic background sync (every 60s)
 
 const RECONCILE_INTERVAL_MS = 60_000;
+const RPC_RETRY_DELAY_MS = 400;
+const RECONCILE_LOG_DIR = join(homedir(), '.flash', 'logs');
+const RECONCILE_LOG_FILE = join(RECONCILE_LOG_DIR, 'reconcile.log');
+
+/** Small delay helper */
+function delay(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+/** Append a structured entry to the reconcile log file */
+function writeReconcileLog(entry: {
+  localCount: number;
+  rpcCount: number;
+  retryCount?: number;
+  retrySucceeded?: boolean;
+  action: string;
+}): void {
+  try {
+    if (!existsSync(RECONCILE_LOG_DIR)) {
+      mkdirSync(RECONCILE_LOG_DIR, { recursive: true, mode: 0o700 });
+    }
+    const line = `[${new Date().toISOString()}] [RECONCILE] ` +
+      `Local positions: ${entry.localCount} | ` +
+      `RPC positions: ${entry.rpcCount} | ` +
+      `Retry attempted: ${entry.retryCount !== undefined ? 'yes' : 'no'}` +
+      (entry.retryCount !== undefined ? ` (got ${entry.retryCount})` : '') +
+      (entry.retrySucceeded !== undefined ? ` | Retry resolved: ${entry.retrySucceeded}` : '') +
+      ` | Action: ${entry.action}\n`;
+    appendFileSync(RECONCILE_LOG_FILE, line, { mode: 0o600 });
+  } catch {
+    // Best-effort — never crash reconciler over log I/O
+  }
+}
 
 export interface ReconciliationResult {
   /** Whether reconciliation found discrepancies */
@@ -51,9 +87,12 @@ export class StateReconciler {
   private lastKnownPositions: Map<string, Position> = new Map();
   private lastReconcileAt = 0;
   private _running = false;
-  /** Throttle: track when we last warned about zero-position RPC results */
-  private lastZeroPosWarnAt = 0;
-  private static readonly ZERO_POS_WARN_INTERVAL_MS = 300_000; // warn at most every 5 minutes
+  /** Anti-spam: only show one CLI warning per mismatch event */
+  private reconcileWarningShown = false;
+  /** Count of consecutive cycles where RPC returned fewer positions than local */
+  private consecutiveMismatchCycles = 0;
+  /** Require multiple consecutive mismatches before removing local positions */
+  private static readonly MISMATCH_CYCLES_BEFORE_REMOVAL = 3;
 
   constructor(client: IFlashClient) {
     this.client = client;
@@ -68,6 +107,8 @@ export class StateReconciler {
     this.client = client;
     // Clear cached state — new wallet means new positions
     this.lastKnownPositions.clear();
+    this.reconcileWarningShown = false;
+    this.consecutiveMismatchCycles = 0;
   }
 
   /**
@@ -127,24 +168,101 @@ export class StateReconciler {
         onChainMap.set(key, pos);
       }
 
-      // Guard against RPC returning empty results during transient failures.
-      // If we had known positions and RPC suddenly returns zero, it's more
-      // likely an RPC issue than all positions being liquidated simultaneously.
-      // Log a warning and preserve local state rather than wiping it.
-      if (onChainMap.size === 0 && this.lastKnownPositions.size > 0) {
-        // Throttle this warning — it can fire every 60s during transient RPC issues
-        const now2 = Date.now();
-        if (now2 - this.lastZeroPosWarnAt >= StateReconciler.ZERO_POS_WARN_INTERVAL_MS) {
-          this.lastZeroPosWarnAt = now2;
-          logger.warn('RECONCILE', `RPC returned 0 positions but we had ${this.lastKnownPositions.size} — possible RPC failure, preserving local state`);
+      // Guard against RPC returning fewer positions during transient failures.
+      // Step 1: Retry RPC once before assuming mismatch.
+      // Step 2: Only show one CLI warning per mismatch event.
+      // Step 3: Never remove local positions on a single RPC response.
+      if (onChainMap.size < this.lastKnownPositions.size) {
+        // ── RPC Retry ──
+        await delay(RPC_RETRY_DELAY_MS);
+        let retrySucceeded = false;
+        let retryCount = 0;
+        try {
+          const retryPositions = await this.client.getPositions();
+          const retryMap = new Map<string, Position>();
+          for (const pos of retryPositions) {
+            if (
+              !Number.isFinite(pos.sizeUsd) || pos.sizeUsd <= 0 ||
+              !Number.isFinite(pos.entryPrice) || pos.entryPrice <= 0 ||
+              !Number.isFinite(pos.collateralUsd) || pos.collateralUsd <= 0
+            ) continue;
+            retryMap.set(`${pos.market}:${pos.side}`, pos);
+          }
+          retryCount = retryMap.size;
+
+          if (retryMap.size >= this.lastKnownPositions.size) {
+            // Retry resolved the mismatch — use retried data
+            retrySucceeded = true;
+            writeReconcileLog({
+              localCount: this.lastKnownPositions.size,
+              rpcCount: onChainMap.size,
+              retryCount,
+              retrySucceeded: true,
+              action: 'retry_resolved',
+            });
+            // Reset warning state since things recovered
+            this.reconcileWarningShown = false;
+            this.consecutiveMismatchCycles = 0;
+            this.lastKnownPositions = retryMap;
+            this.lastReconcileAt = now;
+            return {
+              hadDiscrepancy: false,
+              onChainCount: retryMap.size,
+              added: [],
+              removed: [],
+              timestamp: now,
+            };
+          }
+        } catch {
+          // Retry also failed — preserve local state
         }
-        return {
-          hadDiscrepancy: false,
-          onChainCount: this.lastKnownPositions.size,
-          added: [],
-          removed: [],
-          timestamp: now,
-        };
+
+        // ── Mismatch persists after retry ──
+        this.consecutiveMismatchCycles++;
+
+        // Log to dedicated reconcile log file (always)
+        writeReconcileLog({
+          localCount: this.lastKnownPositions.size,
+          rpcCount: onChainMap.size,
+          retryCount,
+          retrySucceeded: false,
+          action: this.consecutiveMismatchCycles >= StateReconciler.MISMATCH_CYCLES_BEFORE_REMOVAL
+            ? 'accepting_rpc_state' : 'preserving_local_state',
+        });
+
+        // Log internally at debug level (never prints to CLI)
+        logger.debug('RECONCILE',
+          `RPC mismatch: local=${this.lastKnownPositions.size} rpc=${onChainMap.size} ` +
+          `retry=${retryCount} cycle=${this.consecutiveMismatchCycles}`,
+        );
+
+        // Show one CLI warning per mismatch event (anti-spam)
+        if (!this.reconcileWarningShown) {
+          logger.warn('RECONCILE', 'Position sync delay detected. Retrying...');
+          this.reconcileWarningShown = true;
+        }
+
+        // Only accept RPC state after multiple consecutive mismatch cycles
+        if (this.consecutiveMismatchCycles < StateReconciler.MISMATCH_CYCLES_BEFORE_REMOVAL) {
+          return {
+            hadDiscrepancy: false,
+            onChainCount: this.lastKnownPositions.size,
+            added: [],
+            removed: [],
+            timestamp: now,
+          };
+        }
+        // Fall through to normal comparison after enough consistent mismatches
+        logger.debug('RECONCILE',
+          `Accepting RPC state after ${this.consecutiveMismatchCycles} consistent mismatch cycles`,
+        );
+      } else {
+        // RPC matches or exceeds local — reset mismatch tracking
+        if (this.reconcileWarningShown) {
+          logger.debug('RECONCILE', 'State recovered — RPC matches local');
+        }
+        this.reconcileWarningShown = false;
+        this.consecutiveMismatchCycles = 0;
       }
 
       // Compare with local state
@@ -250,5 +368,13 @@ export class StateReconciler {
    */
   get knownPositionCount(): number {
     return this.lastKnownPositions.size;
+  }
+
+  /**
+   * Whether the reconciler currently has a pending mismatch.
+   * Used by the status bar to show sync state.
+   */
+  get hasMismatch(): boolean {
+    return this.consecutiveMismatchCycles > 0;
   }
 }

@@ -51,6 +51,18 @@ function resolveMarketAlias(input: string): string {
   return collapsed;
 }
 
+/**
+ * Normalize user input: collapse whitespace, trim, strip trailing punctuation.
+ * Does NOT lowercase — callers decide casing.
+ */
+function normalizeInput(raw: string): string {
+  return raw
+    .replace(/[\x00-\x1f\x7f]/g, ' ')  // strip control chars
+    .replace(/\s+/g, ' ')               // collapse whitespace
+    .trim()
+    .replace(/[.!?]+$/, '');             // strip trailing punctuation
+}
+
 const COMMAND_TIMEOUT_MS = 120_000;
 const SLOW_COMMAND_MS = 3_000;
 const HISTORY_FILE = join(homedir(), '.flash', 'history');
@@ -328,7 +340,7 @@ export class FlashTerminal {
         if (this.context) {
           this.context.flashClient = this.flashClient;
         }
-        console.log(chalk.yellow(`\n  RPC failover: now using ${ep.label}`));
+        console.log(chalk.cyan(`\n  ℹ RPC failover triggered → ${ep.label}`));
       });
       // Start background health monitoring for live trading
       this.rpcManager.startMonitoring();
@@ -444,14 +456,15 @@ export class FlashTerminal {
       try {
         await this.handleInput(trimmed);
       } catch (error: unknown) {
-        console.log(chalk.red(`  Error: ${getErrorMessage(error)}`));
+        console.log(chalk.red(`  ✖ Error: ${getErrorMessage(error)}`));
       } finally {
         this.processing = false;
         this.processingWarnShown = false;
         this.lastCommand = trimmed;
         this.lastCommandMs = Date.now() - cmdStart;
-        this.renderContextLine();
+        this.renderExecutionTimer();
         this.statusBar?.resume();
+        this.saveHistory();
         this.rl.prompt();
       }
     });
@@ -1407,13 +1420,15 @@ export class FlashTerminal {
 
   // ─── Command Handler ──────────────────────────────────────────────
 
-  private async handleInput(input: string): Promise<void> {
+  private async handleInput(rawInput: string): Promise<void> {
     const startTime = Date.now();
+    const input = normalizeInput(rawInput);
+    if (!input) return;
 
     const lower = input.toLowerCase();
 
     // ─── Doctor Diagnostic Intercept ───────────────────────────────
-    if (lower === 'doctor') {
+    if (lower === 'doctor' || lower === 'flash doctor') {
       const output = await runDoctor(
         this.flashClient,
         this.rpcManager,
@@ -1450,10 +1465,12 @@ export class FlashTerminal {
       const innerCmd = input.slice(prefix.length).trim();
       intent = { action: ActionType.DryRun, innerCommand: innerCmd } as ParsedIntent;
     } else if (lower.startsWith('inspect pool ')) {
-      const pool = input.slice('inspect pool '.length).trim();
+      const poolInput = input.slice('inspect pool '.length).trim();
       const { POOL_NAMES } = await import('../config/index.js');
-      if (!POOL_NAMES.includes(pool as typeof POOL_NAMES[number])) {
-        console.log(chalk.red(`  Unknown pool: ${pool}`));
+      // Case-insensitive pool name matching
+      const pool = POOL_NAMES.find((p: string) => p.toLowerCase() === poolInput.toLowerCase());
+      if (!pool) {
+        console.log(chalk.red(`  Unknown pool: ${poolInput}`));
         console.log(chalk.dim(`  Valid pools: ${POOL_NAMES.join(', ')}`));
         return;
       }
@@ -1483,7 +1500,7 @@ export class FlashTerminal {
         );
         process.stdout.write('              \r');
       } catch (error: unknown) {
-        console.log(chalk.red(`  Parse error: ${getErrorMessage(error)}`));
+        console.log(chalk.red(`  ✖ Parse error: ${getErrorMessage(error)}`));
         return;
       }
     }
@@ -1540,6 +1557,94 @@ export class FlashTerminal {
       return;
     }
 
+    // ─── Auto-Detect Position Side ─────────────────────────────────
+    // When close/add/remove has a market but no side, auto-detect from open positions
+    const intentAny = intent as Record<string, unknown>;
+    const needsSide = (
+      intent.action === ActionType.ClosePosition ||
+      intent.action === ActionType.AddCollateral ||
+      intent.action === ActionType.RemoveCollateral
+    ) && intentAny.market && !intentAny.side;
+
+    if (needsSide) {
+      const mkt = String(intentAny.market).toUpperCase();
+      try {
+        const posList = await this.flashClient.getPositions();
+        const matching = posList.filter(p =>
+          (p.market ?? '').toUpperCase() === mkt,
+        );
+        if (matching.length === 1) {
+          intent = { ...intent, side: matching[0].side } as ParsedIntent;
+        } else if (matching.length === 0) {
+          console.log(theme.warning(`  No open position found for ${mkt}.`));
+          return;
+        } else {
+          const sides = matching.map(p => p.side?.toLowerCase()).join(' and ');
+          console.log(theme.warning(`  Multiple ${mkt} positions open (${sides}).`));
+          console.log(theme.dim(`  Please specify the side, e.g. "${input} long" or "${input} short"`));
+          return;
+        }
+      } catch {
+        console.log(theme.warning(`  Could not detect position side. Please specify long or short.`));
+        return;
+      }
+    }
+
+    // ─── Pre-Trade Safety Checks (live mode only) ─────────────────
+    const isTradeAction = [
+      ActionType.OpenPosition,
+      ActionType.ClosePosition,
+      ActionType.AddCollateral,
+      ActionType.RemoveCollateral,
+    ].includes(intent.action);
+
+    if (isTradeAction && !this.config.simulationMode) {
+      // Feature 1: RPC health check before trades
+      const health = await this.rpcManager.checkHealth(this.rpcManager.activeEndpoint);
+      if (!health.healthy || health.latencyMs > 3000 || (health.slotLag !== undefined && health.slotLag > 50)) {
+        const reasons: string[] = [];
+        if (!health.healthy) reasons.push('RPC unreachable');
+        if (health.latencyMs > 3000) reasons.push(`latency ${health.latencyMs}ms`);
+        if (health.slotLag !== undefined && health.slotLag > 50) reasons.push(`${health.slotLag} slots behind`);
+        console.log(chalk.yellow(`\n  ⚠ RPC health warning: ${reasons.join(', ')}`));
+        console.log(chalk.dim('    Trading may be unreliable. Proceed with caution.'));
+        const proceed = await this.confirm('Continue anyway?');
+        if (!proceed) {
+          console.log(chalk.dim('  Cancelled.'));
+          return;
+        }
+      }
+
+      // Feature 2: Position verification before close/modify
+      if (intent.action !== ActionType.OpenPosition && intentAny.market && intentAny.side) {
+        const mkt = String(intentAny.market).toUpperCase();
+        const sd = String(intentAny.side);
+        try {
+          const positions = await this.flashClient.getPositions();
+          const found = positions.some(p =>
+            (p.market ?? '').toUpperCase() === mkt && p.side === sd,
+          );
+          if (!found) {
+            console.log(chalk.yellow('  ⚠ Position not confirmed on-chain yet. Waiting for state sync...'));
+            // Trigger reconciliation and retry once
+            const rec = getReconciler();
+            if (rec) await rec.reconcile();
+            const retry = await this.flashClient.getPositions();
+            const retryFound = retry.some(p =>
+              (p.market ?? '').toUpperCase() === mkt && p.side === sd,
+            );
+            if (!retryFound) {
+              console.log(chalk.red(`  ✖ Position ${mkt} ${sd} not found after sync. Cannot proceed.`));
+              return;
+            }
+            console.log(chalk.green('  Position verified after sync.'));
+          }
+        } catch {
+          // Non-critical — let the trade tool handle it
+        }
+      }
+    }
+
     // Execute tool
     process.stdout.write(chalk.dim('  Executing...\r'));
 
@@ -1552,12 +1657,15 @@ export class FlashTerminal {
       );
       process.stdout.write('               \r');
     } catch (error: unknown) {
-      console.log(chalk.red(`  Execution error: ${getErrorMessage(error)}`));
+      console.log(chalk.red(`  ✖ Execution error: ${getErrorMessage(error)}`));
       return;
     }
 
-    // Display result
+    // Display result with success/error indicator
     console.log(result.message);
+    if (!result.requiresConfirmation) {
+      this.printIndicator(result);
+    }
 
     // Handle wallet disconnect — mode stays locked
     if (result.data?.disconnected) {
@@ -1583,7 +1691,7 @@ export class FlashTerminal {
             'transaction',
           );
           const elapsed = ((Date.now() - submitStart) / 1000).toFixed(1);
-          console.log(chalk.green(`  Confirmed in ${elapsed}s`));
+          console.log(chalk.green(`  ✔ Confirmed in ${elapsed}s`));
           console.log(execResult.message);
 
           // Post-trade verification (live mode only)
@@ -1600,30 +1708,24 @@ export class FlashTerminal {
             }
           }
         } catch (error: unknown) {
-          console.log(chalk.red(`  ${getErrorMessage(error)}`));
+          console.log(chalk.red(`  ✖ ${getErrorMessage(error)}`));
         }
       } else {
         console.log(chalk.dim('  Cancelled.'));
       }
     }
-
-    // Slow command warning
-    const elapsed = Date.now() - startTime;
-    if (elapsed > SLOW_COMMAND_MS) {
-      console.log(chalk.dim(`  [${(elapsed / 1000).toFixed(1)}s]`));
-    }
   }
 
-  // ─── Command Context Line ────────────────────────────────────
+  // ─── Execution Timer ─────────────────────────────────────────
 
   /**
-   * Render a Bloomberg-style context line after command execution.
-   * Shows last command and execution time in muted styling.
+   * Print a compact execution timer after each command.
+   * Format: [153ms] or [7.4s]
    */
-  private renderContextLine(): void {
-    if (!this.lastCommand) return;
+  private renderExecutionTimer(): void {
+    if (!this.lastCommand || this.lastCommandMs < 1) return;
 
-    // Don't render for trivial commands
+    // Skip for trivial commands
     const skip = ['help', 'commands', '?', 'exit', 'quit'];
     if (skip.includes(this.lastCommand.toLowerCase())) return;
 
@@ -1631,13 +1733,24 @@ export class FlashTerminal {
       ? `${(this.lastCommandMs / 1000).toFixed(1)}s`
       : `${this.lastCommandMs}ms`;
 
-    const sep = theme.separator(56);
-    const ctx = theme.dim(`Last: ${this.lastCommand}`) + theme.dim('  |  ') + theme.dim(`${timeStr}`);
+    console.log(theme.dim(`  [${timeStr}]`));
+  }
 
-    console.log(sep);
-    console.log(`  ${ctx}`);
-    console.log(sep);
-    console.log('');
+  // ─── Result Indicators ─────────────────────────────────────
+
+  /**
+   * Print a success/error/warning indicator after tool output.
+   */
+  private printIndicator(result: ToolResult): void {
+    if (result.success === false) {
+      // Only print indicator if the message doesn't already contain error styling
+      if (result.message && !result.message.includes('✖')) {
+        console.log(chalk.red('  ✖ Command failed'));
+      }
+    }
+    // Success is implicit — clean output means success.
+    // We don't print ✔ for every read-only command (positions, portfolio, etc.)
+    // to avoid noise. The ✔ is reserved for trade confirmations (handled above).
   }
 
   // ─── Usage Hints ──────────────────────────────────────────────
@@ -1698,6 +1811,27 @@ export class FlashTerminal {
         chalk.bold('  Examples'),
         chalk.dim('    dryrun open 5x long SOL $500'),
         chalk.dim('    dryrun close ETH short'),
+        '',
+      ],
+      'add': [
+        '',
+        chalk.bold('  Usage'),
+        `    ${chalk.cyan('add $<amount> to <asset> <long|short>')}`,
+        '',
+        chalk.bold('  Examples'),
+        chalk.dim('    add $100 to SOL long'),
+        chalk.dim('    add $50 to BTC short'),
+        chalk.dim('    add $200 to ETH long'),
+        '',
+      ],
+      'remove': [
+        '',
+        chalk.bold('  Usage'),
+        `    ${chalk.cyan('remove $<amount> from <asset> <long|short>')}`,
+        '',
+        chalk.bold('  Examples'),
+        chalk.dim('    remove $100 from SOL long'),
+        chalk.dim('    remove $50 from BTC short'),
         '',
       ],
     };

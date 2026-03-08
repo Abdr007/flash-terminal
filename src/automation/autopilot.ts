@@ -221,7 +221,7 @@ export class Autopilot {
       const balance = usdcBalance > 0 ? usdcBalance : this.context.flashClient.getBalance();
 
       if (balance < MIN_TRADE_BALANCE) {
-        logger.warn('AUTOPILOT', `Cycle ${this.state.cycleCount}: Balance $${balance.toFixed(2)} below minimum $${MIN_TRADE_BALANCE} — skipping`);
+        logger.info('AUTOPILOT', `Cycle ${this.state.cycleCount}: Balance $${balance.toFixed(2)} below minimum $${MIN_TRADE_BALANCE} — skipping`);
         this.log(chalk.yellow(`  [Autopilot] Insufficient balance ($${balance.toFixed(2)}) — skipping cycle`));
         return;
       }
@@ -237,12 +237,12 @@ export class Autopilot {
       const markets = await this.inspector.getMarkets();
       const validPriceMarkets = markets.filter((m) => m.price > 0 && Number.isFinite(m.price));
       if (validPriceMarkets.length === 0) {
-        logger.warn('AUTOPILOT', `Cycle ${this.state.cycleCount}: No markets with valid prices — skipping`);
+        logger.info('AUTOPILOT', `Cycle ${this.state.cycleCount}: No markets with valid prices — skipping`);
         this.log(chalk.yellow('  [Autopilot] No live price data available — skipping cycle'));
         return;
       }
       if (validPriceMarkets.length < markets.length * 0.5) {
-        logger.warn('AUTOPILOT', `Cycle ${this.state.cycleCount}: Only ${validPriceMarkets.length}/${markets.length} markets have live prices — skipping`);
+        logger.info('AUTOPILOT', `Cycle ${this.state.cycleCount}: Only ${validPriceMarkets.length}/${markets.length} markets have live prices — skipping`);
         this.log(chalk.yellow('  [Autopilot] Insufficient live price data — skipping cycle'));
         return;
       }

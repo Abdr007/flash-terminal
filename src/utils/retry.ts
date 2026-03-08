@@ -62,13 +62,13 @@ export async function withRetry<T>(
         if (rateLimitDelay > 0) {
           // Use rate-limit specific delay, clamped to maxDelayMs
           delay = Math.min(rateLimitDelay, maxDelayMs);
-          logger.warn('RETRY', `${label} rate limited (429), waiting ${Math.round(delay)}ms before retry ${attempt + 1}/${maxAttempts}`);
+          logger.info('RETRY', `${label} rate limited (429), waiting ${Math.round(delay)}ms before retry ${attempt + 1}/${maxAttempts}`);
         } else {
           // Standard exponential backoff with jitter, clamped to maxDelayMs
           const exponential = baseDelayMs * 2 ** (attempt - 1);
           const jitter = Math.random() * baseDelayMs * 0.5;
           delay = Math.min(exponential + jitter, maxDelayMs);
-          logger.warn('RETRY', `${label} failed (attempt ${attempt}/${maxAttempts}), retrying in ${Math.round(delay)}ms`, {
+          logger.info('RETRY', `${label} failed (attempt ${attempt}/${maxAttempts}), retrying in ${Math.round(delay)}ms`, {
             error: lastError.message,
           });
         }

@@ -2,6 +2,7 @@ import chalk from 'chalk';
 import { Interface as ReadlineInterface } from 'readline';
 import { IFlashClient } from '../types/index.js';
 import { RpcManager } from '../network/rpc-manager.js';
+import { getReconciler } from '../core/state-reconciliation.js';
 import { formatUsd } from '../utils/format.js';
 import { getLogger } from '../utils/logger.js';
 import { getErrorMessage } from '../utils/retry.js';
@@ -34,7 +35,50 @@ interface CachedStatus {
   positions: number;
   exposureUsd: number;
   mode: string;
+  syncOk: boolean;
+  slotLag: number;
   timestamp: number;
+}
+
+// ─── Latency Smoother ────────────────────────────────────────────────────────
+// Rolling window average with outlier rejection.
+// Prevents visual jitter from transient RPC spikes.
+
+const LATENCY_WINDOW_SIZE = 5;
+const OUTLIER_MULTIPLIER = 3;
+
+class LatencySmoother {
+  private buffer: number[] = [];
+
+  /** Add a raw latency sample and return the smoothed value. */
+  add(rawMs: number): number {
+    if (rawMs <= 0) return this.average();
+
+    // Outlier rejection: ignore single spike > 3× rolling average
+    const avg = this.average();
+    if (this.buffer.length >= 2 && avg > 0 && rawMs > avg * OUTLIER_MULTIPLIER) {
+      // Skip this spike — return current average unchanged
+      return avg;
+    }
+
+    this.buffer.push(rawMs);
+    if (this.buffer.length > LATENCY_WINDOW_SIZE) {
+      this.buffer.shift();
+    }
+    return this.average();
+  }
+
+  /** Current smoothed average, or 0 if no samples. */
+  private average(): number {
+    if (this.buffer.length === 0) return 0;
+    const sum = this.buffer.reduce((a, b) => a + b, 0);
+    return Math.round(sum / this.buffer.length);
+  }
+
+  /** Reset the buffer (e.g. after RPC failover). */
+  reset(): void {
+    this.buffer.length = 0;
+  }
 }
 
 export class StatusBar {
@@ -48,6 +92,8 @@ export class StatusBar {
   private active = false;
   /** Previous plain-text status for change detection */
   private prevPlainStatus = '';
+  /** Rolling latency smoother */
+  private latencySmoother = new LatencySmoother();
 
   constructor(
     rl: ReadlineInterface,
@@ -134,7 +180,8 @@ export class StatusBar {
 
   private async gatherStatus(): Promise<CachedStatus> {
     const ep = this.rpcManager.activeEndpoint;
-    const latency = this.rpcManager.activeLatencyMs;
+    const rawLatency = this.rpcManager.activeLatencyMs;
+    const latency = rawLatency > 0 ? this.latencySmoother.add(rawLatency) : rawLatency;
 
     let positions = 0;
     let exposureUsd = 0;
@@ -156,6 +203,13 @@ export class StatusBar {
       }
     }
 
+    // Sync state from reconciler
+    const reconciler = getReconciler();
+    const syncOk = reconciler ? !reconciler.hasMismatch : true;
+
+    // Slot lag from RPC manager
+    const slotLag = this.rpcManager.getSlotLag(ep.url);
+
     return {
       rpcLabel: ep.label,
       latencyMs: latency,
@@ -164,6 +218,8 @@ export class StatusBar {
       positions,
       exposureUsd,
       mode: this.cfg.simulationMode ? 'SIMULATION' : 'LIVE',
+      syncOk,
+      slotLag: slotLag > 0 ? slotLag : 0,
       timestamp: Date.now(),
     };
   }
@@ -173,11 +229,15 @@ export class StatusBar {
 
     // Build plain-text status for change detection and terminal title
     const latPlain = s.latencyMs > 0 ? `${s.latencyMs}ms` : '--';
+    const rpcPart = s.slotLag > 100
+      ? `RPC: ${s.rpcLabel} (${latPlain}) | Slot lag detected`
+      : `RPC: ${s.rpcLabel} (${latPlain})`;
+    const syncPart = s.syncOk ? 'Sync: OK' : 'Sync: DELAY';
     const plainParts = [
-      `RPC: ${s.rpcLabel} (${latPlain})`,
+      rpcPart,
       `Wallet: ${s.walletName}`,
       `Pos: ${s.positions}`,
-      `Exp: ${formatUsd(s.exposureUsd)}`,
+      syncPart,
       `Mode: ${s.mode}`,
     ];
     const plainStatus = plainParts.join('  |  ');

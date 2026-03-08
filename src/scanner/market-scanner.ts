@@ -156,11 +156,11 @@ export class MarketScanner {
     // Filter out markets with zero/missing prices — never trade on fabricated data
     const validMarkets = markets.filter((m) => m.price > 0 && Number.isFinite(m.price));
     if (validMarkets.length === 0) {
-      logger.warn('SCANNER', 'No market data with valid prices available');
+      logger.info('SCANNER', 'No market data with valid prices available');
       return [];
     }
     if (validMarkets.length < markets.length) {
-      logger.warn('SCANNER', `Excluded ${markets.length - validMarkets.length} markets with missing/zero prices`);
+      logger.info('SCANNER', `Excluded ${markets.length - validMarkets.length} markets with missing/zero prices`);
     }
 
     // Normalize whale data once (shared across all market evaluations)

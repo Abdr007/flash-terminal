@@ -154,7 +154,7 @@ export function generateFallbackSuggestion(input: AggregatorInput): TradeSuggest
 
   // Never suggest a trade with zero or negative balance
   if (balance <= 0) {
-    logger.warn('AGGREGATOR', 'Balance is zero or negative — no suggestion');
+    logger.info('AGGREGATOR', 'Balance is zero or negative — no suggestion');
     return null;
   }
 

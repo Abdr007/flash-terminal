@@ -105,7 +105,7 @@ export class TradeAgent {
       }
 
       if (response.content.length === 0 || response.content[0].type !== 'text') {
-        logger.warn('AGENT', 'Empty response from primary AI');
+        logger.info('AGENT', 'Empty response from primary AI');
         return null;
       }
 
@@ -113,7 +113,7 @@ export class TradeAgent {
     } catch (error: unknown) {
       const msg = getErrorMessage(error);
       if (msg.includes('credit balance') || msg.includes('401') || msg.includes('403') || msg.includes('429')) {
-        logger.warn('AGENT', `Primary AI unavailable: ${msg}. Trying fallback...`);
+        logger.info('AGENT', `Primary AI unavailable: ${msg}. Trying fallback...`);
       } else {
         logger.error('AGENT', `Primary AI failed: ${msg}`);
       }
@@ -138,13 +138,13 @@ export class TradeAgent {
 
       const text = response.choices[0]?.message?.content;
       if (!text) {
-        logger.warn('AGENT', 'Empty response from Groq');
+        logger.info('AGENT', 'Empty response from Groq');
         return null;
       }
 
       return this.parseSuggestion(text, 'Groq');
     } catch (error: unknown) {
-      logger.warn('AGENT', `Groq failed: ${getErrorMessage(error)}`);
+      logger.info('AGENT', `Groq failed: ${getErrorMessage(error)}`);
       return null;
     }
   }
@@ -153,7 +153,7 @@ export class TradeAgent {
     const logger = getLogger();
     const jsonMatch = text.match(/\{[\s\S]*\}/);
     if (!jsonMatch) {
-      logger.warn('AGENT', `No JSON in ${source} response`);
+      logger.info('AGENT', `No JSON in ${source} response`);
       return null;
     }
 
@@ -177,7 +177,7 @@ export class TradeAgent {
       logger.debug('AGENT', `${source} suggestion: ${suggestion.side} ${suggestion.market} ${suggestion.leverage}x`);
       return suggestion;
     } catch (error: unknown) {
-      logger.warn('AGENT', `${source} JSON parse failed: ${getErrorMessage(error)}`);
+      logger.info('AGENT', `${source} JSON parse failed: ${getErrorMessage(error)}`);
       return null;
     }
   }

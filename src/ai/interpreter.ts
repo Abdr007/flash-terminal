@@ -316,9 +316,9 @@ export function localParse(input: string): ParsedIntent | null {
     }
   }
 
-  // Close position: "close SOL long"
+  // Close position: "close SOL long", "close my SOL position", "close SOL"
   const closeMatch = lower.match(
-    /^(?:close|exit|sell)\s+(?:my\s+)?([a-z]+)\s+(long|short)$/
+    /^(?:close|exit|sell)\s+(?:my\s+)?([a-z]+)\s+(long|short)(?:\s+position)?$/
   );
   if (closeMatch) {
     const side = parseSide(closeMatch[2]);
@@ -331,9 +331,24 @@ export function localParse(input: string): ParsedIntent | null {
     }
   }
 
-  // Add collateral: "add $200 to SOL long"
+  // Close position without side: "close SOL" — side will be auto-detected at execution
+  const closeNoSideMatch = lower.match(
+    /^(?:close|exit|sell)\s+(?:my\s+)?([a-z]+)(?:\s+position)?$/
+  );
+  if (closeNoSideMatch) {
+    const sym = closeNoSideMatch[1].toUpperCase();
+    if (getAllMarkets().includes(sym)) {
+      return {
+        action: ActionType.ClosePosition,
+        market: sym,
+        // side omitted — terminal will auto-detect from open positions
+      } as ParsedIntent;
+    }
+  }
+
+  // Add collateral: "add $200 to SOL long", "add collateral of $50 to SOL long", "add $200 to SOL"
   const addCollMatch = lower.match(
-    /^add\s+\$?(\d+(?:\.\d+)?)\s+(?:collateral\s+)?(?:to\s+)?(?:my\s+)?([a-z]+)\s+(long|short)$/
+    /^add\s+(?:collateral\s+(?:of\s+)?)?\$?(\d+(?:\.\d+)?)\s+(?:collateral\s+)?(?:to\s+)?(?:my\s+)?([a-z]+)\s+(long|short)$/
   );
   if (addCollMatch) {
     const side = parseSide(addCollMatch[3]);
@@ -347,7 +362,22 @@ export function localParse(input: string): ParsedIntent | null {
     }
   }
 
-  // Remove collateral: "remove $100 from ETH long"
+  // Add collateral without side: "add $200 to SOL" — side will be auto-detected
+  const addCollNoSideMatch = lower.match(
+    /^add\s+(?:collateral\s+(?:of\s+)?)?\$?(\d+(?:\.\d+)?)\s+(?:collateral\s+)?(?:to\s+)?(?:my\s+)?([a-z]+)$/
+  );
+  if (addCollNoSideMatch) {
+    const sym = addCollNoSideMatch[2].toUpperCase();
+    if (getAllMarkets().includes(sym)) {
+      return {
+        action: ActionType.AddCollateral,
+        market: sym,
+        amount: parseFloat(addCollNoSideMatch[1]),
+      } as ParsedIntent;
+    }
+  }
+
+  // Remove collateral: "remove $100 from ETH long", "remove $100 from ETH"
   const rmCollMatch = lower.match(
     /^remove\s+\$?(\d+(?:\.\d+)?)\s+(?:collateral\s+)?(?:from\s+)?(?:my\s+)?([a-z]+)\s+(long|short)$/
   );
@@ -360,6 +390,21 @@ export function localParse(input: string): ParsedIntent | null {
         side,
         amount: parseFloat(rmCollMatch[1]),
       };
+    }
+  }
+
+  // Remove collateral without side: "remove $100 from SOL" — side will be auto-detected
+  const rmCollNoSideMatch = lower.match(
+    /^remove\s+\$?(\d+(?:\.\d+)?)\s+(?:collateral\s+)?(?:from\s+)?(?:my\s+)?([a-z]+)$/
+  );
+  if (rmCollNoSideMatch) {
+    const sym = rmCollNoSideMatch[2].toUpperCase();
+    if (getAllMarkets().includes(sym)) {
+      return {
+        action: ActionType.RemoveCollateral,
+        market: sym,
+        amount: parseFloat(rmCollNoSideMatch[1]),
+      } as ParsedIntent;
     }
   }
 
@@ -561,7 +606,7 @@ export class AIInterpreter {
 
     // Input length limit before sending to AI
     if (userInput.length > AIInterpreter.MAX_INPUT_LENGTH) {
-      logger.warn('AI', `Input too long (${userInput.length} chars, max ${AIInterpreter.MAX_INPUT_LENGTH})`);
+      logger.info('AI', `Input too long (${userInput.length} chars, max ${AIInterpreter.MAX_INPUT_LENGTH})`);
       return { action: ActionType.Help };
     }
 
@@ -576,7 +621,7 @@ export class AIInterpreter {
       if (result) { this.updateContext(result); return result; }
     }
 
-    logger.warn('AI', 'No AI provider available. Using local parsing only.');
+    logger.info('AI', 'No AI provider available. Using local parsing only.');
     return { action: ActionType.Help };
   }
 
@@ -602,7 +647,7 @@ export class AIInterpreter {
       }
 
       if (response.content.length === 0 || response.content[0].type !== 'text') {
-        logger.warn('AI', 'Empty response from primary AI');
+        logger.info('AI', 'Empty response from primary AI');
         return null;
       }
 
@@ -610,7 +655,7 @@ export class AIInterpreter {
     } catch (error: unknown) {
       const msg = getErrorMessage(error);
       if (msg.includes('credit balance') || msg.includes('401') || msg.includes('403') || msg.includes('429') || msg.includes('abort') || msg.includes('timeout')) {
-        logger.warn('AI', `Primary AI unavailable (${msg}). Trying fallback...`);
+        logger.info('AI', `Primary AI unavailable (${msg}). Trying fallback...`);
       } else {
         logger.error('AI', `Primary AI parse failed: ${msg}`);
       }
@@ -643,13 +688,13 @@ export class AIInterpreter {
 
       const text = response.choices[0]?.message?.content;
       if (!text) {
-        logger.warn('AI', 'Empty response from Groq');
+        logger.info('AI', 'Empty response from Groq');
         return null;
       }
 
       return this.parseJsonResponse(text, 'Groq');
     } catch (error: unknown) {
-      logger.warn('AI', `Groq parse failed: ${getErrorMessage(error)}`);
+      logger.info('AI', `Groq parse failed: ${getErrorMessage(error)}`);
       return null;
     }
   }
@@ -658,7 +703,7 @@ export class AIInterpreter {
     const logger = getLogger();
     const jsonMatch = text.match(/\{[\s\S]*\}/);
     if (!jsonMatch) {
-      logger.warn('AI', `No JSON in ${source} response`, { text });
+      logger.info('AI', `No JSON in ${source} response`, { text });
       return null;
     }
 
@@ -675,7 +720,7 @@ export class AIInterpreter {
       logger.debug('AI', `${source} parsed intent`, { action: validated.action });
       return validated;
     } catch (error: unknown) {
-      logger.warn('AI', `${source} JSON parse failed: ${getErrorMessage(error)}`);
+      logger.info('AI', `${source} JSON parse failed: ${getErrorMessage(error)}`);
       return null;
     }
   }

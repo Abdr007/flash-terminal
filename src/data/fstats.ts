@@ -105,18 +105,18 @@ async function safeFetchJson<T>(path: string): Promise<T | null> {
       headers: { Accept: 'application/json' },
     });
     if (!res.ok) {
-      logger.warn('ANALYTICS', `fstats ${res.status}: ${res.statusText} for ${path}`);
+      logger.info('ANALYTICS', `fstats ${res.status}: ${res.statusText} for ${path}`);
       return null;
     }
     const contentType = res.headers.get('content-type') ?? '';
     if (!contentType.includes('json')) {
-      logger.warn('ANALYTICS', `fstats returned non-JSON for ${path}: ${contentType}`);
+      logger.info('ANALYTICS', `fstats returned non-JSON for ${path}: ${contentType}`);
       return null;
     }
     // Guard against oversized responses (OOM protection)
     const contentLength = res.headers.get('content-length');
     if (contentLength && parseInt(contentLength, 10) > MAX_RESPONSE_BYTES) {
-      logger.warn('ANALYTICS', `fstats response too large for ${path}: ${contentLength} bytes`);
+      logger.info('ANALYTICS', `fstats response too large for ${path}: ${contentLength} bytes`);
       return null;
     }
     // Stream response body with incremental size check to prevent OOM
@@ -125,7 +125,7 @@ async function safeFetchJson<T>(path: string): Promise<T | null> {
     if (!reader) {
       const text = await res.text();
       if (text.length > MAX_RESPONSE_BYTES) {
-        logger.warn('ANALYTICS', `fstats response body too large for ${path}: ${text.length} bytes`);
+        logger.info('ANALYTICS', `fstats response body too large for ${path}: ${text.length} bytes`);
         return null;
       }
       return JSON.parse(text) as T;
@@ -138,7 +138,7 @@ async function safeFetchJson<T>(path: string): Promise<T | null> {
       totalBytes += value.byteLength;
       if (totalBytes > MAX_RESPONSE_BYTES) {
         reader.cancel();
-        logger.warn('ANALYTICS', `fstats response body too large for ${path}: >${MAX_RESPONSE_BYTES} bytes (streaming abort)`);
+        logger.info('ANALYTICS', `fstats response body too large for ${path}: >${MAX_RESPONSE_BYTES} bytes (streaming abort)`);
         return null;
       }
       chunks.push(value);
@@ -146,7 +146,7 @@ async function safeFetchJson<T>(path: string): Promise<T | null> {
     const text = new TextDecoder().decode(Buffer.concat(chunks));
     return JSON.parse(text) as T;
   } catch (error: unknown) {
-    logger.warn('ANALYTICS', `fstats fetch failed for ${path}: ${getErrorMessage(error)}`);
+    logger.info('ANALYTICS', `fstats fetch failed for ${path}: ${getErrorMessage(error)}`);
     return null;
   } finally {
     clearTimeout(timeout);

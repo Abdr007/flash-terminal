@@ -57,6 +57,7 @@ const COMMANDS: string[] = [
   'tx inspect',
   'dryrun',
   'doctor',
+  'flash doctor',
   'watch',
   'exposure',
   'rebalance',

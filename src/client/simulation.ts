@@ -85,7 +85,7 @@ export class SimulatedFlashClient implements IFlashClient {
         logger.debug('SIM', `Updated ${updated} prices from PriceService`);
       }
     } catch (error: unknown) {
-      logger.warn('SIM', `PriceService failed: ${getErrorMessage(error)}`);
+      logger.info('SIM', `PriceService failed: ${getErrorMessage(error)}`);
     }
 
     // Secondary: enrich with fstats open positions (may have additional markets)
