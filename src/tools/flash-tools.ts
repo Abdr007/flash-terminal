@@ -45,6 +45,7 @@ function colorRisk(level: RiskLevel): string {
 }
 
 function estimateLiqPrice(entryPrice: number, leverage: number, side: TradeSide): number {
+  if (!Number.isFinite(entryPrice) || !Number.isFinite(leverage) || entryPrice <= 0 || leverage <= 0) return 0;
   // Approximate: 90% of the 1/leverage distance (10% maintenance margin buffer)
   const liqDist = (1 / leverage) * 0.9;
   return side === TradeSide.Long
@@ -52,8 +53,28 @@ function estimateLiqPrice(entryPrice: number, leverage: number, side: TradeSide)
     : entryPrice * (1 + liqDist);
 }
 
+/** Timeout helper — resolves to fallback if promise takes too long. */
+function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>(resolve => setTimeout(() => resolve(fallback), ms)),
+  ]);
+}
+
+const PREVIEW_TIMEOUT_MS = 3_000;
+
 /** Build risk preview lines for the open position confirmation panel. */
 async function buildRiskPreview(
+  context: ToolContext,
+  market: string,
+  side: TradeSide,
+  leverage: number,
+  sizeUsd: number,
+): Promise<string[]> {
+  return withTimeout(_buildRiskPreview(context, market, side, leverage, sizeUsd), PREVIEW_TIMEOUT_MS, []);
+}
+
+async function _buildRiskPreview(
   context: ToolContext,
   market: string,
   side: TradeSide,
@@ -69,6 +90,7 @@ async function buildRiskPreview(
 
     const entryEst = md.price;
     const liqEst = estimateLiqPrice(entryEst, leverage, side);
+    if (liqEst <= 0) return lines;
     const distancePct = Math.abs(entryEst - liqEst) / entryEst * 100;
     const risk = classifyRisk(distancePct);
 
@@ -94,6 +116,14 @@ async function buildRiskPreview(
 
 /** Build position details for close/modify confirmations. */
 async function buildPositionPreview(
+  context: ToolContext,
+  market: string,
+  side: TradeSide,
+): Promise<string[]> {
+  return withTimeout(_buildPositionPreview(context, market, side), PREVIEW_TIMEOUT_MS, []);
+}
+
+async function _buildPositionPreview(
   context: ToolContext,
   market: string,
   side: TradeSide,
