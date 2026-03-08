@@ -14,8 +14,26 @@ export class WalletManager {
   private tokenBalancesCache: { data: { sol: number; tokens: Array<{ symbol: string; mint: string; amount: number }> }; expiry: number } | null = null;
   private static readonly TOKEN_CACHE_TTL = 30_000;
 
+  // [H-3] Session timeout — auto-disconnect keypair after inactivity
+  private idleTimer: ReturnType<typeof setTimeout> | null = null;
+  private static readonly SESSION_TIMEOUT_MS = parseInt(process.env.SESSION_TIMEOUT_MS || '900000', 10); // 15 min default
+
   constructor(connection: Connection) {
     this.connection = connection;
+  }
+
+  /** Reset the idle session timer (call on every signed operation). */
+  resetIdleTimer(): void {
+    if (this.idleTimer) clearTimeout(this.idleTimer);
+    if (!this.keypair) return;
+    this.idleTimer = setTimeout(() => {
+      if (this.keypair) {
+        const logger = getLogger();
+        logger.warn('WALLET', 'Session timed out due to inactivity — wallet disconnected for security');
+        this.disconnect();
+      }
+    }, WalletManager.SESSION_TIMEOUT_MS);
+    this.idleTimer.unref(); // Don't prevent process exit
   }
 
   /** True if a keypair is loaded (can sign transactions) */
@@ -63,6 +81,7 @@ export class WalletManager {
     this.keypair = null;
     this.publicKey = null;
     this.tokenBalancesCache = null;
+    if (this.idleTimer) { clearTimeout(this.idleTimer); this.idleTimer = null; }
   }
 
   /**
@@ -141,6 +160,9 @@ export class WalletManager {
     const address = this.publicKey.toBase58();
     // SECURITY: Log only the public address — never log secret key material
     logger.debug('Wallet', `Loaded wallet: ${address}`);
+
+    // Start session idle timer
+    this.resetIdleTimer();
 
     return { address, keypair: this.keypair };
   }

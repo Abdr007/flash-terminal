@@ -166,11 +166,20 @@ export class RpcManager {
       try {
         slot = await conn.getSlot('confirmed');
         if (slot !== undefined) {
-          this.slotHistory.set(endpoint.url, slot);
-          // Compute slot lag: compare against the highest known slot across all endpoints
+          // [M-8] Slot sanity check — reject suspiciously high slot values that could poison failover
           const maxKnownSlot = this.getMaxKnownSlot();
-          if (maxKnownSlot > 0 && slot < maxKnownSlot) {
-            slotLag = maxKnownSlot - slot;
+          const MAX_SLOT_JUMP = 1000;
+          if (maxKnownSlot > 0 && slot > maxKnownSlot + MAX_SLOT_JUMP) {
+            const logger = getLogger();
+            logger.warn('RPC', `Suspicious slot ${slot} from ${endpoint.label} (max known: ${maxKnownSlot}, jump: ${slot - maxKnownSlot}) — ignoring`);
+            // Don't update slotHistory with suspicious value
+          } else {
+            this.slotHistory.set(endpoint.url, slot);
+          }
+          // Compute slot lag: compare against the highest known slot across all endpoints
+          const freshMax = this.getMaxKnownSlot();
+          if (freshMax > 0 && slot < freshMax) {
+            slotLag = freshMax - slot;
           }
         }
       } catch {

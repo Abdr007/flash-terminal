@@ -120,7 +120,9 @@ export class Logger {
     return text
       .replace(/api[_-]?key=[^&\s"]+/gi, 'api_key=***')
       .replace(/sk-ant-[^\s"]+/g, 'sk-ant-***')
-      .replace(/gsk_[^\s"]+/g, 'gsk_***');
+      .replace(/gsk_[^\s"]+/g, 'gsk_***')
+      // [L-12] Mask base58 private keys (64-88 chars of base58 alphabet)
+      .replace(/[1-9A-HJ-NP-Za-km-z]{64,88}/g, (m) => m.slice(0, 8) + '***REDACTED***');
   }
 
   private logRotationChecked = 0;

@@ -167,12 +167,12 @@ export class WalletStore {
     const raw = readFileSync(filePath, 'utf-8');
     const secretKey = validateSecretKey(JSON.parse(raw));
     const keyBytes = Uint8Array.from(secretKey);
-    try {
-      const keypair = Keypair.fromSecretKey(keyBytes);
-      return keypair.publicKey.toBase58();
-    } finally {
-      keyBytes.fill(0);
-      secretKey.fill(0);
-    }
+    // [M-6] Keypair.fromSecretKey holds a REFERENCE — do NOT zero keyBytes.
+    // Safe here: keypair is local, used only for publicKey extraction, then discarded.
+    const keypair = Keypair.fromSecretKey(keyBytes);
+    const address = keypair.publicKey.toBase58();
+    // Zero secretKey array (parsed JSON) — this is safe since it's a separate copy
+    secretKey.fill(0);
+    return address;
   }
 }

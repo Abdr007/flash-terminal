@@ -152,6 +152,15 @@ export class PriceService {
       for (const [id, priceData] of Object.entries(data)) {
         const sym = idToSymbol.get(id);
         if (sym && priceData?.usd && priceData.usd > 0) {
+          // [M-9] Price deviation circuit breaker — reject >50% jumps from cached value
+          const cached = this.cache.get(sym);
+          if (cached && cached.data.price > 0) {
+            const deviation = Math.abs(priceData.usd - cached.data.price) / cached.data.price;
+            if (deviation > 0.5) {
+              getLogger().warn('PRICE', `Rejecting suspicious price for ${sym}: $${priceData.usd} vs cached $${cached.data.price.toFixed(2)} (${(deviation * 100).toFixed(0)}% deviation)`);
+              continue;
+            }
+          }
           results.push({
             symbol: sym,
             price: priceData.usd,

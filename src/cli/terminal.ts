@@ -1348,12 +1348,17 @@ export class FlashTerminal {
     }
   }
 
-  /** Save command history to file */
+  // [M-7] Sensitive command patterns — scrubbed from history file to prevent info leak
+  private static readonly SENSITIVE_HISTORY_PATTERN = /^(wallet\s+(import|connect)\s|open\s|close\s|add\s+collateral|remove\s+collateral)/i;
+
+  /** Save command history to file — scrubs sensitive trade/wallet commands */
   private saveHistory(): void {
     try {
       const rlAny = this.rl as unknown as { history: string[] };
       if (Array.isArray(rlAny.history)) {
-        const lines = [...rlAny.history].reverse().slice(-MAX_HISTORY);
+        const lines = [...rlAny.history]
+          .filter(line => !FlashTerminal.SENSITIVE_HISTORY_PATTERN.test(line))
+          .reverse().slice(-MAX_HISTORY);
         writeFileSync(HISTORY_FILE, lines.join('\n') + '\n', { mode: 0o600 });
       }
     } catch {
@@ -2147,11 +2152,21 @@ export class FlashTerminal {
     console.log('');
   }
 
-  /** Confirmation via pendingConfirmation callback */
+  // [L-11] Confirmation timeout — cancel trade if user doesn't respond within 2 minutes
+  private static readonly CONFIRM_TIMEOUT_MS = 120_000;
+
+  /** Confirmation via pendingConfirmation callback — auto-cancels after timeout */
   private confirm(prompt: string): Promise<boolean> {
     return new Promise((resolve) => {
       process.stdout.write(`  ${chalk.yellow(prompt)} ${chalk.dim('(yes/no)')} `);
+      const timeout = setTimeout(() => {
+        this.pendingConfirmation = null;
+        process.stdout.write(`\n  ${chalk.yellow('Confirmation timed out — trade cancelled.')}\n`);
+        resolve(false);
+      }, FlashTerminal.CONFIRM_TIMEOUT_MS);
+      timeout.unref();
       this.pendingConfirmation = (answer) => {
+        clearTimeout(timeout);
         resolve(
           answer.toLowerCase() === 'yes' ||
           answer.toLowerCase() === 'y'

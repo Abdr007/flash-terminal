@@ -122,7 +122,9 @@ export class SigningGuard {
   // ─── Rate Limiter ───────────────────────────────────────────────────────
 
   /**
-   * Check if a new signing operation is allowed under rate limits.
+   * [M-5] Check rate limit AND reserve a slot atomically to prevent TOCTOU gap.
+   * The slot is reserved immediately so concurrent trades can't bypass the limiter
+   * during the 45s+ confirmation window.
    * Returns { allowed: true } if OK, { allowed: false, reason } if rate-limited.
    */
   checkRateLimit(): TradeLimitCheck {
@@ -154,17 +156,20 @@ export class SigningGuard {
       }
     }
 
+    // Reserve the slot immediately to close TOCTOU gap
+    this.lastSigningTime = now;
+    this.signingTimestamps.push(now);
+
     return { allowed: true };
   }
 
   /**
-   * Record that a signing operation occurred (call after successful confirmation).
+   * Record that a signing operation completed (call after confirmation).
+   * Since checkRateLimit() now reserves eagerly, this just trims old timestamps.
    */
   recordSigning(): void {
     const now = Date.now();
     this.lastSigningTime = now;
-    this.signingTimestamps.push(now);
-
     // Trim old timestamps (keep last 2 minutes)
     const twoMinutesAgo = now - 120_000;
     this.signingTimestamps = this.signingTimestamps.filter(t => t > twoMinutesAgo);

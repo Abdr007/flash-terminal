@@ -145,11 +145,29 @@ class PythPriceService {
         continue;
       }
 
+      // [H-1] Oracle staleness check — reject prices older than 30 seconds
+      const oracleTimestamp = priceData.timestamp ? Number(priceData.timestamp) * 1000 : 0;
+      const priceAgeMs = now - oracleTimestamp;
+      const MAX_ORACLE_AGE_MS = 30_000;
+      if (oracleTimestamp > 0 && priceAgeMs > MAX_ORACLE_AGE_MS) {
+        logger.warn('PRICE', `Oracle price for ${token.symbol} is ${Math.round(priceAgeMs / 1000)}s stale — skipping`);
+        continue;
+      }
+
+      // [H-2] Confidence interval check — reject wide-spread prices (>2% uncertainty)
+      const absPrice = Math.abs(priceData.aggregate.price || 1);
+      const confidenceRatio = (priceData.confidence ?? 0) / absPrice;
+      const MAX_CONFIDENCE_RATIO = 0.02;
+      if (confidenceRatio > MAX_CONFIDENCE_RATIO) {
+        logger.warn('PRICE', `Oracle confidence for ${token.symbol} too wide: ${(confidenceRatio * 100).toFixed(1)}% — skipping`);
+        continue;
+      }
+
       const tokenPrice: LiveTokenPrice = {
         price,
         emaPrice,
         uiPrice,
-        timestamp: priceData.timestamp ? Number(priceData.timestamp) * 1000 : now,
+        timestamp: oracleTimestamp || now,
       };
 
       priceMap.set(token.symbol, tokenPrice);
@@ -246,8 +264,9 @@ const MEMO_PROGRAM = 'MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr';
 const EVENT_AUTHORITY = 'Ce6TQqeHC9p8KetsN6JsjHK7UTZk7nasjjnr7XxXp18C'; // Flash event CPI
 
 // Flash Trade program IDs are loaded dynamically from PoolConfig.
-// This set stores the allowed IDs — populated during construction.
-const ALLOWED_PROGRAM_IDS = new Set<string>([
+// [M-4] Base set of allowed system programs — immutable.
+// Flash-specific IDs are added per-client instance via frozenAllowedProgramIds.
+const BASE_ALLOWED_PROGRAM_IDS = Object.freeze(new Set<string>([
   SYSTEM_PROGRAM,
   TOKEN_PROGRAM,
   TOKEN_2022_PROGRAM,
@@ -258,7 +277,11 @@ const ALLOWED_PROGRAM_IDS = new Set<string>([
   SYSVAR_INSTRUCTIONS,
   MEMO_PROGRAM,
   EVENT_AUTHORITY,
-]);
+]));
+
+// Legacy reference — kept for backwards compatibility with validateInstructionPrograms.
+// Each FlashClient instance builds its own frozen set in the constructor.
+let ALLOWED_PROGRAM_IDS: ReadonlySet<string> = BASE_ALLOWED_PROGRAM_IDS;
 
 /**
  * Validate that every instruction in a transaction targets an approved program.
@@ -288,6 +311,9 @@ export class FlashClient implements IFlashClient {
   private config: FlashConfig;
   private walletMgr: WalletManager;
   private cachedSolBalance = 0;
+
+  /** [M-4] Instance-level allowed program IDs */
+  private allowedPrograms: Set<string>;
 
   /** Per-market mutex to prevent concurrent transactions on the same market/side */
   private activeTrades = new Set<string>();
@@ -332,17 +358,21 @@ export class FlashClient implements IFlashClient {
       { prioritizationFee: config.computeUnitPrice }
     );
 
-    // Register Flash Trade program IDs in the whitelist
-    ALLOWED_PROGRAM_IDS.add(this.poolConfig.programId.toBase58());
+    // [M-4] Build allowed program set from pool config, then freeze
+    const instanceAllowed = new Set<string>(BASE_ALLOWED_PROGRAM_IDS);
+    instanceAllowed.add(this.poolConfig.programId.toBase58());
     if (this.poolConfig.perpComposibilityProgramId) {
-      ALLOWED_PROGRAM_IDS.add(this.poolConfig.perpComposibilityProgramId.toBase58());
+      instanceAllowed.add(this.poolConfig.perpComposibilityProgramId.toBase58());
     }
     if (this.poolConfig.fbNftRewardProgramId) {
-      ALLOWED_PROGRAM_IDS.add(this.poolConfig.fbNftRewardProgramId.toBase58());
+      instanceAllowed.add(this.poolConfig.fbNftRewardProgramId.toBase58());
     }
     if (this.poolConfig.rewardDistributionProgram?.programId) {
-      ALLOWED_PROGRAM_IDS.add(this.poolConfig.rewardDistributionProgram.programId.toBase58());
+      instanceAllowed.add(this.poolConfig.rewardDistributionProgram.programId.toBase58());
     }
+    this.allowedPrograms = instanceAllowed;
+    // Update module-level reference for validateInstructionPrograms
+    ALLOWED_PROGRAM_IDS = instanceAllowed;
 
     this.priceService = new PythPriceService(config.pythnetUrl);
   }
@@ -420,11 +450,12 @@ export class FlashClient implements IFlashClient {
     if (!poolName) throw new Error(`Unknown market: ${market}`);
     if (poolName !== this.poolConfig.poolName) {
       const pc = PoolConfig.fromIdsByName(poolName, this.config.network);
-      // Register this pool's program IDs in the whitelist
-      ALLOWED_PROGRAM_IDS.add(pc.programId.toBase58());
-      if (pc.perpComposibilityProgramId) ALLOWED_PROGRAM_IDS.add(pc.perpComposibilityProgramId.toBase58());
-      if (pc.fbNftRewardProgramId) ALLOWED_PROGRAM_IDS.add(pc.fbNftRewardProgramId.toBase58());
-      if (pc.rewardDistributionProgram?.programId) ALLOWED_PROGRAM_IDS.add(pc.rewardDistributionProgram.programId.toBase58());
+      // Register this pool's program IDs in the instance whitelist
+      this.allowedPrograms.add(pc.programId.toBase58());
+      if (pc.perpComposibilityProgramId) this.allowedPrograms.add(pc.perpComposibilityProgramId.toBase58());
+      if (pc.fbNftRewardProgramId) this.allowedPrograms.add(pc.fbNftRewardProgramId.toBase58());
+      if (pc.rewardDistributionProgram?.programId) this.allowedPrograms.add(pc.rewardDistributionProgram.programId.toBase58());
+      ALLOWED_PROGRAM_IDS = this.allowedPrograms;
       return pc;
     }
     return this.poolConfig;
@@ -582,8 +613,13 @@ export class FlashClient implements IFlashClient {
         // may already be near expiry. Log a warning for observability — the
         // transaction may still succeed but confirmation window is reduced.
         if (bhLatency > 10_000) {
-          logger.info('CLIENT', `Blockhash fetch took ${(bhLatency / 1000).toFixed(1)}s — confirmation window may be reduced`);
+          logger.info('CLIENT', `Blockhash fetch took ${(bhLatency / 1000).toFixed(1)}s — confirmation window reduced`);
         }
+        // [L-10] Reduce confirmation timeout when blockhash fetch was slow to avoid expiry
+        const timeoutMs = 45_000;
+        const effectiveTimeoutMs = bhLatency > 5_000
+          ? Math.max(timeoutMs - bhLatency, 20_000)
+          : timeoutMs;
         const allIxs = [cuLimitIx, cuPriceIx, ...validatedInstructions];
         const message = MessageV0.compile({
           payerKey: this.wallet.publicKey,
@@ -631,8 +667,8 @@ export class FlashClient implements IFlashClient {
         // Uses the same `conn` that sent the transaction — never switches mid-poll.
         process.stdout.write('  Awaiting confirmation... \r');
         const start = Date.now();
-        const timeoutMs = 45_000;
-        for (let i = 0; Date.now() - start < timeoutMs; i++) {
+        const pollTimeoutMs = effectiveTimeoutMs;
+        for (let i = 0; Date.now() - start < pollTimeoutMs; i++) {
           await new Promise(r => setTimeout(r, 2_000));
           const { value } = await conn.getSignatureStatuses([signatureStr]);
           const status = value?.[0];
@@ -642,6 +678,8 @@ export class FlashClient implements IFlashClient {
           if (status?.confirmationStatus === 'confirmed' || status?.confirmationStatus === 'finalized') {
             process.stdout.write('                              \r');
             logger.info('CLIENT', `Tx confirmed: ${signatureStr}`);
+            // [H-3] Reset session idle timer on successful trade
+            this.walletMgr.resetIdleTimer();
             return signatureStr;
           }
           // Resend every other poll to improve delivery
