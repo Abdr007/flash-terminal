@@ -3,14 +3,24 @@
 ![TypeScript](https://img.shields.io/badge/typescript-strict-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Solana](https://img.shields.io/badge/solana-mainnet--beta-purple)
+![Flash Trade](https://img.shields.io/badge/Flash%20Trade-protocol-orange)
+![Open Source](https://img.shields.io/badge/open%20source-contributor%20friendly-brightgreen)
 
 # Flash AI Terminal
 
-An AI-powered command-line trading terminal for the [Flash Trade](https://www.flash.trade/) perpetual futures protocol on Solana. Combines natural language command parsing, real-time market intelligence, risk monitoring, and on-chain execution in a single CLI tool.
+**A professional CLI trading terminal for the [Flash Trade](https://www.flash.trade/) perpetual futures protocol on Solana.**
+
+Inspect protocol state, monitor markets in real time, and execute on-chain trades — all from your terminal.
+
+<p align="center">
+  <img src="docs/demo.gif" alt="Flash AI Terminal Demo" width="720" />
+  <br />
+  <em><!-- Replace with actual recording: asciinema, VHS, or screen capture --></em>
+</p>
 
 ```
-  ⚡ FLASH AI TERMINAL ⚡
-  ━━━━━━━━━━━━━━━━━━━━━━━━
+  FLASH AI TERMINAL
+  ────────────────────────────────
 
   SIMULATION MODE
 
@@ -57,7 +67,344 @@ The terminal operates in two modes: **Simulation** (paper trading with virtual b
 | **Trade Journal** | Full trade history with entry/exit prices, PnL, and fees |
 | **Portfolio Analysis** | Exposure breakdown, allocation, and rebalance suggestions |
 | **RPC Failover** | Automatic endpoint switching on failure, high latency, or slot lag |
+| **Command Autocomplete** | TAB completion for commands, markets, and pool names |
 | **Plugin System** | Extend functionality with custom tools loaded at startup |
+
+### Feature Comparison
+
+| Feature | Flash AI Terminal | Manual RPC | Block Explorer |
+|---------|:-:|:-:|:-:|
+| Open/close positions from CLI | Y | - | - |
+| Transaction preview (dry run) | Y | - | - |
+| Real-time market monitor | Y | - | - |
+| Protocol state inspection | Y | - | Y |
+| Multi-strategy scanner | Y | - | - |
+| Risk alerts with hysteresis | Y | - | - |
+| RPC failover + health monitoring | Y | - | - |
+| Paper trading mode | Y | - | - |
+| Command autocomplete | Y | - | - |
+| Signing audit log | Y | - | - |
+
+---
+
+## Quick Start
+
+```bash
+# Clone and build
+git clone https://github.com/Abdr007/flash-ai-terminal.git
+cd flash-ai-terminal
+npm install
+npm run build
+
+# Start in simulation mode (default)
+npm start
+
+# Or link globally
+npm link
+flash
+```
+
+The terminal starts in **simulation mode** by default. No wallet or RPC configuration required to explore.
+
+```
+flash [sim] > markets           # View all supported markets
+flash [sim] > monitor           # Live market prices
+flash [sim] > open 2x long SOL $100
+flash [sim] > positions         # View open positions
+flash [sim] > close SOL long
+```
+
+---
+
+## Installation
+
+Requires **Node.js >= 20.0.0**.
+
+```bash
+git clone https://github.com/Abdr007/flash-ai-terminal.git
+cd flash-ai-terminal
+npm install
+npm run build
+```
+
+---
+
+## Configuration
+
+Copy the example environment file:
+
+```bash
+cp .env.example .env
+```
+
+Key configuration:
+
+| Variable | Purpose | Default |
+|----------|---------|---------|
+| `RPC_URL` | Primary Solana RPC endpoint | Public RPC |
+| `BACKUP_RPC_1`, `BACKUP_RPC_2` | Failover RPC endpoints | None |
+| `SIMULATION_MODE` | Paper trading mode | `true` |
+| `ANTHROPIC_API_KEY` | LLM-powered command parsing (optional) | None |
+| `MAX_COLLATERAL_PER_TRADE` | Per-trade collateral limit (USD) | Unlimited |
+| `MAX_LEVERAGE` | Maximum leverage multiplier | Market default |
+| `COMPUTE_UNIT_PRICE` | Priority fee in microLamports | `500000` |
+
+See [.env.example](.env.example) for all options. The terminal works without any configuration using the public Solana RPC, but a premium provider is recommended for live trading.
+
+---
+
+## Command Reference
+
+### Trading
+
+| Command | Description |
+|---------|-------------|
+| `open <lev>x <long\|short> <asset> $<collateral>` | Open a leveraged position |
+| `close <asset> <long\|short>` | Close a position |
+| `add $<amount> to <asset> <long\|short>` | Add collateral to a position |
+| `remove $<amount> from <asset> <long\|short>` | Remove collateral from a position |
+| `dryrun <command>` | Preview a trade without signing |
+| `positions` | View all open positions |
+| `trade history` | View trade journal |
+
+### Market Intelligence
+
+| Command | Description |
+|---------|-------------|
+| `scan` | Multi-strategy opportunity scanner |
+| `analyze <asset>` | Deep analysis of a specific market |
+| `suggest trade` | AI-powered trade suggestion |
+| `monitor` | Live-updating market table |
+| `watch <command>` | Auto-refresh any read-only command |
+| `whale activity` | Recent large trades |
+
+### Portfolio & Risk
+
+| Command | Description |
+|---------|-------------|
+| `portfolio` | Portfolio summary with exposure breakdown |
+| `dashboard` | Full trading dashboard |
+| `risk report` | Risk analysis across positions |
+| `risk monitor on/off` | Real-time liquidation alerts |
+
+### Market Data
+
+| Command | Description |
+|---------|-------------|
+| `markets` | List all supported markets and pools |
+| `volume` | Protocol trading volume |
+| `open interest` | Open interest by market |
+| `leaderboard` | Top traders |
+| `fees` | Protocol fee data |
+
+### Protocol Inspector
+
+| Command | Description |
+|---------|-------------|
+| `inspect protocol` | Protocol overview — pools, OI, stats |
+| `inspect pool <name>` | Pool deep-dive — markets, OI, whale activity |
+| `inspect market <asset>` | Market deep-dive — status, OI, largest positions |
+
+### Wallet
+
+| Command | Description |
+|---------|-------------|
+| `wallet` | Wallet connection status |
+| `wallet tokens` | Token balances |
+| `wallet balance` | SOL balance |
+| `wallet list` | Saved wallets |
+| `wallet import` | Import a wallet from file |
+
+### System
+
+| Command | Description |
+|---------|-------------|
+| `system status` | Build, RPC, wallet, session info |
+| `rpc status` | RPC endpoint health and latency |
+| `rpc test` | Full RPC diagnostic with scoring |
+| `tx inspect <sig>` | Inspect a transaction on-chain |
+| `doctor` | Full system diagnostic |
+| `help` | List all commands |
+| `exit` | Clean shutdown |
+
+---
+
+## Usage Examples
+
+### Trading
+
+```
+flash [sim] > open 5x long SOL $500
+
+  CONFIRM TRANSACTION — Open Position
+  -----------------------------------------
+
+  Market:     SOL LONG
+  Collateral: $500.00 USDC
+  Leverage:   5x
+  Size:       $2,500.00
+  Pool:       Crypto.1
+
+  Execute trade? (yes/no)
+
+flash [sim] > close SOL long
+flash [sim] > add $200 to SOL long
+flash [sim] > remove $100 from ETH long
+```
+
+### Market Intelligence
+
+```
+flash [sim] > scan
+
+  Market Opportunities
+  ──────────────────────────────────────────
+
+  #   Market   Signal    Confidence   Regime
+  ──────────────────────────────────────────
+  1   SOL      LONG      72%          TRENDING
+  2   ETH      SHORT     65%          RANGING
+  3   JUP      LONG      58%          TRENDING
+
+flash [sim] > monitor
+
+  MARKET MONITOR
+  12:34:56 PM  |  Refreshing every 5s  |  Press any key to exit
+  ──────────────────────────────────────────────────────────────
+
+  Asset         Price    24h Change   Open Interest   Long / Short
+  ──────────────────────────────────────────────────────────────────
+  SOL         $148.52       +3.20%          $2.14M        62 / 38
+  BTC      $63,200.00       -0.40%        $438.00K        48 / 52
+```
+
+### Portfolio & Risk
+
+```
+flash [sim] > positions
+
+  POSITIONS
+  ──────────────────────────────────────────────────────────────
+
+  Market  Side   Lev   Size      Collat    Entry     Mark      PnL        Fees
+  ──────────────────────────────────────────────────────────────────────────────
+  SOL     LONG   5x    $2,500    $500.00   $148.52   $151.20   +$9.02     $2.00
+```
+
+### Transaction Preview
+
+```
+flash [live] > dryrun open 2x long SOL $10
+
+  TRANSACTION PREVIEW (DRY RUN)
+  ──────────────────────────────────
+
+  Trade Parameters
+    Market:         SOL
+    Side:           LONG
+    Collateral:     $10.00
+    Leverage:       2x
+    Position Size:  $20.00
+    Entry Price:    $148.52
+    Liq. Price:     $81.69
+
+  Simulation Result
+    Status:         SUCCESS
+    CU Consumed:    123,456
+
+  No transaction was signed or sent.
+```
+
+### System Diagnostics
+
+```
+flash [live] > system status
+
+  SYSTEM STATUS
+  ────────────────────────────
+
+  Build
+    Version: v1.0.0
+    Commit:  a1b2c3d
+
+  RPC
+    Active:    Helius
+    Latency:   124ms
+    Backups:   2
+
+  Wallet
+    Status:  Connected
+    Address: 7xKX...
+
+  Session
+    Mode:    Live Trading
+    Uptime:  1h 23m
+```
+
+---
+
+## Demo Walkthrough
+
+A typical session demonstrating the core workflow:
+
+1. **Launch** — Start the terminal, select simulation or live mode
+2. **System check** — Run `system status` to verify RPC and wallet connectivity
+3. **Explore markets** — Run `markets` to see all supported pools and assets
+4. **Inspect protocol** — Run `inspect protocol` to view protocol-wide OI and stats
+5. **Market deep-dive** — Run `inspect market SOL` to see OI breakdown and largest positions
+6. **Preview a trade** — Run `dryrun open 2x long SOL $10` to simulate without signing
+7. **Execute a trade** — Run `open 2x long SOL $10`, confirm with `yes`
+8. **View positions** — Run `positions` to verify the position
+9. **Monitor markets** — Run `monitor` for a live-updating price table
+10. **Close and exit** — Run `close SOL long`, then `exit` for clean shutdown
+
+---
+
+## Architecture
+
+```
+                    +-----------------------+
+                    |     User Input        |
+                    +----------+------------+
+                               |
+                    +----------v------------+
+                    |   AI Interpreter      |
+                    |  regex + NLP + LLM    |
+                    +----------+------------+
+                               | ParsedIntent
+                    +----------v------------+
+                    |  Execution Engine     |
+                    |  middleware + tools   |
+                    +----------+------------+
+                               |
+              +----------------+----------------+
+              |                |                |
+     +--------v------+ +------v------+ +-------v-------+
+     |   Scanner     | |  Portfolio  | |   Trading     |
+     |  strategies   | |  exposure   | |   pipeline    |
+     +--------+------+ +------+------+ +-------+-------+
+              |                |                |
+              +----------------+----------------+
+                               |
+                    +----------v------------+
+                    |    FlashClient        |
+                    |  tx build + sign      |
+                    +----------+------------+
+                               |
+                    +----------v------------+
+                    |     Solana RPC        |
+                    |  failover + retry     |
+                    +----------+------------+
+                               |
+                    +----------v------------+
+                    |  Flash Trade Program  |
+                    |  on-chain execution   |
+                    +-----------------------+
+```
+
+The dual-client architecture (`FlashClient` for live, `SimulatedFlashClient` for paper trading) ensures all tools interact through the `IFlashClient` interface without knowing which mode is active.
+
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the full system design.
 
 ---
 
@@ -69,45 +416,45 @@ Every trade passes through a multi-stage validation pipeline before reaching the
 
 ```
   User Command
-       │
-       ▼
-  Intent Parsing ─── regex + NLP + LLM
-       │
-       ▼
-  Schema Validation ─── Zod parameter schemas
-       │
-       ▼
-  Execution Middleware ─── wallet check, read-only guard
-       │
-       ▼
-  Trade Limit Validation ─── max collateral, position size, leverage
-       │
-       ▼
-  Rate Limit Check ─── trades per minute, minimum delay
-       │
-       ▼
-  Confirmation Gate ─── full position summary displayed to user
-       │
-       ▼
-  User Confirmation ─── explicit "yes" required
-       │
-       ▼
-  Instruction Build ─── Flash SDK instruction generation
-       │
-       ▼
-  Transaction Compile ─── MessageV0.compile with compute budget
-       │
-       ▼
-  Pre-Send Simulation ─── Solana runtime simulation (sigVerify: false)
-       │
-       ▼
-  Transaction Signing ─── keypair signs compiled transaction
-       │
-       ▼
-  Broadcast ─── sendRawTransaction with retry
-       │
-       ▼
-  Confirmation Polling ─── HTTP polling + periodic resends
+       |
+       v
+  Intent Parsing ---- regex + NLP + LLM
+       |
+       v
+  Schema Validation ---- Zod parameter schemas
+       |
+       v
+  Execution Middleware ---- wallet check, read-only guard
+       |
+       v
+  Trade Limit Validation ---- max collateral, position size, leverage
+       |
+       v
+  Rate Limit Check ---- trades per minute, minimum delay
+       |
+       v
+  Confirmation Gate ---- full position summary displayed to user
+       |
+       v
+  User Confirmation ---- explicit "yes" required
+       |
+       v
+  Instruction Build ---- Flash SDK instruction generation
+       |
+       v
+  Transaction Compile ---- MessageV0.compile with compute budget
+       |
+       v
+  Pre-Send Simulation ---- Solana runtime simulation (sigVerify: false)
+       |
+       v
+  Transaction Signing ---- keypair signs compiled transaction
+       |
+       v
+  Broadcast ---- sendRawTransaction with retry
+       |
+       v
+  Confirmation Polling ---- HTTP polling + periodic resends
 ```
 
 ### Safety Mechanisms
@@ -147,7 +494,6 @@ All RPC calls use exponential backoff with jitter:
 
 - Base delay: 500ms, capped at 5,000ms
 - HTTP 429 detection: parses `Retry-After` header, defaults to 2,000ms
-- Rate-limit patterns: `429`, `rate limit`, `too many requests`
 - Transaction sends: 3 attempts with fresh blockhash per attempt, 45-second confirmation window each
 
 ### Graceful Shutdown
@@ -163,323 +509,6 @@ All RPC calls use exponential backoff with jitter:
 7. Flush shutdown log (synchronous write)
 
 All background timers use `.unref()` so they don't prevent Node.js from exiting.
-
----
-
-## Observability
-
-### Structured Logging
-
-The file logger records all operational events with consistent format:
-
-```
-[2025-03-08T12:34:56.789Z] INFO [TRADE] Trade Request {"market":"SOL","side":"long","collateral":500,"leverage":5}
-[2025-03-08T12:34:57.123Z] INFO [CLIENT] Tx sent: 5KtR...3xPq (892 bytes, attempt 1)
-[2025-03-08T12:34:59.456Z] INFO [CLIENT] Tx confirmed: 5KtR...3xPq
-[2025-03-08T12:35:00.001Z] INFO [TRADE] OPEN {"market":"SOL","side":"long","collateral":500,"leverage":5,"price":148.52,"tx":"5KtR...3xPq"}
-```
-
-Features:
-- Log rotation at 10MB with `.old` backup
-- API key scrubbing (`sk-ant-***`, `gsk_***`, `api_key=***`)
-- Structured data fields for machine parsing
-- Synchronous flush on shutdown
-
-### Signing Audit Log
-
-Every trade attempt is recorded in `~/.flash/signing-audit.log`:
-
-```json
-{"timestamp":"2025-03-08T12:34:56.789Z","type":"open","market":"SOL","side":"long","collateral":500,"leverage":5,"sizeUsd":2500,"walletAddress":"7xKX...","result":"confirmed"}
-```
-
-Outcomes tracked: `confirmed`, `rejected`, `failed`, `rate_limited`. Private keys are never logged.
-
-### System Diagnostics
-
-Built-in commands for operational visibility:
-
-| Command | Purpose |
-|---------|---------|
-| `system status` | Build version, RPC health, wallet state, positions, memory, uptime |
-| `rpc status` | Active endpoint, latency, failure rate, slot lag, all endpoints |
-| `rpc test` | Full diagnostic of all RPC endpoints with scoring and recommendation |
-| `tx inspect <sig>` | Transaction status, fee, compute units, program logs |
-
----
-
-## CLI Discoverability
-
-The terminal guides new users without requiring documentation:
-
-### Startup Hints
-
-Quick Start commands are displayed after the banner on every session start.
-
-### Unknown Command Suggestions
-
-When an unrecognized command is entered, the terminal suggests relevant commands instead of showing a generic error.
-
-### Command Usage Hints
-
-Typing a command name without required parameters shows usage and examples:
-
-```
-flash [sim] > open
-
-  Usage
-    open <leverage>x <long|short> <asset> $<collateral>
-
-  Examples
-    open 5x long SOL $500
-    open 3x short ETH $200
-    open 10x long BTC $1000
-```
-
-### Organized Help
-
-The `help` command groups all commands into clear sections: Trading, Market Intelligence, Portfolio & Risk, Market Data, Wallet, Protocol Inspector, and System.
-
----
-
-## Installation
-
-Requires **Node.js >= 20.0.0**.
-
-```bash
-git clone https://github.com/user/flash-ai-terminal.git
-cd flash-ai-terminal
-npm install
-npm run build
-```
-
----
-
-## Configuration
-
-Copy the example environment file:
-
-```bash
-cp .env.example .env
-```
-
-Key configuration:
-
-| Variable | Purpose | Default |
-|----------|---------|---------|
-| `RPC_URL` | Primary Solana RPC endpoint | Public RPC |
-| `BACKUP_RPC_1`, `BACKUP_RPC_2` | Failover RPC endpoints | None |
-| `SIMULATION_MODE` | Paper trading mode | `true` |
-| `ANTHROPIC_API_KEY` | LLM-powered command parsing (optional) | None |
-| `MAX_COLLATERAL_PER_TRADE` | Per-trade collateral limit (USD) | Unlimited |
-| `MAX_LEVERAGE` | Maximum leverage multiplier | Market default |
-| `COMPUTE_UNIT_PRICE` | Priority fee in microLamports | `500000` |
-
-See [.env.example](.env.example) for all options. The terminal works without any configuration using the public Solana RPC, but a premium provider is recommended for live trading.
-
----
-
-## Usage
-
-### Start the Terminal
-
-```bash
-npm start
-```
-
-Or link globally:
-
-```bash
-npm link
-flash
-```
-
-### Trading
-
-```
-flash [sim] > open 5x long SOL $500
-
-  CONFIRM TRANSACTION — Open Position
-  ─────────────────────────────────
-
-  Market:     SOL LONG
-  Collateral: $500.00 USDC
-  Leverage:   5x
-  Size:       $2,500.00
-  Pool:       Crypto.1
-
-  Execute trade? (yes/no)
-
-flash [sim] > close SOL long
-flash [sim] > add $200 to SOL long
-flash [sim] > remove $100 from ETH long
-```
-
-### Market Intelligence
-
-```
-flash [sim] > scan
-
-  Market Opportunities
-  ──────────────────────────────────────────
-
-  #   Market   Signal    Confidence   Regime
-  ──────────────────────────────────────────
-  1   SOL      LONG      72%          TRENDING
-  2   ETH      SHORT     65%          RANGING
-  3   JUP      LONG      58%          TRENDING
-
-flash [sim] > monitor
-
-  MARKET MONITOR
-  12:34:56 PM  |  Refreshing every 5s  |  Press any key to exit
-  ──────────────────────────────────────────────────────────────
-
-  Asset         Price    24h Change   Open Interest   Long / Short
-  ──────────────────────────────────────────────────────────────────
-  SOL         $148.52       +3.20%          $2.14M        62 / 38
-  BTC      $63,200.00       -0.40%        $438.00K        48 / 52
-
-flash [sim] > analyze SOL
-flash [sim] > whale activity
-```
-
-### Portfolio & Risk
-
-```
-flash [sim] > positions
-
-  Open Positions
-  ──────────────────────────────────────────────────────────────
-
-  Market  Side   Lev   Size      Collat    Entry     Mark      PnL        Fees
-  ──────────────────────────────────────────────────────────────────────────────
-  SOL     LONG   5x    $2,500    $500.00   $148.52   $151.20   +$9.02     $2.00
-
-flash [sim] > portfolio
-flash [sim] > dashboard
-flash [sim] > risk report
-flash [sim] > risk monitor on
-```
-
-### Wallet
-
-```
-flash [live] > wallet tokens
-flash [live] > wallet balance
-flash [live] > wallet list
-flash [live] > wallet import
-```
-
-### System Diagnostics
-
-```
-flash [live] > system status
-
-  SYSTEM STATUS
-  ────────────────────────────
-
-  Build
-    Version: v1.0.0
-    Commit:  a1b2c3d
-    Branch:  main
-
-  RPC
-    Active:    Helius
-    Latency:   124ms
-    Failovers: 0
-    Backups:   2
-
-  Wallet
-    Status:  Connected
-    Address: 7xKX...
-    Mode:    Full Access
-
-  Session
-    Mode:    Live Trading
-    Uptime:  1h 23m
-
-flash [live] > rpc status
-flash [live] > rpc test
-flash [live] > tx inspect <signature>
-```
-
-### Transaction Preview
-
-```
-flash [live] > dryrun open 2x long SOL $10
-
-  TRANSACTION PREVIEW (DRY RUN)
-  ──────────────────────────────────
-
-  Trade Parameters
-    Market:         SOL
-    Side:           LONG
-    Collateral:     $10.00
-    Leverage:       2x
-    Position Size:  $20.00
-    Entry Price:    $148.52
-    Liq. Price:     $81.69
-
-  Solana Transaction
-    Program:        FLASH6Lo6h3...
-    Instructions:   4
-    Tx Size:        892 bytes
-
-  Simulation Result
-    Status:         SUCCESS
-    CU Consumed:    123,456
-
-  No transaction was signed or sent.
-```
-
----
-
-## Architecture
-
-```
-                    ┌─────────────────────┐
-                    │     User Input       │
-                    └──────────┬──────────┘
-                               │
-                    ┌──────────▼──────────┐
-                    │   AI Interpreter     │
-                    │  regex + NLP + LLM   │
-                    └──────────┬──────────┘
-                               │ ParsedIntent
-                    ┌──────────▼──────────┐
-                    │  Execution Engine    │
-                    │  middleware + tools  │
-                    └──────────┬──────────┘
-                               │
-              ┌────────────────┼────────────────┐
-              │                │                │
-     ┌────────▼──────┐ ┌──────▼──────┐ ┌───────▼───────┐
-     │   Scanner     │ │  Portfolio  │ │   Trading     │
-     │  strategies   │ │  exposure   │ │   pipeline    │
-     └────────┬──────┘ └──────┬──────┘ └───────┬───────┘
-              │                │                │
-              └────────────────┼────────────────┘
-                               │
-                    ┌──────────▼──────────┐
-                    │    FlashClient      │
-                    │  tx build + sign    │
-                    └──────────┬──────────┘
-                               │
-                    ┌──────────▼──────────┐
-                    │     Solana RPC      │
-                    │  failover + retry   │
-                    └──────────┬──────────┘
-                               │
-                    ┌──────────▼──────────┐
-                    │  Flash Trade Program │
-                    │  on-chain execution  │
-                    └─────────────────────┘
-```
-
-The dual-client architecture (`FlashClient` for live, `SimulatedFlashClient` for paper trading) ensures all tools interact through the `IFlashClient` interface without knowing which mode is active.
-
-See [ARCHITECTURE.md](ARCHITECTURE.md) for the full system design.
 
 ---
 
@@ -499,20 +528,39 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the full system design.
 
 ---
 
+## Observability
+
+### Structured Logging
+
+```
+[2025-03-08T12:34:56.789Z] INFO [TRADE] Trade Request {"market":"SOL","side":"long","collateral":500,"leverage":5}
+[2025-03-08T12:34:57.123Z] INFO [CLIENT] Tx sent: 5KtR...3xPq (892 bytes, attempt 1)
+[2025-03-08T12:34:59.456Z] INFO [CLIENT] Tx confirmed: 5KtR...3xPq
+```
+
+Features:
+- Log rotation at 10MB with `.old` backup
+- API key scrubbing (`sk-ant-***`, `gsk_***`, `api_key=***`)
+- Structured data fields for machine parsing
+- Synchronous flush on shutdown
+
+### Signing Audit Log
+
+Every trade attempt is recorded in `~/.flash/signing-audit.log`:
+
+```json
+{"timestamp":"2025-03-08T12:34:56.789Z","type":"open","market":"SOL","side":"long","collateral":500,"leverage":5,"sizeUsd":2500,"walletAddress":"7xKX...","result":"confirmed"}
+```
+
+Outcomes tracked: `confirmed`, `rejected`, `failed`, `rate_limited`. Private keys are never logged.
+
+---
+
 ## Wallet Security
 
 ### Storage
 
 Wallet files are stored in `~/.flash/wallets/<wallet-name>.json` with owner-only permissions (`0600`). The `~/.flash/` directory is created with `0700` permissions.
-
-### Recommendations
-
-- Keep wallet files private and never share them
-- Back up wallet files securely in a separate location
-- Loss of a wallet file means permanent loss of funds
-- Never share your wallet file or private key with anyone
-- Consider using a hardware wallet for large balances
-- Start with simulation mode before committing real funds
 
 ### Key Handling
 
@@ -520,6 +568,14 @@ Wallet files are stored in `~/.flash/wallets/<wallet-name>.json` with owner-only
 - Key material is zeroed from memory after use
 - Wallet import input is hidden (no terminal echo)
 - File paths are validated within the home directory with symlink resolution
+
+### Recommendations
+
+- Start with simulation mode before committing real funds
+- Keep wallet files private and never share them
+- Back up wallet files securely in a separate location
+- Consider using a hardware wallet for large balances
+- Never trade with funds you cannot afford to lose
 
 See [SECURITY.md](SECURITY.md) for the full security policy.
 
@@ -539,9 +595,7 @@ export const plugin: FlashPlugin = {
 };
 ```
 
-Core tools cannot be overridden by plugins. Duplicate tool names are rejected. Use `--no-plugins` to disable plugin loading.
-
-Only install plugins from trusted sources. Plugins run with full system access.
+Core tools cannot be overridden by plugins. Duplicate tool names are rejected.
 
 ---
 
@@ -549,7 +603,7 @@ Only install plugins from trusted sources. Plugins run with full system access.
 
 ```
 src/
-  cli/            Terminal REPL, user interaction, confirmation flow
+  cli/            Terminal REPL, autocomplete, status bar, theme
   ai/             Intent parsing (regex + NLP + LLM fallback)
   tools/          Tool definitions, registry, and dispatch engine
   client/         Flash Trade SDK client and paper trading client
@@ -591,6 +645,42 @@ npx tsc --noEmit
 # Run tests
 npm run test
 ```
+
+---
+
+## Contributing
+
+Contributions are welcome. Please read the guidelines before submitting.
+
+### Getting Started
+
+1. Fork the repository
+2. Create a feature branch: `git checkout -b feature/my-feature`
+3. Make your changes
+4. Run the build: `npm run build`
+5. Run tests: `npm run test`
+6. Commit with a clear message
+7. Open a pull request
+
+### Guidelines
+
+- **Do not modify the trading pipeline** unless explicitly working on a trading bug
+- All new tools must go through the `ToolEngine` registry
+- Use the existing `theme` module for all CLI output styling
+- Add `Number.isFinite()` guards on any new numeric computation
+- Keep new RPC calls behind caching where possible
+- Test in simulation mode before testing live
+
+### Areas for Contribution
+
+- New market analysis strategies
+- Plugin development
+- Documentation improvements
+- CLI UX enhancements
+- Test coverage
+- Bug reports and fixes
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for full details.
 
 ---
 
