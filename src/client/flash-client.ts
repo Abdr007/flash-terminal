@@ -322,6 +322,12 @@ export class FlashClient implements IFlashClient {
   private recentTrades = new Map<string, number>(); // tradeKey -> timestamp
   private static readonly TRADE_CACHE_TTL_MS = 120_000;
 
+  /** Pre-cached blockhash — refreshed every 5s to avoid blocking on getLatestBlockhash during trade */
+  private cachedBlockhash: { blockhash: string; lastValidBlockHeight: number; fetchedAt: number } | null = null;
+  private blockhashTimer: ReturnType<typeof setInterval> | null = null;
+  private static readonly BLOCKHASH_REFRESH_MS = 5_000;
+  private static readonly BLOCKHASH_MAX_AGE_MS = 10_000;
+
   constructor(connection: Connection, walletManager: WalletManager, config: FlashConfig) {
     this.config = config;
     this.connection = connection;
@@ -375,6 +381,60 @@ export class FlashClient implements IFlashClient {
     ALLOWED_PROGRAM_IDS = instanceAllowed;
 
     this.priceService = new PythPriceService(config.pythnetUrl);
+
+    // Start background blockhash pre-cache
+    this.startBlockhashRefresh();
+  }
+
+  /**
+   * Start background blockhash refresh (every 5s).
+   * Ensures sendTx() can use a recent blockhash without a blocking RPC call.
+   */
+  private startBlockhashRefresh(): void {
+    // Initial fetch (non-blocking — sendTx will fetch on-demand if cache is empty)
+    this.refreshBlockhash().catch(() => {});
+    this.blockhashTimer = setInterval(() => {
+      this.refreshBlockhash().catch(() => {});
+    }, FlashClient.BLOCKHASH_REFRESH_MS);
+    this.blockhashTimer.unref();
+  }
+
+  private async refreshBlockhash(): Promise<void> {
+    try {
+      const result = await this.connection.getLatestBlockhash('confirmed');
+      this.cachedBlockhash = {
+        blockhash: result.blockhash,
+        lastValidBlockHeight: result.lastValidBlockHeight,
+        fetchedAt: Date.now(),
+      };
+    } catch {
+      // Non-critical — sendTx will fetch on-demand if cache is stale
+    }
+  }
+
+  /**
+   * Get a recent blockhash — uses pre-cached value if fresh, otherwise fetches on-demand.
+   * Returns the blockhash and the age of the cache entry (for timeout adjustment).
+   */
+  private async getBlockhash(conn: Connection): Promise<{ blockhash: string; lastValidBlockHeight: number; fetchLatencyMs: number }> {
+    const cached = this.cachedBlockhash;
+    if (cached && (Date.now() - cached.fetchedAt) < FlashClient.BLOCKHASH_MAX_AGE_MS) {
+      return { blockhash: cached.blockhash, lastValidBlockHeight: cached.lastValidBlockHeight, fetchLatencyMs: 0 };
+    }
+    // Cache miss or stale — fetch on-demand
+    const start = Date.now();
+    const result = await conn.getLatestBlockhash('confirmed');
+    const fetchLatencyMs = Date.now() - start;
+    this.cachedBlockhash = { blockhash: result.blockhash, lastValidBlockHeight: result.lastValidBlockHeight, fetchedAt: Date.now() };
+    return { blockhash: result.blockhash, lastValidBlockHeight: result.lastValidBlockHeight, fetchLatencyMs };
+  }
+
+  /** Stop background blockhash refresh (called on shutdown) */
+  stopBlockhashRefresh(): void {
+    if (this.blockhashTimer) {
+      clearInterval(this.blockhashTimer);
+      this.blockhashTimer = null;
+    }
   }
 
   get walletAddress(): string {
@@ -610,12 +670,15 @@ export class FlashClient implements IFlashClient {
       }
 
       try {
-        const bhStart = Date.now();
-        const latestBlockhash = await conn.getLatestBlockhash('confirmed');
-        const bhLatency = Date.now() - bhStart;
-        // If blockhash fetch took abnormally long (>10s), the retrieved blockhash
-        // may already be near expiry. Log a warning for observability — the
-        // transaction may still succeed but confirmation window is reduced.
+        // Use pre-cached blockhash when available (0ms latency vs ~200-500ms RPC call).
+        // On retries, always fetch fresh to avoid using a near-expiry blockhash.
+        const { blockhash, fetchLatencyMs: bhLatency } = attempt === 1
+          ? await this.getBlockhash(conn)
+          : await (async () => {
+              const start = Date.now();
+              const result = await conn.getLatestBlockhash('confirmed');
+              return { blockhash: result.blockhash, lastValidBlockHeight: result.lastValidBlockHeight, fetchLatencyMs: Date.now() - start };
+            })();
         if (bhLatency > 10_000) {
           logger.info('CLIENT', `Blockhash fetch took ${(bhLatency / 1000).toFixed(1)}s — confirmation window reduced`);
         }
@@ -628,7 +691,7 @@ export class FlashClient implements IFlashClient {
         const message = MessageV0.compile({
           payerKey: this.wallet.publicKey,
           instructions: allIxs,
-          recentBlockhash: latestBlockhash.blockhash,
+          recentBlockhash: blockhash,
           addressLookupTableAccounts: [],
         });
         const vtx = new VersionedTransaction(message);
@@ -829,59 +892,68 @@ export class FlashClient implements IFlashClient {
     // Acquire trade lock BEFORE any async operations to prevent interleaving
     this.acquireTradeLock(market, side);
     try {
-      await this.ensureSufficientSol();
-
-      // Check USDC balance before building transaction
-      const inputSymbol = collateralToken ?? DEFAULT_COLLATERAL_TOKEN;
-      if (inputSymbol === 'USDC') {
-        try {
-          const balances = await this.walletMgr.getTokenBalances();
-          const usdcBalance = balances.tokens.find(t => t.symbol === 'USDC')?.amount ?? 0;
-          if (usdcBalance < collateralAmount) {
-            throw new Error(
-              `Insufficient USDC collateral.\n` +
-              `  Required: $${collateralAmount.toFixed(2)}\n` +
-              `  Available: $${usdcBalance.toFixed(2)}\n` +
-              `  Deposit USDC to trade on Flash Trade.`
-            );
-          }
-        } catch (e: unknown) {
-          const eMsg = getErrorMessage(e);
-          if (eMsg.includes('Insufficient USDC')) throw e;
-          // RPC failure during balance check — warn but don't block the trade
-          logger.info('CLIENT', `USDC balance check skipped (RPC error): ${scrubSensitive(eMsg)}`);
-        }
-      }
-
-      // Check for duplicate position before sending
+      // ── Parallel pre-trade validation ──
+      // Run SOL fee check, USDC balance check, and duplicate position check concurrently.
+      // These are independent RPC calls that previously ran sequentially (~600-1500ms total).
       const poolConfig = this.getPoolConfigForMarket(market);
-      try {
-        const positions = await this.perpClient.getUserPositions(this.wallet.publicKey, poolConfig);
-        const token = this.findToken(poolConfig, market);
-        const sdkSide = toSdkSide(side);
-        const markets = poolConfig.markets as unknown as Array<{
-          marketAccount: PublicKey; targetMint: PublicKey; side: typeof Side.Long | typeof Side.Short;
-        }>;
-        const marketConfig = markets.find(m => m.targetMint.equals(token.mintKey) && m.side === sdkSide);
-        if (marketConfig) {
-          const existing = (positions as Array<{ market: PublicKey }>).find(
-            p => p.market.equals(marketConfig.marketAccount)
-          );
-          if (existing) {
-            throw new Error(
-              `You already have an open ${sideStr} position on ${market}.\n` +
-              `  Close it first with: close ${sideStr} ${market}`
-            );
-          }
-        }
-      } catch (e: unknown) {
-        const eMsg = getErrorMessage(e);
-        if (eMsg.includes('already have an open')) throw e;
-        // If position check fails due to RPC, proceed — the program will reject duplicates anyway
-        logger.debug('CLIENT', `Pre-trade position check skipped: ${scrubSensitive(eMsg)}`);
-      }
-
+      const inputSymbol = collateralToken ?? DEFAULT_COLLATERAL_TOKEN;
       const sdkSide = toSdkSide(side);
+
+      const [, , priceMap] = await Promise.all([
+        // 1. SOL fee check
+        this.ensureSufficientSol(),
+
+        // 2. USDC balance + duplicate position check (combined to reduce parallelism overhead)
+        (async () => {
+          // USDC balance check
+          if (inputSymbol === 'USDC') {
+            try {
+              const balances = await this.walletMgr.getTokenBalances();
+              const usdcBalance = balances.tokens.find(t => t.symbol === 'USDC')?.amount ?? 0;
+              if (usdcBalance < collateralAmount) {
+                throw new Error(
+                  `Insufficient USDC collateral.\n` +
+                  `  Required: $${collateralAmount.toFixed(2)}\n` +
+                  `  Available: $${usdcBalance.toFixed(2)}\n` +
+                  `  Deposit USDC to trade on Flash Trade.`
+                );
+              }
+            } catch (e: unknown) {
+              const eMsg = getErrorMessage(e);
+              if (eMsg.includes('Insufficient USDC')) throw e;
+              logger.info('CLIENT', `USDC balance check skipped (RPC error): ${scrubSensitive(eMsg)}`);
+            }
+          }
+
+          // Duplicate position check
+          try {
+            const positions = await this.perpClient.getUserPositions(this.wallet.publicKey, poolConfig);
+            const token = this.findToken(poolConfig, market);
+            const markets = poolConfig.markets as unknown as Array<{
+              marketAccount: PublicKey; targetMint: PublicKey; side: typeof Side.Long | typeof Side.Short;
+            }>;
+            const marketConfig = markets.find(m => m.targetMint.equals(token.mintKey) && m.side === sdkSide);
+            if (marketConfig) {
+              const existing = (positions as Array<{ market: PublicKey }>).find(
+                p => p.market.equals(marketConfig.marketAccount)
+              );
+              if (existing) {
+                throw new Error(
+                  `You already have an open ${sideStr} position on ${market}.\n` +
+                  `  Close it first with: close ${sideStr} ${market}`
+                );
+              }
+            }
+          } catch (e: unknown) {
+            const eMsg = getErrorMessage(e);
+            if (eMsg.includes('already have an open')) throw e;
+            logger.debug('CLIENT', `Pre-trade position check skipped: ${scrubSensitive(eMsg)}`);
+          }
+        })(),
+
+        // 3. Price map fetch (runs concurrently with validation checks)
+        this.getPriceMap(poolConfig),
+      ]);
 
       const targetToken = this.findToken(poolConfig, market);
       const collateralSymbol = collateralToken ?? DEFAULT_COLLATERAL_TOKEN;
@@ -891,8 +963,6 @@ export class FlashClient implements IFlashClient {
         market, side, collateralToken: inputToken.symbol,
         collateralAmount, leverage, size: collateralAmount * leverage,
       });
-
-      const priceMap = await this.getPriceMap(poolConfig);
       const targetPrice = priceMap.get(targetToken.symbol);
       const inputPrice = priceMap.get(inputToken.symbol);
       if (!targetPrice) throw new Error(`Oracle unavailable for ${targetToken.symbol}. Try again later.`);
@@ -1009,8 +1079,6 @@ export class FlashClient implements IFlashClient {
   async closePosition(market: string, side: TradeSide, receiveToken?: string): Promise<ClosePositionResult> {
     const logger = getLogger();
 
-    await this.ensureSufficientSol();
-
     const cacheKey = this.tradeCacheKey('close', market, side);
     this.checkRecentTrade(cacheKey);
 
@@ -1025,7 +1093,11 @@ export class FlashClient implements IFlashClient {
         ? this.findToken(poolConfig, receiveToken)
         : this.findToken(poolConfig, DEFAULT_COLLATERAL_TOKEN);
 
-      const priceMap = await this.getPriceMap(poolConfig);
+      // Parallel: SOL check + price fetch
+      const [, priceMap] = await Promise.all([
+        this.ensureSufficientSol(),
+        this.getPriceMap(poolConfig),
+      ]);
       const targetPrice = priceMap.get(targetToken.symbol);
       if (!targetPrice) throw new Error(`Oracle unavailable for ${targetToken.symbol}. Try again later.`);
 
@@ -1100,15 +1172,17 @@ export class FlashClient implements IFlashClient {
   // ─── Collateral Management ────────────────────────────────────────────────
 
   async addCollateral(market: string, side: TradeSide, amount: number): Promise<CollateralResult> {
-    await this.ensureSufficientSol();
-
     const cacheKey = this.tradeCacheKey('add', market, side, amount);
     this.checkRecentTrade(cacheKey);
 
     this.acquireTradeLock(market, side);
     try {
       const poolConfig = this.getPoolConfigForMarket(market);
-      const { position, marketConfig } = await this.findUserPosition(poolConfig, market, side);
+      // Parallel: SOL check + position lookup
+      const [, { position, marketConfig }] = await Promise.all([
+        this.ensureSufficientSol(),
+        this.findUserPosition(poolConfig, market, side),
+      ]);
 
       // Resolve position's actual collateral token from its collateralMint
       const collateralSymbol = this.resolveTokenSymbol(poolConfig, marketConfig.collateralMint);
@@ -1141,15 +1215,17 @@ export class FlashClient implements IFlashClient {
   }
 
   async removeCollateral(market: string, side: TradeSide, amount: number): Promise<CollateralResult> {
-    await this.ensureSufficientSol();
-
     const cacheKey = this.tradeCacheKey('remove', market, side, amount);
     this.checkRecentTrade(cacheKey);
 
     this.acquireTradeLock(market, side);
     try {
       const poolConfig = this.getPoolConfigForMarket(market);
-      const { position, marketConfig } = await this.findUserPosition(poolConfig, market, side);
+      // Parallel: SOL check + position lookup
+      const [, { position, marketConfig }] = await Promise.all([
+        this.ensureSufficientSol(),
+        this.findUserPosition(poolConfig, market, side),
+      ]);
 
       // Resolve position's actual collateral token from its collateralMint
       const collateralSymbol = this.resolveTokenSymbol(poolConfig, marketConfig.collateralMint);
@@ -1278,11 +1354,11 @@ export class FlashClient implements IFlashClient {
     const cuPriceIx = ComputeBudgetProgram.setComputeUnitPrice({ microLamports: this.config.computeUnitPrice });
     const allIxs = [cuLimitIx, cuPriceIx, ...result.instructions];
 
-    const latestBlockhash = await this.connection.getLatestBlockhash('confirmed');
+    const { blockhash } = await this.getBlockhash(this.connection);
     const message = MessageV0.compile({
       payerKey: this.wallet.publicKey,
       instructions: allIxs,
-      recentBlockhash: latestBlockhash.blockhash,
+      recentBlockhash: blockhash,
       addressLookupTableAccounts: [],
     });
     const vtx = new VersionedTransaction(message);

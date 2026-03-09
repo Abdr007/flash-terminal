@@ -1,9 +1,9 @@
 import * as readline from 'readline';
-import chalk from 'chalk';
 import { ToolEngine } from '../tools/engine.js';
 import { ParsedIntent, ToolResult } from '../types/index.js';
 import { getErrorMessage } from '../utils/retry.js';
 import { theme } from './theme.js';
+import { TermRenderer } from './renderer.js';
 
 // ─── Watch Mode ─────────────────────────────────────────────────────────────
 //
@@ -12,7 +12,8 @@ import { theme } from './theme.js';
 //
 // Design constraints:
 //   • Read-only — trading commands are rejected before execution
-//   • Uses ANSI cursor control for flicker-free rendering
+//   • Diff-based rendering — only changed lines are updated
+//   • Complete input isolation — readline is paused, stdin is in raw mode
 //   • Cleans up timers and raw mode on exit
 //   • Does not modify any other subsystem
 
@@ -51,6 +52,12 @@ function validateWatchCommand(command: string): string | null {
   return null;
 }
 
+/** Strip ANSI escape codes for accurate line comparison */
+function stripAnsi(str: string): string {
+  // eslint-disable-next-line no-control-regex
+  return str.replace(/\x1B\[[0-9;]*[a-zA-Z]/g, '');
+}
+
 export interface WatchDeps {
   engine: ToolEngine;
   parseCommand: (input: string) => Promise<ParsedIntent>;
@@ -60,6 +67,9 @@ export interface WatchDeps {
 /**
  * Start watch mode — repeatedly runs a read-only command every 5 seconds.
  * Resolves when the user presses 'q' to exit.
+ *
+ * Input isolation: readline is paused BEFORE any rendering begins.
+ * All keyboard input goes through raw mode handler only.
  */
 export async function startWatch(
   command: string,
@@ -83,22 +93,34 @@ export async function startWatch(
     return;
   }
 
+  // ─── ISOLATE INPUT BEFORE ANY RENDERING ─────────────────────────
+  // Critical: pause readline FIRST to prevent any keystrokes from
+  // reaching the readline buffer while watch mode is active.
+  deps.rl.pause();
+
+  const wasRaw = process.stdin.isRaw;
+  if (process.stdin.isTTY) {
+    process.stdin.setRawMode(true);
+  }
+  process.stdin.resume();
+
   // ─── State ─────────────────────────────────────────────────────
   let running = true;
   let refreshing = false;
+  const renderer = new TermRenderer();
 
-  const header = () => {
+  const buildHeader = (): string[] => {
     const now = new Date().toLocaleTimeString();
     return [
       '',
       `  ${theme.accentBold('WATCH MODE')}`,
       theme.dim(`  ${now}  |  Watching: ${theme.value(command)}  |  Refresh ${REFRESH_INTERVAL_MS / 1000}s  |  Press ${theme.value('q')} to exit`),
       `  ${theme.separator(Math.min(process.stdout.columns || 80, 80))}`,
-    ].join('\n');
+    ];
   };
 
-  const renderOutput = async (): Promise<string> => {
-    // Re-parse each refresh so data is fresh (intent may reference cached data)
+  const fetchOutput = async (): Promise<string> => {
+    // Re-parse each refresh so data is fresh
     let freshIntent: ParsedIntent;
     try {
       freshIntent = await deps.parseCommand(command);
@@ -115,27 +137,26 @@ export async function startWatch(
     refreshing = true;
 
     try {
-      const output = await renderOutput();
+      const output = await fetchOutput();
+      const headerLines = buildHeader();
+      const outputLines = output.split('\n');
+      const frame = [...headerLines, ...outputLines, ''];
 
-      // Move cursor to top-left and clear everything below
-      readline.cursorTo(process.stdout, 0, 0);
-      readline.clearScreenDown(process.stdout);
-
-      // Print header + output
-      process.stdout.write(header() + '\n');
-      process.stdout.write(output + '\n');
+      // Only update if frame content changed
+      if (renderer.hasChanged(frame)) {
+        renderer.render(frame);
+      }
     } catch (err) {
-      // On error, show the error in-place without crashing watch mode
-      readline.cursorTo(process.stdout, 0, 0);
-      readline.clearScreenDown(process.stdout);
-      process.stdout.write(header() + '\n');
-      process.stdout.write(theme.negative(`\n  Refresh error: ${getErrorMessage(err)}\n`));
+      const headerLines = buildHeader();
+      const errLines = [...headerLines, '', theme.negative(`  Refresh error: ${getErrorMessage(err)}`), ''];
+      renderer.render(errLines);
     } finally {
       refreshing = false;
     }
   };
 
   // ─── Initial render ────────────────────────────────────────────
+  renderer.clear();
   await render();
 
   // ─── Refresh interval ─────────────────────────────────────────
@@ -147,16 +168,7 @@ export async function startWatch(
   interval.unref();
 
   // ─── Key listener — exit on 'q' ───────────────────────────────
-  // Pause readline to prevent it from consuming stdin while we're in raw mode
-  deps.rl.pause();
-
   await new Promise<void>((resolve) => {
-    const wasRaw = process.stdin.isRaw;
-    if (process.stdin.isTTY) {
-      process.stdin.setRawMode(true);
-    }
-    process.stdin.resume();
-
     const onKey = (data: Buffer) => {
       const key = data.toString();
 
@@ -166,17 +178,25 @@ export async function startWatch(
         process.stdin.removeListener('data', onKey);
         running = false;
         clearInterval(interval);
+
+        // Restore terminal state
         if (process.stdin.isTTY) {
           process.stdin.setRawMode(wasRaw ?? false);
         }
-        // Resume readline before output
-        deps.rl.resume();
 
-        // Clear screen and show exit message
-        readline.cursorTo(process.stdout, 0, 0);
-        readline.clearScreenDown(process.stdout);
+        // Drain any buffered stdin before resuming readline
+        process.stdin.pause();
+        process.stdin.resume();
+
+        // Clear screen and restore CLI
+        renderer.clear();
+        renderer.reset();
+
+        // Resume readline AFTER screen clear
+        deps.rl.resume();
         resolve();
       }
+      // All other keys are silently consumed — they never reach readline
     };
 
     process.stdin.on('data', onKey);

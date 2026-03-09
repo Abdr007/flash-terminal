@@ -1352,6 +1352,13 @@ export class FlashTerminal {
     } catch {
       // Best-effort cleanup
     }
+    try {
+      if (this.flashClient && 'stopBlockhashRefresh' in this.flashClient) {
+        (this.flashClient as { stopBlockhashRefresh: () => void }).stopBlockhashRefresh();
+      }
+    } catch {
+      // Best-effort cleanup
+    }
     // Flush shutdown log synchronously before exit
     logger.flushSync('SHUTDOWN', 'Shutdown complete', {
       uptime: Math.floor(process.uptime()),
@@ -1932,20 +1939,23 @@ export class FlashTerminal {
 
   /**
    * Market monitor — professional full-screen market table with event velocity intelligence.
-   * Redraws in place every 5s. Press 'q' to exit cleanly.
+   * Uses diff-based rendering for flicker-free updates. Press 'q' to exit cleanly.
+   *
+   * Lifecycle:
+   *   1. Isolate input (pause readline, set raw mode)
+   *   2. Clear screen, show loading
+   *   3. Fetch first dataset (block until data arrives)
+   *   4. Render initial frame
+   *   5. Start 5s refresh loop with diff rendering
+   *   6. Exit cleanly on 'q'
    *
    * Data sources:
    *   Prices:        Pyth Hermes (same oracle as Flash protocol)
    *   Open Interest:  fstats API (aggregated Flash protocol state)
-   *
-   * Event velocity pipeline:
-   *   Market Data Fetch → State Tracking → Delta Detection → Velocity Annotation
-   *   → Event Engine (threshold filtering) → Event Buffer (last 6) → Terminal Rendering
-   *
-   * Only markets with open interest > 0 are shown (unless filterMarket is set).
    */
   private async handleMarketMonitor(filterMarket?: string): Promise<void> {
     const { PriceService } = await import('../data/prices.js');
+    const { TermRenderer } = await import('./renderer.js');
     const priceSvc = new PriceService();
     const { POOL_MARKETS } = await import('../config/index.js');
 
@@ -1957,6 +1967,15 @@ export class FlashTerminal {
 
     let running = true;
     const REFRESH_MS = 5_000;
+    const renderer = new TermRenderer();
+
+    // ─── STEP 1: Isolate input BEFORE any rendering ──────────────
+    this.rl.pause();
+    const wasRaw = process.stdin.isRaw;
+    if (process.stdin.isTTY) {
+      process.stdin.setRawMode(true);
+    }
+    process.stdin.resume();
 
     // ─── In-memory state for event detection ───────────────────────
     const prevPrices = new Map<string, number>();
@@ -1969,7 +1988,6 @@ export class FlashTerminal {
     const RATIO_SHIFT_PCT = 5;      // 5pp long/short ratio shift
 
     // ─── Rolling history buffer for velocity tracking ──────────────
-    // Keeps last 12 snapshots per market (≈60s at 5s refresh)
     const HISTORY_DEPTH = 12;
 
     interface MarketSnapshot {
@@ -1981,7 +1999,6 @@ export class FlashTerminal {
 
     const marketHistory = new Map<string, MarketSnapshot[]>();
 
-    /** Push a new snapshot and trim to HISTORY_DEPTH */
     const pushSnapshot = (sym: string, snap: MarketSnapshot) => {
       let buf = marketHistory.get(sym);
       if (!buf) {
@@ -1994,7 +2011,6 @@ export class FlashTerminal {
       }
     };
 
-    /** Compute velocity label: time window in which the delta occurred */
     const velocityLabel = (sym: string): string => {
       const buf = marketHistory.get(sym);
       if (!buf || buf.length < 2) return `${REFRESH_MS / 1000}s`;
@@ -2018,7 +2034,6 @@ export class FlashTerminal {
       timestamp: number;
     }
 
-    // Rolling event buffer — keeps last N events across cycles
     const MAX_EVENTS = 6;
     let recentEvents: MarketEvent[] = [];
 
@@ -2039,13 +2054,11 @@ export class FlashTerminal {
         const shortOi = oiEntry?.shortOi ?? 0;
         const totalOi = longOi + shortOi;
 
-        // Filter: only show markets with open interest (unless explicitly filtered)
         if (!filterMarket && totalOi <= 0) continue;
 
         const longPct = totalOi > 0 ? Math.round((longOi / totalOi) * 100) : 50;
         const shortPct = totalOi > 0 ? 100 - longPct : 50;
 
-        // Price direction detection
         const prev = prevPrices.get(sym);
         let priceDirection: 'up' | 'down' | 'flat' = 'flat';
         if (prev !== undefined) {
@@ -2053,7 +2066,7 @@ export class FlashTerminal {
           else if (tp.price < prev) priceDirection = 'down';
         }
 
-        // ─── Event detection with velocity annotation ──────────────
+        // Event detection
         const vLabel = velocityLabel(sym);
 
         if (prev !== undefined && prev > 0) {
@@ -2094,28 +2107,22 @@ export class FlashTerminal {
           }
         }
 
-        // Update state maps
         prevPrices.set(sym, tp.price);
         prevOi.set(sym, totalOi);
         prevLongPct.set(sym, longPct);
-
-        // Push snapshot to rolling history buffer
         pushSnapshot(sym, { timestamp: now, price: tp.price, totalOi, longPct });
 
         rows.push({ symbol: sym, price: tp.price, change: tp.priceChange24h, totalOi, longPct, shortPct, priceDirection });
       }
 
-      // Trim event buffer
       if (recentEvents.length > MAX_EVENTS) {
         recentEvents = recentEvents.slice(-MAX_EVENTS);
       }
 
-      // Sort by total OI descending (most active markets first)
       rows.sort((a, b) => b.totalOi - a.totalOi);
       return rows;
     };
 
-    /** Format 1m momentum line for a market from its rolling history */
     const format1mMomentum = (sym: string): string | null => {
       const buf = marketHistory.get(sym);
       if (!buf || buf.length < 2) return null;
@@ -2123,7 +2130,7 @@ export class FlashTerminal {
       const latest = buf[buf.length - 1];
       const oldest = buf[0];
       const elapsedSec = (latest.timestamp - oldest.timestamp) / 1000;
-      if (elapsedSec < 10) return null; // Need at least 10s of history
+      if (elapsedSec < 10) return null;
 
       const priceDelta = oldest.price > 0
         ? ((latest.price - oldest.price) / oldest.price) * 100
@@ -2131,7 +2138,6 @@ export class FlashTerminal {
       const oiDelta = latest.totalOi - oldest.totalOi;
       const ratioDelta = latest.longPct - oldest.longPct;
 
-      // Only show if there's meaningful movement over the window
       const hasPriceMove = Math.abs(priceDelta) >= 0.1;
       const hasOiMove = Math.abs(oiDelta) >= 1000;
       const hasRatioMove = Math.abs(ratioDelta) >= 1;
@@ -2158,21 +2164,22 @@ export class FlashTerminal {
       return `  ${chalk.bold(sym.padEnd(6))} ${theme.dim(windowLabel.padEnd(4))} ${parts.join(theme.dim(' | '))}`;
     };
 
-    const renderTable = (rows: MarketRow[]) => {
-      // Full screen clear — redraws in place, no scroll spam
-      process.stdout.write('\x1Bc');
+    /** Build frame as array of lines (for diff-based rendering) */
+    const buildFrame = (rows: MarketRow[]): string[] => {
       const now = new Date().toLocaleTimeString();
-      console.log('');
-      console.log(`  ${theme.accentBold('FLASH TERMINAL')} ${theme.dim('—')} ${theme.accentBold('MARKET MONITOR')}`);
-      console.log('');
-      console.log(theme.dim(`  Time: ${now}`));
-      console.log(theme.dim(`  Refresh: 5s`));
-      console.log(theme.dim(`  Press q to exit`));
-      console.log('');
-      console.log(`  ${theme.separator(72)}`);
-      console.log('');
+      const lines: string[] = [
+        '',
+        `  ${theme.accentBold('FLASH TERMINAL')} ${theme.dim('—')} ${theme.accentBold('MARKET MONITOR')}`,
+        '',
+        theme.dim(`  Time: ${now}`),
+        theme.dim(`  Refresh: ${REFRESH_MS / 1000}s`),
+        theme.dim(`  Press q to exit`),
+        '',
+        `  ${theme.separator(72)}`,
+        '',
+      ];
 
-      // Header
+      // Table header
       const hdr = [
         theme.tableHeader('  Asset'.padEnd(14)),
         theme.tableHeader('Price'.padStart(14)),
@@ -2180,97 +2187,113 @@ export class FlashTerminal {
         theme.tableHeader('Open Interest'.padStart(16)),
         theme.tableHeader('Long / Short'.padStart(14)),
       ].join('');
-      console.log(hdr);
-      console.log(`  ${theme.separator(72)}`);
-      console.log('');
+      lines.push(hdr);
+      lines.push(`  ${theme.separator(72)}`);
+      lines.push('');
 
+      // Data rows
       for (const r of rows) {
         const sym = chalk.bold(('  ' + r.symbol).padEnd(14));
-
-        // Bloomberg-style price coloring: green = price up, red = price down
         const priceStr = formatPrice(r.price).padStart(14);
         const coloredPrice = r.priceDirection === 'up'
           ? chalk.green(priceStr)
           : r.priceDirection === 'down'
             ? chalk.red(priceStr)
             : priceStr;
-
         const change = colorPercent(r.change).padStart(12);
         const oiStr = formatUsd(r.totalOi).padStart(16);
         const ratio = `${r.longPct} / ${r.shortPct}`.padStart(14);
         const ratioColored = r.longPct > 60 ? theme.positive(ratio) : r.shortPct > 60 ? theme.negative(ratio) : theme.dim(ratio);
-        console.log(`${sym}${coloredPrice}${change}${oiStr}${ratioColored}`);
+        lines.push(`${sym}${coloredPrice}${change}${oiStr}${ratioColored}`);
       }
 
       if (rows.length === 0) {
-        console.log(theme.dim('  No active markets found.'));
+        lines.push(theme.dim('  No active markets found.'));
       }
 
-      console.log('');
+      lines.push('');
 
-      // ─── Momentum panel (rolling window summary) ─────────────────
+      // Momentum panel
       const momentumLines: string[] = [];
       for (const r of rows) {
         const mLine = format1mMomentum(r.symbol);
         if (mLine) momentumLines.push(mLine);
       }
       if (momentumLines.length > 0) {
-        console.log(`  ${theme.section('Momentum')}`);
-        console.log(`  ${theme.separator(72)}`);
-        console.log('');
+        lines.push(`  ${theme.section('Momentum')}`);
+        lines.push(`  ${theme.separator(72)}`);
+        lines.push('');
         for (const line of momentumLines) {
-          console.log(line);
+          lines.push(line);
         }
-        console.log('');
+        lines.push('');
       }
 
-      // ─── Market Events panel ─────────────────────────────────────
+      // Events panel
       if (recentEvents.length > 0) {
-        console.log(`  ${theme.section('Market Events')}`);
-        console.log(`  ${theme.separator(72)}`);
-        console.log('');
+        lines.push(`  ${theme.section('Market Events')}`);
+        lines.push(`  ${theme.separator(72)}`);
+        lines.push('');
         for (const evt of recentEvents) {
           const colorFn = evt.color === 'green' ? chalk.green
             : evt.color === 'red' ? chalk.red
             : chalk.yellow;
-          // Show age of event relative to now
           const ageSec = Math.round((Date.now() - evt.timestamp) / 1000);
           const ageLabel = ageSec < 5 ? '' : theme.dim(` ${ageSec}s ago`);
-          console.log(`  ${colorFn('●')} ${evt.message}${ageLabel}`);
+          lines.push(`  ${colorFn('●')} ${evt.message}${ageLabel}`);
         }
-        console.log('');
+        lines.push('');
       }
 
-      console.log(`  ${theme.separator(72)}`);
-      console.log(theme.dim(`  Source: Pyth Hermes (oracle) | fstats (open interest)`));
-      console.log('');
+      lines.push(`  ${theme.separator(72)}`);
+      lines.push(theme.dim(`  Source: Pyth Hermes (oracle) | fstats (open interest)`));
+      lines.push('');
+      return lines;
     };
 
-    // ─── Initial fetch ─────────────────────────────────────────────
-    // Show loading, then block until first data arrives
-    process.stdout.write('\x1Bc');
-    console.log('');
-    console.log(`  ${theme.accentBold('FLASH TERMINAL')} ${theme.dim('—')} ${theme.accentBold('MARKET MONITOR')}`);
-    console.log('');
-    console.log(theme.dim('  Loading market data...'));
-    console.log('');
+    // ─── STEP 2: Clear screen and show loading ────────────────────
+    renderer.clear();
+    const loadingFrame = [
+      '',
+      `  ${theme.accentBold('FLASH TERMINAL')} ${theme.dim('—')} ${theme.accentBold('MARKET MONITOR')}`,
+      '',
+      theme.dim('  Loading market data...'),
+      '',
+    ];
+    renderer.render(loadingFrame);
 
+    // ─── STEP 3: Fetch first dataset (block until data arrives) ───
+    let initialRows: MarketRow[];
     try {
-      const initialRows = await fetchData();
-      renderTable(initialRows);
+      initialRows = await fetchData();
     } catch {
       console.log(chalk.red('  Failed to fetch market data.'));
+      // Restore input state before returning
+      if (process.stdin.isTTY) {
+        process.stdin.setRawMode(wasRaw ?? false);
+      }
+      this.rl.resume();
       return;
     }
 
-    // ─── Refresh loop ──────────────────────────────────────────────
+    // ─── STEP 4: Render initial frame (with data) ─────────────────
+    renderer.clear();
+    const initialFrame = buildFrame(initialRows);
+    renderer.render(initialFrame);
+
+    // ─── STEP 5: Start refresh loop ──────────────────────────────
     let refreshInProgress = false;
     const interval = setInterval(async () => {
       if (!running || refreshInProgress) return;
       refreshInProgress = true;
       try {
         const rows = await fetchData();
-        if (running) renderTable(rows);
+        if (!running) return;
+        const frame = buildFrame(rows);
+        // Skip render if nothing changed (diff check)
+        if (renderer.hasChanged(frame)) {
+          renderer.render(frame);
+        }
       } catch {
         // Skip failed refresh — keep last good render
       } finally {
@@ -2278,34 +2301,32 @@ export class FlashTerminal {
       }
     }, REFRESH_MS);
 
-    // ─── Exit on 'q' keypress ──────────────────────────────────────
+    // ─── STEP 6: Exit on 'q' keypress ────────────────────────────
     await new Promise<void>((resolve) => {
-      this.rl.pause();
-
-      const wasRaw = process.stdin.isRaw;
-      if (process.stdin.isTTY) {
-        process.stdin.setRawMode(true);
-      }
-      process.stdin.resume();
-
       const onKey = (buf: Buffer) => {
         const key = buf.toString();
-        // Only exit on 'q' or Ctrl+C
         if (key !== 'q' && key !== 'Q' && key !== '\x03') return;
 
+        // Remove listener FIRST to prevent double-fire
         process.stdin.removeListener('data', onKey);
         running = false;
         clearInterval(interval);
+
+        // Restore terminal state
         if (process.stdin.isTTY) {
           process.stdin.setRawMode(wasRaw ?? false);
         }
-        // Drain any buffered stdin before resuming readline
-        // This prevents stray keypresses from leaking into the CLI prompt
+
+        // Drain buffered stdin
         process.stdin.pause();
         process.stdin.resume();
+
+        // Clear screen and restore CLI
+        renderer.clear();
+        renderer.reset();
+
+        // Resume readline AFTER cleanup
         this.rl.resume();
-        // Clear screen and return to prompt
-        process.stdout.write('\x1Bc');
         resolve();
       };
 
