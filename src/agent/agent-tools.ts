@@ -11,13 +11,9 @@ import {
 } from '../types/index.js';
 import { SolanaInspector } from './solana-inspector.js';
 import { MarketScanner } from '../scanner/market-scanner.js';
-import { TradeAgent } from './agent-core.js';
-import { Autopilot } from '../automation/autopilot.js';
-import { DEFAULT_AUTOPILOT_CONFIG } from '../config/risk-config.js';
 import { computeMomentumSignal } from '../strategies/momentum.js';
 import { computeMeanReversionSignal } from '../strategies/mean-reversion.js';
 import { computeWhaleFollowSignal, WhaleActivity } from '../strategies/whale-follow.js';
-import { generateFallbackSuggestion } from '../ai/signal-aggregator.js';
 import { assessAllPositions } from '../risk/liquidation-risk.js';
 import { computeExposure } from '../risk/exposure.js';
 import { PortfolioManager } from '../portfolio/portfolio-manager.js';
@@ -262,140 +258,6 @@ export const aiAnalyze: ToolDefinition = {
   },
 };
 
-// ─── suggest trade ─────────────────────────────────────────────────────────────
-
-export const aiSuggestTrade: ToolDefinition = {
-  name: 'ai_suggest_trade',
-  description: 'Get an AI-powered trade suggestion (falls back to strategy engine)',
-  parameters: z.object({
-    market: z.string().optional(),
-  }),
-  execute: async (params: Record<string, unknown>, context: ToolContext): Promise<ToolResult> => {
-    const inspector = getInspector(context);
-    const apiKey = getAiApiKey();
-    const hasApiKey = apiKey && apiKey !== 'sk-ant-...';
-
-    const [markets, positions, openInterest, volume, recentActivity, openPositions] = await Promise.all([
-      inspector.getMarkets(),
-      inspector.getPositions(),
-      inspector.getOpenInterest(),
-      inspector.getVolume(),
-      inspector.getRecentActivity(),
-      inspector.getOpenPositions(),
-    ]);
-
-    const targetMarket = params.market ? String(params.market).toUpperCase() : undefined;
-    const relevantMarkets = targetMarket
-      ? markets.filter((m) => m.symbol.toUpperCase() === targetMarket)
-      : markets.slice(0, 5);
-
-    const signals: StrategySignal[] = [];
-    for (const m of relevantMarkets) {
-      signals.push(computeMomentumSignal({ market: m, volume }));
-      signals.push(computeMeanReversionSignal({ market: m, openInterest }));
-    }
-
-    // Normalize whale data for fallback
-    const whaleRecentActivity: WhaleActivity[] = recentActivity
-      .filter((a) => { const s = String(a.side ?? '').toLowerCase(); return s === 'long' || s === 'short'; })
-      .map((a) => ({
-        market: String(a.market_symbol ?? a.market ?? ''),
-        side: String(a.side),
-        sizeUsd: Number(a.size_usd ?? 0),
-        timestamp: Number(a.timestamp ?? Date.now()),
-      }));
-    const whaleOpenPositions: WhaleActivity[] = openPositions
-      .filter((p) => { const s = String(p.side ?? '').toLowerCase(); return s === 'long' || s === 'short'; })
-      .map((p) => ({
-        market: String(p.market_symbol ?? p.market ?? ''),
-        side: String(p.side),
-        sizeUsd: Number(p.size_usd ?? 0),
-        timestamp: Number(p.timestamp ?? Date.now()),
-      }));
-
-    const balance = context.flashClient.getBalance();
-    let suggestion;
-    let source: 'ai' | 'strategy_engine' = 'ai';
-
-    const groqKey = getGroqApiKey();
-    if (hasApiKey || groqKey) {
-      const agent = new TradeAgent(apiKey ?? '', groqKey);
-      suggestion = await agent.suggestTrade({
-        markets: relevantMarkets,
-        signals,
-        positions,
-        balance,
-        targetMarket,
-        volume,
-        openInterest,
-        whaleRecentActivity,
-        whaleOpenPositions,
-      });
-
-      // Detect if fallback was used
-      if (suggestion?.reasoning.startsWith('Strategy Engine fallback')) {
-        source = 'strategy_engine';
-      }
-    } else {
-      // No API key — use strategy engine directly
-      source = 'strategy_engine';
-      suggestion = generateFallbackSuggestion({
-        markets: relevantMarkets,
-        volume,
-        openInterest,
-        whaleRecentActivity,
-        whaleOpenPositions,
-        balance,
-        targetMarket,
-      });
-    }
-
-    if (!suggestion) {
-      return {
-        success: false,
-        message: [
-          '',
-          chalk.bold('  Trade Suggestion'),
-          chalk.dim('  ─────────────────────────────────────────'),
-          '',
-          chalk.dim('  No strong trade signal detected.'),
-          chalk.dim('  Market conditions are unclear or data is insufficient.'),
-          '',
-        ].join('\n'),
-      };
-    }
-
-    const sideColor = suggestion.side === 'long' ? chalk.green : chalk.red;
-
-    const lines = [
-      '',
-      chalk.bold('  Trade Suggestion'),
-      chalk.dim('  ─────────────────────────────────────────'),
-      '',
-      `  Market:      ${chalk.bold(suggestion.market)}`,
-      `  Direction:   ${sideColor(suggestion.side.toUpperCase())}`,
-      `  Leverage:    ${chalk.bold(suggestion.leverage + 'x')}`,
-      `  Collateral:  ${chalk.bold(formatUsd(suggestion.collateral))}`,
-      `  Confidence:  ${chalk.bold((suggestion.confidence * 100).toFixed(0) + '%')}`,
-      '',
-      chalk.bold('  Reasoning'),
-      `  ${suggestion.reasoning}`,
-      '',
-      chalk.bold('  Risks'),
-      ...suggestion.risks.map((r) => `  ${chalk.yellow('•')} ${r}`),
-      '',
-      chalk.dim(`  To execute: ${suggestion.side} ${suggestion.market} $${suggestion.collateral} ${suggestion.leverage}x`),
-      '',
-    ];
-
-    return {
-      success: true,
-      data: { suggestion },
-      message: lines.join('\n'),
-    };
-  },
-};
-
 // ─── risk report ───────────────────────────────────────────────────────────────
 
 export const aiRiskReport: ToolDefinition = {
@@ -617,15 +479,6 @@ export const aiDashboard: ToolDefinition = {
       }
     }
 
-    // ─── Autopilot (simulation only) ─────────────────────────────────
-    if (context.simulationMode) {
-      const autopilot = getAutopilot(context);
-      const apState = autopilot.state;
-      const apStatus = apState.active ? chalk.green.bold('ACTIVE') : chalk.gray('INACTIVE');
-      lines.push(`  Autopilot: ${apStatus}`);
-      lines.push('');
-    }
-
     return {
       success: true,
       data: {
@@ -799,114 +652,6 @@ export const aiScanMarkets: ToolDefinition = {
   },
 };
 
-// ─── Autopilot ─────────────────────────────────────────────────────────────────
-
-let autopilotInstance: Autopilot | null = null;
-
-export function getAutopilot(context: ToolContext): Autopilot {
-  if (!autopilotInstance) {
-    autopilotInstance = new Autopilot(context, DEFAULT_AUTOPILOT_CONFIG);
-  }
-  return autopilotInstance;
-}
-
-/** Returns the existing autopilot instance without creating one. Used for safe shutdown. */
-export function getAutopilotIfExists(): Autopilot | null {
-  return autopilotInstance;
-}
-
-export const autopilotStart: ToolDefinition = {
-  name: 'autopilot_start',
-  description: 'Start automated trading mode with strategy signals and risk controls',
-  parameters: z.object({}),
-  execute: async (_params: Record<string, unknown>, context: ToolContext): Promise<ToolResult> => {
-    // Guard: autopilot only allowed in simulation mode
-    if (!context.simulationMode) {
-      return {
-        success: false,
-        message: [
-          '',
-          chalk.red('  Autopilot disabled in LIVE mode.'),
-          chalk.dim('  Restart terminal and select Simulation to use autopilot.'),
-          '',
-        ].join('\n'),
-      };
-    }
-
-    const autopilot = getAutopilot(context);
-
-    autopilot.setLogHandler((msg) => {
-      console.log(msg);
-    });
-
-    autopilot.setTradeHandler(async (suggestion) => {
-      // Defense-in-depth: block autopilot trades if somehow running in live mode
-      if (!context.simulationMode) {
-        console.log(chalk.red(`  [Autopilot] BLOCKED — autopilot cannot execute trades in live mode`));
-        return;
-      }
-      try {
-        await context.flashClient.openPosition(
-          suggestion.market,
-          suggestion.side,
-          suggestion.collateral,
-          suggestion.leverage,
-        );
-        console.log(chalk.green(`  [Autopilot] Executed: ${suggestion.side} ${suggestion.market} $${suggestion.collateral} ${suggestion.leverage}x`));
-      } catch {
-        console.log(chalk.red(`  [Autopilot] Trade execution failed`));
-      }
-    });
-
-    const message = autopilot.start();
-    return { success: true, message };
-  },
-};
-
-export const autopilotStop: ToolDefinition = {
-  name: 'autopilot_stop',
-  description: 'Stop automated trading mode',
-  parameters: z.object({}),
-  execute: async (_params: Record<string, unknown>, context: ToolContext): Promise<ToolResult> => {
-    if (!context.simulationMode) {
-      return {
-        success: false,
-        message: [
-          '',
-          chalk.red('  Autopilot disabled in LIVE mode.'),
-          chalk.dim('  Restart terminal and select Simulation to use autopilot.'),
-          '',
-        ].join('\n'),
-      };
-    }
-    const autopilot = getAutopilot(context);
-    const message = autopilot.stop();
-    return { success: true, message };
-  },
-};
-
-export const autopilotStatus: ToolDefinition = {
-  name: 'autopilot_status',
-  description: 'Show current autopilot status, signals, and last suggestion',
-  parameters: z.object({}),
-  execute: async (_params: Record<string, unknown>, context: ToolContext): Promise<ToolResult> => {
-    if (!context.simulationMode) {
-      return {
-        success: false,
-        message: [
-          '',
-          chalk.red('  Autopilot disabled in LIVE mode.'),
-          chalk.dim('  Restart terminal and select Simulation to use autopilot.'),
-          '',
-        ].join('\n'),
-      };
-    }
-    const autopilot = getAutopilot(context);
-    const message = autopilot.getStatus();
-    return { success: true, message };
-  },
-};
-
 // ─── Portfolio Intelligence ──────────────────────────────────────────────────
 
 export const portfolioStateTool: ToolDefinition = {
@@ -1076,14 +821,10 @@ export const portfolioRebalanceTool: ToolDefinition = {
 
 export const allAgentTools: ToolDefinition[] = [
   aiAnalyze,
-  aiSuggestTrade,
   aiScanMarkets,
   aiRiskReport,
   aiDashboard,
   aiWhaleActivity,
-  autopilotStart,
-  autopilotStop,
-  autopilotStatus,
   portfolioStateTool,
   portfolioExposureTool,
   portfolioRebalanceTool,

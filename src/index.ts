@@ -9,9 +9,9 @@ import chalk from 'chalk';
 
 // Global error handlers — prevent crashes from leaking to the user
 // NOTE: unhandledRejection must NOT call process.exit() — background subsystems
-// (health monitor, reconciler, risk monitor) fire-and-forget promises that may
+// (health monitor, reconciler) fire-and-forget promises that may
 // reject during RPC outages. Crashing the terminal for a background task error
-// would bypass graceful shutdown (history save, autopilot stop, cleanup).
+// would bypass graceful shutdown (history save, cleanup).
 process.on('unhandledRejection', (reason) => {
   console.error(chalk.red(`\n  Unhandled async error: ${getErrorMessage(reason)}`));
   console.error(chalk.dim('  The terminal is still running. If this persists, restart with "exit".\n'));
@@ -24,7 +24,7 @@ process.on('uncaughtException', (err) => {
 
 // NOTE: SIGTERM is handled by FlashTerminal.start() once the terminal is
 // running. Registering it here would bypass the terminal's graceful shutdown
-// (autopilot stop, history save, monitor cleanup). For non-interactive
+// (history save, monitor cleanup). For non-interactive
 // commands (markets, stats, etc.), Node exits naturally when done.
 
 const program = new Command();

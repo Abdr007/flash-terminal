@@ -1588,35 +1588,6 @@ export const walletConnect: ToolDefinition = {
 
 // ─── Export all tools ────────────────────────────────────────────────────────
 
-// ─── Risk Monitor Commands ──────────────────────────────────────────────────
-
-export const riskMonitorOn: ToolDefinition = {
-  name: 'risk_monitor_on',
-  description: 'Start real-time position risk monitoring',
-  parameters: z.object({}),
-  execute: async (_params, context): Promise<ToolResult> => {
-    const { getRiskMonitor } = await import('../monitor/risk-monitor.js');
-    const monitor = getRiskMonitor(context.flashClient);
-    const msg = monitor.start();
-    return { success: true, message: msg };
-  },
-};
-
-export const riskMonitorOff: ToolDefinition = {
-  name: 'risk_monitor_off',
-  description: 'Stop real-time position risk monitoring',
-  parameters: z.object({}),
-  execute: async (_params): Promise<ToolResult> => {
-    const { getActiveRiskMonitor } = await import('../monitor/risk-monitor.js');
-    const monitor = getActiveRiskMonitor();
-    if (!monitor) {
-      return { success: true, message: chalk.yellow('  Risk monitor is not running.') };
-    }
-    const msg = monitor.stop();
-    return { success: true, message: msg };
-  },
-};
-
 // ─── Protocol Inspector Commands ────────────────────────────────────────────
 
 export const inspectProtocol: ToolDefinition = {
@@ -1826,8 +1797,6 @@ export const allFlashTools: ToolDefinition[] = [
   walletTokens,
   walletConnect,
   flashMarkets,
-  riskMonitorOn,
-  riskMonitorOff,
   inspectProtocol,
   inspectPool,
   inspectMarketTool,

@@ -35,13 +35,9 @@ Available actions:
 - flash_markets: List all available trading markets
 - help: Show help
 - analyze: Analyze a market with strategy signals
-- suggest_trade: Get AI trade suggestion
 - risk_report: Show position risk assessment
 - dashboard: Combined portfolio/market/stats view
 - whale_activity: Show recent large positions
-- autopilot_start: Start autopilot trading mode
-- autopilot_stop: Stop autopilot trading mode
-- autopilot_status: Show autopilot status
 - scan_markets: Scan all markets for trade opportunities
 - portfolio_state: Show portfolio capital allocation state
 - portfolio_exposure: Show portfolio exposure breakdown
@@ -72,15 +68,10 @@ Examples:
 - "wallet balance" -> {"action":"wallet_balance"}
 - "help" -> {"action":"help"}
 - "analyze SOL" -> {"action":"analyze","market":"SOL"}
-- "suggest trade" -> {"action":"suggest_trade"}
-- "suggest trade BTC" -> {"action":"suggest_trade","market":"BTC"}
 - "risk report" -> {"action":"risk_report"}
 - "dashboard" -> {"action":"dashboard"}
 - "whale activity" -> {"action":"whale_activity"}
 - "whale activity SOL" -> {"action":"whale_activity","market":"SOL"}
-- "autopilot start" -> {"action":"autopilot_start"}
-- "autopilot stop" -> {"action":"autopilot_stop"}
-- "autopilot status" -> {"action":"autopilot_status"}
 - "scan" -> {"action":"scan_markets"}
 - "scan markets" -> {"action":"scan_markets"}
 - "portfolio state" -> {"action":"portfolio_state"}
@@ -416,15 +407,6 @@ export function localParse(input: string): ParsedIntent | null {
     return { action: ActionType.Analyze, market: analyzeMatch[1].toUpperCase() };
   }
 
-  // Suggest trade: "suggest trade", "suggest trade SOL"
-  const suggestMatch = lower.match(/^suggest\s+trade(?:\s+([a-z]+))?$/);
-  if (suggestMatch) {
-    return {
-      action: ActionType.SuggestTrade,
-      ...(suggestMatch[1] ? { market: suggestMatch[1].toUpperCase() } : {}),
-    };
-  }
-
   // Risk report: "risk report", "risk"
   if (/^(risk report|risk)$/.test(lower)) {
     return { action: ActionType.RiskReport };
@@ -442,20 +424,6 @@ export function localParse(input: string): ParsedIntent | null {
       action: ActionType.WhaleActivity,
       ...(whaleMatch[1] ? { market: whaleMatch[1].toUpperCase() } : {}),
     };
-  }
-
-  // ─── Autopilot Commands ─────────────────────────────────────────────────
-
-  if (/^(?:autopilot\s+start|start\s+autopilot)$/.test(lower)) {
-    return { action: ActionType.AutopilotStart };
-  }
-
-  if (/^(?:autopilot\s+stop|stop\s+autopilot)$/.test(lower)) {
-    return { action: ActionType.AutopilotStop };
-  }
-
-  if (/^(?:autopilot\s+(?:status|info)|autopilot)$/.test(lower)) {
-    return { action: ActionType.AutopilotStatus };
   }
 
   // Market Scanner

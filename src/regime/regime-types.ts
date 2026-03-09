@@ -27,7 +27,7 @@ export interface RegimeState {
 
 /**
  * Strategy weight profile driven by the detected regime.
- * Used by signal-aggregator to modulate strategy contributions.
+ * Used to modulate strategy contributions based on detected regime.
  */
 export interface RegimeWeights {
   momentum: number;

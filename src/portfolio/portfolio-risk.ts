@@ -9,7 +9,7 @@ export interface PortfolioRiskCheck {
 
 /**
  * Comprehensive portfolio-level risk check for a proposed trade.
- * This runs on top of the existing autopilot risk-config checks.
+ * This runs on top of existing risk-config checks.
  *
  * Checks:
  * 1. Max positions (5)

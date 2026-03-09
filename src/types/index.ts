@@ -36,15 +36,9 @@ export enum ActionType {
 
   // AI Agent
   Analyze = 'analyze',
-  SuggestTrade = 'suggest_trade',
   RiskReport = 'risk_report',
   Dashboard = 'dashboard',
   WhaleActivity = 'whale_activity',
-
-  // Autopilot
-  AutopilotStart = 'autopilot_start',
-  AutopilotStop = 'autopilot_stop',
-  AutopilotStatus = 'autopilot_status',
 
   // Market Scanner
   ScanMarkets = 'scan_markets',
@@ -54,9 +48,6 @@ export enum ActionType {
   PortfolioExposure = 'portfolio_exposure',
   PortfolioRebalance = 'portfolio_rebalance',
 
-  // Risk Monitor
-  RiskMonitorOn = 'risk_monitor_on',
-  RiskMonitorOff = 'risk_monitor_off',
 
   // Protocol Inspector
   InspectProtocol = 'inspect_protocol',
@@ -208,11 +199,6 @@ export const AnalyzeSchema = z.object({
   market: z.string(),
 });
 
-export const SuggestTradeSchema = z.object({
-  action: z.literal(ActionType.SuggestTrade),
-  market: z.string().optional(),
-});
-
 export const RiskReportSchema = z.object({
   action: z.literal(ActionType.RiskReport),
 });
@@ -224,19 +210,6 @@ export const DashboardSchema = z.object({
 export const WhaleActivitySchema = z.object({
   action: z.literal(ActionType.WhaleActivity),
   market: z.string().optional(),
-});
-
-// Autopilot Schemas
-export const AutopilotStartSchema = z.object({
-  action: z.literal(ActionType.AutopilotStart),
-});
-
-export const AutopilotStopSchema = z.object({
-  action: z.literal(ActionType.AutopilotStop),
-});
-
-export const AutopilotStatusSchema = z.object({
-  action: z.literal(ActionType.AutopilotStatus),
 });
 
 // Market Scanner Schema
@@ -255,14 +228,6 @@ export const PortfolioExposureSchema = z.object({
 
 export const PortfolioRebalanceSchema = z.object({
   action: z.literal(ActionType.PortfolioRebalance),
-});
-
-export const RiskMonitorOnSchema = z.object({
-  action: z.literal(ActionType.RiskMonitorOn),
-});
-
-export const RiskMonitorOffSchema = z.object({
-  action: z.literal(ActionType.RiskMonitorOff),
 });
 
 export const InspectProtocolSchema = z.object({
@@ -335,19 +300,13 @@ export const ParsedIntentSchema = z.discriminatedUnion('action', [
   HelpSchema,
   FlashMarketsSchema,
   AnalyzeSchema,
-  SuggestTradeSchema,
   RiskReportSchema,
   DashboardSchema,
   WhaleActivitySchema,
-  AutopilotStartSchema,
-  AutopilotStopSchema,
-  AutopilotStatusSchema,
   ScanMarketsSchema,
   PortfolioStateSchema,
   PortfolioExposureSchema,
   PortfolioRebalanceSchema,
-  RiskMonitorOnSchema,
-  RiskMonitorOffSchema,
   InspectProtocolSchema,
   InspectPoolSchema,
   InspectMarketSchema,
@@ -526,15 +485,6 @@ export interface MarketAnalysis {
   summary: string;
 }
 
-export interface TradeSuggestion {
-  market: string;
-  side: TradeSide;
-  leverage: number;
-  collateral: number;
-  reasoning: string;
-  confidence: number; // 0-1
-  risks: string[];
-}
 
 export interface ExposureSummary {
   totalLongExposure: number;
@@ -545,35 +495,6 @@ export interface ExposureSummary {
   concentrationRisk: { market: string; percentage: number }[];
 }
 
-// ─── Autopilot Types ─────────────────────────────────────────────────────────
-
-export interface AutopilotConfig {
-  maxPositionSize: number;
-  maxExposure: number;
-  maxLeverage: number;
-  intervalMs: number;
-  markets: string[];
-}
-
-export interface AutopilotState {
-  active: boolean;
-  startedAt: number | null;
-  cycleCount: number;
-  lastCycleAt: number | null;
-  lastSuggestion: TradeSuggestion | null;
-  lastSignals: StrategySignal[];
-  lastSkipReason: string | null;
-}
-
-export interface AggregatedSignal {
-  market: string;
-  direction: TradeSide;
-  recommendedLeverage: number;
-  confidenceScore: number;
-  confidenceLabel: 'high' | 'medium' | 'low';
-  signalBreakdown: StrategySignal[];
-  source: 'ai' | 'strategy_engine';
-}
 
 // ─── Market Scanner Types ───────────────────────────────────────────────────
 
@@ -700,7 +621,6 @@ export interface ToolExecutionData {
   traderProfile?: TraderProfile;
   fees?: FeeData;
   analysis?: MarketAnalysis;
-  suggestion?: TradeSuggestion;
   riskAssessments?: RiskAssessment[];
   exposure?: ExposureSummary;
   opportunities?: Opportunity[];

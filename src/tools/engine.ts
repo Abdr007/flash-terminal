@@ -49,19 +49,6 @@ export class ToolEngine {
     const middlewareBlock = runMiddleware(intent, this.context);
     if (middlewareBlock) return middlewareBlock;
 
-    // Autopilot commands blocked in live mode
-    if (this.isAutopilotAction(intent.action) && !this.context.simulationMode) {
-      return {
-        success: false,
-        message: [
-          '',
-          theme.negative('  Autopilot disabled in LIVE mode.'),
-          theme.dim('  Restart terminal and select Simulation to use autopilot.'),
-          '',
-        ].join('\n'),
-      };
-    }
-
     const mapping = this.getToolMapping(intent);
     if (!mapping) {
       return this.handleHelp();
@@ -69,12 +56,6 @@ export class ToolEngine {
 
     const { toolName, params } = mapping;
     return this.registry.execute(toolName, params, this.context);
-  }
-
-  private isAutopilotAction(action: ActionType): boolean {
-    return action === ActionType.AutopilotStart
-      || action === ActionType.AutopilotStop
-      || action === ActionType.AutopilotStatus;
   }
 
   private getToolMapping(
@@ -217,12 +198,6 @@ export class ToolEngine {
           params: { market: intent.market },
         };
 
-      case ActionType.SuggestTrade:
-        return {
-          toolName: 'ai_suggest_trade',
-          params: { market: intent.market },
-        };
-
       case ActionType.RiskReport:
         return { toolName: 'ai_risk_report', params: {} };
 
@@ -234,19 +209,6 @@ export class ToolEngine {
           toolName: 'ai_whale_activity',
           params: { market: intent.market },
         };
-
-      // Autopilot — blocked in live mode
-      case ActionType.AutopilotStart:
-      case ActionType.AutopilotStop:
-      case ActionType.AutopilotStatus:
-        if (!this.context.simulationMode) {
-          return null; // Will be handled as blocked command
-        }
-        if (intent.action === ActionType.AutopilotStart)
-          return { toolName: 'autopilot_start', params: {} };
-        if (intent.action === ActionType.AutopilotStop)
-          return { toolName: 'autopilot_stop', params: {} };
-        return { toolName: 'autopilot_status', params: {} };
 
       // Market Scanner
       case ActionType.ScanMarkets:
@@ -261,13 +223,6 @@ export class ToolEngine {
 
       case ActionType.PortfolioRebalance:
         return { toolName: 'portfolio_rebalance', params: {} };
-
-      // Risk Monitor
-      case ActionType.RiskMonitorOn:
-        return { toolName: 'risk_monitor_on', params: {} };
-
-      case ActionType.RiskMonitorOff:
-        return { toolName: 'risk_monitor_off', params: {} };
 
       // Protocol Inspector
       case ActionType.InspectProtocol:
@@ -307,50 +262,44 @@ export class ToolEngine {
 
     const lines = [
       '',
-      `  ${theme.accentBold('FLASH AI TERMINAL')}  ${dim('— Commands')}`,
-      `  ${theme.separator(48)}`,
+      `  ${theme.accentBold('FLASH AI TERMINAL')}  ${dim('— Command Reference')}`,
+      `  ${theme.separator(52)}`,
       '',
+      // ── 1. Trading ──────────────────────────────────────────────
       `  ${sec('Trading')}`,
       `    ${cmd('open 5x long SOL $500')}     Open a leveraged position`,
       `    ${cmd('close SOL long')}            Close a position`,
       `    ${cmd('add $200 to SOL long')}      Add collateral to position`,
       `    ${cmd('remove $100 from ETH long')} Remove collateral`,
       `    ${cmd('positions')}                 View open positions`,
+      `    ${cmd('markets')}                   List available markets`,
       `    ${cmd('trade history')}              View recent trades`,
       '',
-      `  ${sec('Market Intelligence')}`,
-      `    ${cmd('scan')}                      Find trading opportunities`,
-      `    ${cmd('monitor')}                   Live market monitor`,
-      `    ${cmd('analyze <asset>')}            Deep analysis of a market`,
-      `    ${cmd('markets')}                   List available markets`,
-      `    ${cmd('suggest trade')}              AI trade suggestion`,
+      // ── 2. Market Data & Analytics ──────────────────────────────
+      `  ${sec('Market Data & Analytics')}`,
+      `    ${cmd('scan')}                      Scan markets for opportunities`,
+      `    ${cmd('analyze <asset>')}            Deep market analysis with signals`,
+      `    ${cmd('volume')}                    Protocol trading volume`,
+      `    ${cmd('open interest')}              OI breakdown by market`,
+      `    ${cmd('leaderboard')}               Top traders by PnL or volume`,
       `    ${cmd('whale activity')}             Recent large positions`,
+      `    ${cmd('fees')}                      Protocol fee data`,
       '',
+      // ── 3. Portfolio & Risk ─────────────────────────────────────
       `  ${sec('Portfolio & Risk')}`,
       `    ${cmd('portfolio')}                 Portfolio overview`,
       `    ${cmd('dashboard')}                 Full system dashboard`,
       `    ${cmd('risk report')}                Position risk assessment`,
-      `    ${cmd('risk monitor on')}            Start real-time risk alerts`,
-      `    ${cmd('risk monitor off')}           Stop risk monitoring`,
+      `    ${cmd('exposure')}                  Portfolio exposure breakdown`,
+      `    ${cmd('rebalance')}                 Portfolio rebalance analysis`,
       '',
-      `  ${sec('Market Data')}`,
-      `    ${cmd('volume')}                    Trading volume data`,
-      `    ${cmd('open interest')}              OI breakdown by market`,
-      `    ${cmd('leaderboard')}               Top traders by PnL or volume`,
+      // ── 4. Protocol Inspection ──────────────────────────────────
+      `  ${sec('Protocol Inspection')}`,
+      `    ${cmd('inspect protocol')}          Flash Trade protocol overview`,
+      `    ${cmd('inspect pool <name>')}       Inspect a specific pool`,
+      `    ${cmd('inspect market <asset>')}    Deep market inspection`,
       '',
-    ];
-
-    if (this.context.simulationMode) {
-      lines.push(
-        `  ${sec('Autopilot')} ${dim('(simulation only)')}`,
-        `    ${cmd('autopilot start')}          Start automated trading`,
-        `    ${cmd('autopilot stop')}           Stop autopilot`,
-        `    ${cmd('autopilot status')}         Autopilot status & signals`,
-        '',
-      );
-    }
-
-    lines.push(
+      // ── 5. Wallet ───────────────────────────────────────────────
       `  ${sec('Wallet')}`,
       `    ${cmd('wallet')}                    Wallet status`,
       `    ${cmd('wallet tokens')}             View all token balances`,
@@ -361,28 +310,26 @@ export class ToolEngine {
       `    ${cmd('wallet connect <path>')}     Connect wallet file`,
       `    ${cmd('wallet disconnect')}         Disconnect active wallet`,
       '',
-      `  ${sec('Protocol Inspector')}`,
-      `    ${cmd('inspect protocol')}          Flash Trade protocol overview`,
-      `    ${cmd('inspect pool <name>')}       Inspect a specific pool`,
-      `    ${cmd('inspect market <asset>')}    Deep market inspection`,
-      '',
-      `  ${sec('System')}`,
+      // ── 6. Utilities ────────────────────────────────────────────
+      `  ${sec('Utilities')}`,
+      `    ${cmd('dryrun <command>')}          Preview trade without executing`,
+      `    ${cmd('monitor')}                   Live market monitor`,
+      `    ${cmd('watch <command>')}           Auto-refresh any command`,
       `    ${cmd('system status')}             System health overview`,
-      `    ${cmd('rpc status')}                Active RPC info`,
+      `    ${cmd('rpc status')}                Active RPC endpoint info`,
       `    ${cmd('rpc test')}                  Test all RPC endpoints`,
       `    ${cmd('tx inspect <sig>')}          Inspect a transaction`,
-      `    ${cmd('dryrun <command>')}          Preview without executing`,
-      `    ${cmd('doctor')}                  Run terminal diagnostic`,
-      `    ${cmd('watch <command>')}          Auto-refresh a command`,
-      `    ${cmd('degen')}                   Toggle degen mode (500x on SOL/BTC/ETH)`,
+      `    ${cmd('doctor')}                    Run terminal diagnostic`,
+      `    ${cmd('degen')}                     Toggle degen mode`,
       '',
-      `  ${theme.separator(48)}`,
+      `  ${theme.separator(52)}`,
+      `  ${cmd('help')}                        Show this reference`,
       `  ${cmd('exit')}                        Close the terminal`,
       '',
-      `  ${dim('You can also type natural language commands.')}`,
+      `  ${dim('Natural language is also supported.')}`,
       `  ${dim('Example: "what\'s the price of SOL?" or "show me BTC analysis"')}`,
       '',
-    );
+    ];
 
     return { success: true, message: lines.join('\n') };
   }

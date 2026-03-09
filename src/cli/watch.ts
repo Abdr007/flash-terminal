@@ -29,8 +29,6 @@ const BLOCKED_PREFIXES = [
   'wallet disconnect',
   'wallet use',
   'wallet remove',
-  'autopilot start',
-  'autopilot stop',
   'dryrun',
   'dry-run',
   'dry run',

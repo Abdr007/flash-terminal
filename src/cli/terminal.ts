@@ -14,7 +14,7 @@ import { getLastWallet, updateLastWallet } from '../wallet/session.js';
 import { shortAddress } from '../utils/format.js';
 import { getErrorMessage } from '../utils/retry.js';
 import { initLogger, getLogger } from '../utils/logger.js';
-import { getAutopilot, setAiApiKey, getInspector, getScanner, getRegimeDetector } from '../agent/agent-tools.js';
+import { setAiApiKey, getInspector, getScanner, getRegimeDetector } from '../agent/agent-tools.js';
 import { formatUsd, formatPrice, colorPercent } from '../utils/format.js';
 import { MarketRegime } from '../regime/regime-types.js';
 import { initSigningGuard } from '../security/signing-guard.js';
@@ -93,10 +93,6 @@ const FAST_DISPATCH: Record<string, ParsedIntent> = {
   'exposure':    { action: ActionType.PortfolioExposure },
   'risk report':     { action: ActionType.RiskReport },
   'whale activity':  { action: ActionType.WhaleActivity },
-  'suggest trade':   { action: ActionType.SuggestTrade },
-  'autopilot start': { action: ActionType.AutopilotStart },
-  'autopilot stop':  { action: ActionType.AutopilotStop },
-  'autopilot status': { action: ActionType.AutopilotStatus },
   'wallet tokens':   { action: ActionType.WalletTokens },
   'wallet':          { action: ActionType.WalletStatus },
   'wallet list':     { action: ActionType.WalletList },
@@ -107,13 +103,10 @@ const FAST_DISPATCH: Record<string, ParsedIntent> = {
   'open interest':     { action: ActionType.GetOpenInterest },
   'oi':                { action: ActionType.GetOpenInterest },
   'whales':            { action: ActionType.WhaleActivity },
-  'autopilot':         { action: ActionType.AutopilotStatus },
   'portfolio state':   { action: ActionType.PortfolioState },
   'portfolio exposure': { action: ActionType.PortfolioExposure },
   'portfolio rebalance': { action: ActionType.PortfolioRebalance },
   'capital':           { action: ActionType.PortfolioState },
-  'risk monitor on':   { action: ActionType.RiskMonitorOn },
-  'risk monitor off':  { action: ActionType.RiskMonitorOff },
   'inspect protocol':  { action: ActionType.InspectProtocol },
   'inspect':           { action: ActionType.InspectProtocol },
   'system status':     { action: ActionType.SystemStatus },
@@ -176,8 +169,6 @@ export class FlashTerminal {
   private processingWarnShown = false;
   /** Buffer for input received while processing (e.g. pre-typed "y" for confirmation) */
   private bufferedLine: string | null = null;
-  /** Cleanup callback for risk monitor on shutdown */
-  private riskMonitorCleanup: (() => void) | null = null;
   /** RPC manager for failover support */
   private rpcManager!: RpcManager;
   /** Live status bar */
@@ -384,14 +375,6 @@ export class FlashTerminal {
         // Plugin loading is non-critical
       }
     }
-
-    // Register risk monitor cleanup
-    this.riskMonitorCleanup = () => {
-      import('../monitor/risk-monitor.js').then(({ getActiveRiskMonitor }) => {
-        const m = getActiveRiskMonitor();
-        if (m?.active) m.stop();
-      }).catch(() => {});
-    };
 
     // Set prompt based on mode
     this.updatePrompt();
@@ -1288,17 +1271,6 @@ export class FlashTerminal {
    * Mode stays locked — only disables trading capability.
    */
   private handleWalletDisconnected(): void {
-    // Stop autopilot if running
-    try {
-      const autopilot = getAutopilot(this.context);
-      if (autopilot.state.active) {
-        autopilot.stop();
-        console.log(chalk.yellow('  Autopilot stopped due to wallet disconnect.'));
-      }
-    } catch {
-      // No autopilot instance — fine
-    }
-
     // Do NOT change mode — mode is locked for the session
     // Trading commands will fail naturally since wallet is disconnected
   }
@@ -1397,17 +1369,6 @@ export class FlashTerminal {
     this.saveHistory();
     try {
       if (this.statusBar) this.statusBar.stop();
-    } catch {
-      // Best-effort cleanup
-    }
-    try {
-      const autopilot = getAutopilot(this.context);
-      if (autopilot.state.active) autopilot.stop();
-    } catch {
-      // Best-effort cleanup
-    }
-    try {
-      if (this.riskMonitorCleanup) this.riskMonitorCleanup();
     } catch {
       // Best-effort cleanup
     }

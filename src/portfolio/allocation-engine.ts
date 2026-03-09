@@ -3,8 +3,7 @@ import { checkCorrelation } from './correlation.js';
 
 /**
  * Portfolio allocation limits.
- * These are tighter than the risk-config autopilot limits —
- * they enforce portfolio-level diversification on top of per-trade safety.
+ * These enforce portfolio-level diversification on top of per-trade safety.
  */
 export const ALLOCATION_LIMITS = {
   /** Max 20% of total capital in a single position */
@@ -35,7 +34,7 @@ export interface AllocationRejectReason {
  *
  * Formula:
  *   capitalForTrade = min(freeCapital * 0.25, totalCapital * MAX_POSITION_ALLOCATION)
- *   clamp to [10, risk-config maxPositionSize]
+ *   clamp to [10, config maxPositionSize]
  */
 export function computeAllocation(
   totalCapital: number,
