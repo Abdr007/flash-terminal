@@ -5,7 +5,7 @@ import { getAllMarkets } from '../config/index.js';
 import { getLogger } from '../utils/logger.js';
 import { getErrorMessage } from '../utils/retry.js';
 
-const SYSTEM_PROMPT = `You are the Flash AI Terminal intent parser. You convert natural language trading commands into structured JSON actions.
+const SYSTEM_PROMPT = `You are the Flash Terminal intent parser. You convert natural language trading commands into structured JSON actions.
 
 You MUST respond with ONLY a valid JSON object. No explanations, no markdown, no extra text.
 

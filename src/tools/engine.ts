@@ -275,7 +275,7 @@ export class ToolEngine {
 
     const lines = [
       '',
-      `  ${theme.accentBold('FLASH AI TERMINAL')}  ${dim('— Command Reference')}`,
+      `  ${theme.accentBold('FLASH TERMINAL')}  ${dim('— Command Reference')}`,
       `  ${theme.separator(52)}`,
       '',
       // ── 1. Trading ──────────────────────────────────────────────

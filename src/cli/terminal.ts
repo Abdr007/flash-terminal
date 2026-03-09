@@ -477,10 +477,10 @@ export class FlashTerminal {
 
   private async showModeSelection(): Promise<'live' | 'simulation' | 'exit'> {
     console.log('');
-    console.log(`  ${theme.accentBold('FLASH AI TERMINAL')}`);
+    console.log(`  ${theme.accentBold('FLASH TERMINAL')}`);
     console.log(`  ${theme.separator(32)}`);
     console.log('');
-    console.log(theme.dim('  AI Trading Interface for Flash Trade'));
+    console.log(theme.dim('  Trading Interface for Flash Trade'));
     console.log('');
     console.log(theme.dim('  Real-time market intelligence and trading tools'));
     console.log(theme.dim('  powered by live blockchain data.'));
@@ -774,7 +774,7 @@ export class FlashTerminal {
 
   private showSimulationBanner(): void {
     console.log('');
-    console.log(chalk.yellow.bold('  ⚡ FLASH AI TERMINAL ⚡'));
+    console.log(chalk.yellow.bold('  ⚡ FLASH TERMINAL ⚡'));
     console.log(chalk.yellow('  ━━━━━━━━━━━━━━━━━━━━━━━━'));
     console.log('');
     console.log(chalk.bgYellow.black(' SIMULATION MODE '));
@@ -789,7 +789,7 @@ export class FlashTerminal {
 
   private async showLiveBanner(walletName: string): Promise<void> {
     console.log('');
-    console.log(chalk.red.bold('  ⚡ FLASH AI TERMINAL ⚡'));
+    console.log(chalk.red.bold('  ⚡ FLASH TERMINAL ⚡'));
     console.log(chalk.red('  ━━━━━━━━━━━━━━━━━━━━━━━━'));
     console.log('');
     console.log(chalk.bgRed.white.bold(' LIVE TRADING MODE '));
@@ -844,7 +844,7 @@ export class FlashTerminal {
 
     // Header
     console.log('');
-    console.log(`  ${theme.accentBold('FLASH AI TERMINAL')}`);
+    console.log(`  ${theme.accentBold('FLASH TERMINAL')}`);
     console.log(`  ${theme.separator(32)}`);
     console.log('');
     console.log(`  ${modeBg(modeLabel)}`);

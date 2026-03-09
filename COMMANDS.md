@@ -1,6 +1,6 @@
-# Flash AI Terminal — Command Reference
+# Flash Terminal — Command Reference
 
-Flash AI Terminal is a deterministic protocol interaction tool for Flash Trade on Solana.
+Flash Terminal is a deterministic protocol interaction tool for Flash Trade on Solana.
 
 Every command operates on **live blockchain data**. There are no predictions, no automated strategies, and no AI-driven trade execution. The terminal provides transparent access to protocol state, market data, and trade execution — nothing more.
 

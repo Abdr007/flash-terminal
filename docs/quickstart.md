@@ -1,14 +1,14 @@
 # Quick Start Guide
 
-Get running with Flash AI Terminal in under 5 minutes.
+Get running with Flash Terminal in under 5 minutes.
 
 ---
 
 ## 1. Install
 
 ```bash
-git clone https://github.com/Abdr007/flash-ai-terminal.git
-cd flash-ai-terminal
+git clone https://github.com/Abdr007/flash-terminal.git
+cd flash-terminal
 npm install
 npm run build
 npm link

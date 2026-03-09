@@ -1,6 +1,6 @@
 # Security Policy
 
-Flash AI Terminal interacts with the Solana blockchain and manages cryptographic keys. Security is a core design priority.
+Flash Terminal interacts with the Solana blockchain and manages cryptographic keys. Security is a core design priority.
 
 ---
 
@@ -18,7 +18,7 @@ If you discover a security vulnerability, please report it responsibly.
    - Steps to reproduce the issue
    - Affected files or components
    - Any suggested fix, if you have one
-3. Use the subject line: `[SECURITY] Flash AI Terminal - <brief description>`
+3. Use the subject line: `[SECURITY] Flash Terminal - <brief description>`
 
 ### Response Timeline
 
@@ -100,7 +100,6 @@ API keys should only be set in `.env` files, never in shell history or command a
 ## Simulation Mode
 
 - `SIMULATION_MODE` defaults to `true` -- the system starts in paper trading mode
-- Autopilot trading is only available in simulation mode
 - Live mode requires explicit opt-in (`SIMULATION_MODE=false`)
 - Simulation and live modes are locked for the entire session once selected
 

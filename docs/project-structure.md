@@ -1,6 +1,6 @@
 # Project Structure
 
-Flash AI Terminal is organized into focused modules, each with a single responsibility.
+Flash Terminal is organized into focused modules, each with a single responsibility.
 
 ---
 
@@ -24,7 +24,7 @@ src/
 │
 ├── agent/
 │   ├── agent-core.ts        AI API client for trade reasoning
-│   ├── agent-tools.ts       AI-powered tools (analyze, scan, dashboard, autopilot)
+│   ├── agent-tools.ts       Analysis, scanner, dashboard tools
 │   └── solana-inspector.ts  Cached data aggregator with graceful degradation
 │
 ├── client/

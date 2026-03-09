@@ -1,7 +1,7 @@
 {
-  "name": "flash-ai-terminal",
+  "name": "flash-terminal",
   "version": "1.0.0",
-  "description": "AI-powered CLI interface for Flash Trade on Solana",
+  "description": "Professional CLI trading terminal for Flash Trade on Solana",
   "type": "module",
   "main": "dist/index.js",
   "bin": {
@@ -19,8 +19,8 @@
     "flash-trade",
     "solana",
     "perpetuals",
-    "ai",
     "cli",
+    "terminal",
     "trading"
   ],
   "engines": {

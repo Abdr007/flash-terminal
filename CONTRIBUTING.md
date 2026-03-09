@@ -1,4 +1,4 @@
-# Contributing to Flash AI Terminal
+# Contributing to Flash Terminal
 
 Thank you for your interest in contributing. This guide covers everything you need to get started.
 
@@ -14,8 +14,8 @@ Thank you for your interest in contributing. This guide covers everything you ne
 ## Setup
 
 ```bash
-git clone https://github.com/Abdr007/flash-ai-terminal.git
-cd flash-ai-terminal
+git clone https://github.com/Abdr007/flash-terminal.git
+cd flash-terminal
 npm install
 cp .env.example .env
 ```
@@ -100,7 +100,7 @@ The following areas require extra review and must be discussed in an issue befor
 - Transaction pipeline (`src/client/flash-client.ts`)
 - Signing security (`src/security/signing-guard.ts`)
 - Wallet management (`src/wallet/`)
-- Risk limits (`src/config/risk-config.ts`)
+- Risk limits (`src/security/signing-guard.ts`)
 - Execution middleware (`src/core/execution-middleware.ts`)
 
 ---

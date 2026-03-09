@@ -1,6 +1,6 @@
 # Architecture
 
-Flash AI Terminal is a layered system that transforms natural language commands into executed trades on the Solana blockchain through Flash Trade smart contracts.
+Flash Terminal is a layered system that transforms natural language commands into executed trades on the Solana blockchain through Flash Trade smart contracts.
 
 ---
 

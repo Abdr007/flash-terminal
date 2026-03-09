@@ -1,14 +1,14 @@
-# Flash AI Terminal -- Technical Overview
+# Flash Terminal -- Technical Overview
 
 **Version:** 1.0.0
 **License:** MIT
-**Repository:** https://github.com/Abdr007/flash-ai-terminal
+**Repository:** https://github.com/Abdr007/flash-terminal
 
 ---
 
 ## Project Summary
 
-Flash AI Terminal is a command-line trading interface for the Flash Trade perpetual futures protocol on Solana. It provides on-chain trade execution, AI-powered natural language command parsing, multi-strategy market scanning, real-time liquidation risk monitoring, and protocol state inspection through a single CLI tool. The system operates in two modes: simulation (paper trading against live prices with a virtual balance) and live (signing and submitting real Solana transactions via the Flash SDK). All market data is sourced live from Pyth oracles, CoinGecko, and fstats.io. The terminal covers 8 Flash Trade pools spanning crypto majors, governance tokens, community tokens, commodities, forex, and tokenized equities.
+Flash Terminal is a command-line trading interface for the Flash Trade perpetual futures protocol on Solana. It provides on-chain trade execution, natural language command parsing, multi-strategy market scanning, real-time liquidation risk monitoring, and protocol state inspection through a single CLI tool. The system operates in two modes: simulation (paper trading against live prices with a virtual balance) and live (signing and submitting real Solana transactions via the Flash SDK). All market data is sourced live from Pyth oracles, CoinGecko, and fstats.io. The terminal covers 8 Flash Trade pools spanning crypto majors, governance tokens, community tokens, commodities, forex, and tokenized equities.
 
 ---
 
@@ -143,17 +143,17 @@ CLI REPL (readline)
 
 ## Message to Flash Trade Developers
 
-Subject: Flash AI Terminal -- CLI Trading Interface for Flash Trade
+Subject: Flash Terminal -- CLI Trading Interface for Flash Trade
 
 To the Flash Trade team,
 
-I am sharing Flash AI Terminal, an open-source command-line trading interface built on top of the Flash Trade protocol.
+I am sharing Flash Terminal, an open-source command-line trading interface built on top of the Flash Trade protocol.
 
 The project provides on-chain trade execution (open, close, add/remove collateral), multi-strategy market scanning, real-time liquidation risk monitoring, and protocol state inspection -- all from a terminal. It operates in both simulation and live modes, with live mode signing and submitting real transactions via the Flash SDK.
 
 The codebase is TypeScript (strict mode, ESM), MIT-licensed, and includes full documentation: architecture guide, security policy, contributing guidelines, and environment configuration.
 
-Repository: https://github.com/Abdr007/flash-ai-terminal
+Repository: https://github.com/Abdr007/flash-terminal
 
 I would welcome any feedback on the integration approach, particularly around transaction construction, position lifecycle management, and pool/market resolution. If there are aspects of the Flash SDK or protocol that could be used more effectively, I am interested in hearing about them.
 

@@ -30,7 +30,7 @@ process.on('uncaughtException', (err) => {
 const program = new Command();
 
 const versionString = [
-  `Flash AI Terminal v${BUILD_INFO.version}`,
+  `Flash Terminal v${BUILD_INFO.version}`,
   `Commit: ${BUILD_INFO.gitHash}`,
   `Branch: ${BUILD_INFO.branch}`,
   `Built:  ${BUILD_INFO.buildDate}`,
@@ -38,13 +38,13 @@ const versionString = [
 
 program
   .name('flash')
-  .description('Flash AI Terminal — AI-powered CLI for Flash Trade on Solana')
+  .description('Flash Terminal — CLI for Flash Trade on Solana')
   .version(versionString, '-v, --version');
 
 // Default command: launch the interactive terminal
 program
   .command('start', { isDefault: true })
-  .description('Start the interactive Flash AI Terminal')
+  .description('Start the interactive Flash Terminal')
   .option('-p, --pool <name>', 'Default pool name')
   .option('--rpc <url>', 'Solana RPC URL')
   .option('--no-plugins', 'Disable plugin loading')
@@ -136,7 +136,7 @@ program
     const config = loadConfig();
 
     console.log('');
-    console.log(chalk.bold('  FLASH AI TERMINAL DIAGNOSTICS'));
+    console.log(chalk.bold('  FLASH TERMINAL DIAGNOSTICS'));
     console.log(chalk.yellow('  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'));
     console.log('');
 

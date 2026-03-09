@@ -2,7 +2,7 @@
 
 ## System Overview
 
-Flash AI Terminal is a CLI-based trading interface for the Flash Trade perpetual futures protocol on Solana. It combines an AI-powered command interpreter, a structured tool engine, real-time risk monitoring, and on-chain state reconciliation.
+Flash Terminal is a CLI-based trading interface for the Flash Trade perpetual futures protocol on Solana. It combines an a structured command interpreter, a tool engine, real-time risk monitoring, and on-chain state reconciliation.
 
 ## Command Flow
 
@@ -28,7 +28,7 @@ FlashTerminal (REPL)
       ToolEngine.dispatch()
             |
             +-- flash-tools (trading, wallet, market data)
-            +-- agent-tools (analysis, scanner, autopilot, dashboard)
+            +-- agent-tools (analysis, scanner, dashboard)
             +-- plugin tools (dynamically loaded at startup)
             |
             v
@@ -139,7 +139,7 @@ src/
     registry.ts         Tool registration and execution
     flash-tools.ts      Trading, wallet, market data tools
   agent/
-    agent-tools.ts      AI analysis, scanner, autopilot, dashboard
+    agent-tools.ts      Analysis, scanner, dashboard
   client/
     flash-client.ts     Live trading via Flash SDK
     simulation.ts       Paper trading client (in-memory)

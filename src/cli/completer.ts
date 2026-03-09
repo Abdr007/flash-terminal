@@ -4,7 +4,7 @@ import { theme } from './theme.js';
 
 // ─── CLI Autocomplete & Suggestion Engine ────────────────────────────────────
 //
-// Deterministic command completion for the Flash AI Terminal.
+// Deterministic command completion for the Flash Terminal.
 //
 // Design constraints:
 //   • No RPC calls — uses only static command list + cached data

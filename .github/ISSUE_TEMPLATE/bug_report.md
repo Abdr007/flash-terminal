@@ -31,7 +31,7 @@ What actually happened. Include the full error message or terminal output.
 - **OS:** (macOS / Linux / Windows)
 - **Mode:** Simulation / Live
 - **RPC provider:** (public / Helius / Triton / other)
-- **Flash AI Terminal version:** (run `npm ls flash-ai-terminal` or check `package.json`)
+- **Flash Terminal version:** (run `npm ls flash-terminal` or check `package.json`)
 
 ## Logs
 
