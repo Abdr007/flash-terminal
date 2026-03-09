@@ -26,6 +26,7 @@ import { getSigningGuard, SigningAuditEntry } from '../security/signing-guard.js
 import { updateLastWallet, clearLastWallet } from '../wallet/session.js';
 import chalk from 'chalk';
 import { theme } from '../cli/theme.js';
+import { resolveMarket } from '../utils/market-resolver.js';
 
 // ─── Risk Preview Helpers ───────────────────────────────────────────────────
 
@@ -844,7 +845,8 @@ export const flashGetMarketData: ToolDefinition = {
     market: z.string().optional(),
   }),
   execute: async (params, context): Promise<ToolResult> => {
-    const { market } = params as { market?: string };
+    const { market: rawMarket } = params as { market?: string };
+    const market = rawMarket ? resolveMarket(rawMarket) : undefined;
     const markets = await context.flashClient.getMarketData(market);
     if (markets.length === 0) {
       return { success: true, message: theme.dim('\n  Market data unavailable. Try again later.\n') };
@@ -1096,14 +1098,48 @@ export const flashGetFees: ToolDefinition = {
       const days = period ?? 30;
       const fees = await context.dataClient.getFees(days);
 
+      const lines = [
+        theme.titleBlock(`PROTOCOL FEES (${fees.period})`),
+        '',
+        theme.pair('Total Fees', formatUsd(fees.totalFees)),
+      ];
+
+      // Fee distribution breakdown (from latest day)
+      const totalDistribution = fees.lpShare + fees.tokenShare + fees.teamShare;
+      if (totalDistribution > 0) {
+        lines.push('');
+        lines.push(`  ${theme.section('Fee Distribution (latest day)')}`);
+        lines.push(theme.pair('LP Share', formatUsd(fees.lpShare)));
+        lines.push(theme.pair('Token Share', formatUsd(fees.tokenShare)));
+        lines.push(theme.pair('Team Share', formatUsd(fees.teamShare)));
+      }
+
+      // Daily trend (last 7 days if available)
+      if (fees.dailyFees.length > 1) {
+        const recent = fees.dailyFees.slice(-7);
+        const avg = recent.reduce((s, d) => s + d.totalFees, 0) / recent.length;
+        lines.push('');
+        lines.push(`  ${theme.section('Daily Trend')}`);
+        lines.push(theme.pair(`${recent.length}d Avg`, formatUsd(avg)));
+
+        // Show last 7 days
+        for (const d of recent) {
+          const dateStr = d.date.length >= 10 ? d.date.slice(5, 10) : d.date;
+          lines.push(`    ${theme.dim(dateStr)}  ${formatUsd(d.totalFees)}`);
+        }
+      }
+
+      // Trading fee rate info
+      lines.push('');
+      lines.push(`  ${theme.section('Trading Fee Rate')}`);
+      lines.push(theme.pair('Open/Close', '0.08% of position size'));
+      lines.push(theme.pair('Note', theme.dim('Fees are deducted from collateral at execution')));
+
+      lines.push('');
+
       return {
         success: true,
-        message: [
-          theme.titleBlock(`FEES (${fees.period})`),
-          '',
-          theme.pair('Total Fees', formatUsd(fees.totalFees)),
-          '',
-        ].join('\n'),
+        message: lines.join('\n'),
         data: { fees },
       };
     } catch (error: unknown) {
@@ -1683,10 +1719,11 @@ export const inspectMarketTool: ToolDefinition = {
   description: 'Deep-inspect a specific market',
   parameters: z.object({ market: z.string().optional() }),
   execute: async (params): Promise<ToolResult> => {
-    const { market } = params as { market?: string };
-    if (!market) {
+    const { market: rawMarket } = params as { market?: string };
+    if (!rawMarket) {
       return { success: false, message: chalk.red('  Usage: inspect market <asset>  (e.g. inspect market SOL)') };
     }
+    const market = resolveMarket(rawMarket);
     const { ProtocolInspector } = await import('../protocol/protocol-inspector.js');
     const inspector = new ProtocolInspector();
     const msg = await inspector.inspectMarket(market);
@@ -1879,7 +1916,7 @@ export const liquidationMapTool: ToolDefinition = {
   }),
   execute: async (params, context): Promise<ToolResult> => {
     try {
-      const marketFilter = params.market ? String(params.market).toUpperCase() : undefined;
+      const marketFilter = params.market ? resolveMarket(String(params.market)) : undefined;
       const [markets, oiData, whalePositions] = await Promise.all([
         context.flashClient.getMarketData(marketFilter),
         context.dataClient.getOpenInterest(),
@@ -2025,7 +2062,7 @@ export const fundingDashboardTool: ToolDefinition = {
   }),
   execute: async (params, context): Promise<ToolResult> => {
     try {
-      const marketFilter = params.market ? String(params.market).toUpperCase() : undefined;
+      const marketFilter = params.market ? resolveMarket(String(params.market)) : undefined;
       const markets = await context.flashClient.getMarketData(marketFilter);
 
       if (markets.length === 0) {
@@ -2135,7 +2172,7 @@ export const liquidityDepthTool: ToolDefinition = {
   }),
   execute: async (params, context): Promise<ToolResult> => {
     try {
-      const marketFilter = params.market ? String(params.market).toUpperCase() : undefined;
+      const marketFilter = params.market ? resolveMarket(String(params.market)) : undefined;
       const [markets, oiData] = await Promise.all([
         context.flashClient.getMarketData(marketFilter),
         context.dataClient.getOpenInterest(),

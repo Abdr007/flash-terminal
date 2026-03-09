@@ -43,7 +43,6 @@ Available actions:
 - funding_dashboard: Show funding rate data for a market
 - liquidity_depth: Show liquidity depth around current price
 - protocol_health: Show protocol health overview
-- scan_markets: Scan all markets for trade opportunities
 - portfolio_state: Show portfolio capital allocation state
 - portfolio_exposure: Show portfolio exposure breakdown
 - portfolio_rebalance: Analyze and suggest portfolio rebalancing
@@ -81,8 +80,6 @@ Examples:
 - "funding BTC" -> {"action":"funding_dashboard","market":"BTC"}
 - "depth ETH" -> {"action":"liquidity_depth","market":"ETH"}
 - "protocol health" -> {"action":"protocol_health"}
-- "scan" -> {"action":"scan_markets"}
-- "scan markets" -> {"action":"scan_markets"}
 - "portfolio state" -> {"action":"portfolio_state"}
 - "portfolio exposure" -> {"action":"portfolio_exposure"}
 - "exposure" -> {"action":"portfolio_exposure"}
@@ -470,10 +467,7 @@ export function localParse(input: string): ParsedIntent | null {
     return { action: ActionType.ProtocolHealth };
   }
 
-  // Market Scanner
-  if (/^(?:scan|scan\s+markets?|scan\s+opportunities?)$/.test(lower)) {
-    return { action: ActionType.ScanMarkets };
-  }
+  // scan command removed — CLI must not suggest trades
 
   // Trade History / Journal
   if (/^(?:trade\s+history|trades|journal|trade\s+journal|history)$/.test(lower)) {

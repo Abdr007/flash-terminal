@@ -210,10 +210,6 @@ export class ToolEngine {
           params: { market: intent.market },
         };
 
-      // Market Scanner
-      case ActionType.ScanMarkets:
-        return { toolName: 'ai_scan_markets', params: {} };
-
       // Portfolio Intelligence
       case ActionType.PortfolioState:
         return { toolName: 'portfolio_state', params: {} };
@@ -290,8 +286,7 @@ export class ToolEngine {
       '',
       // ── 2. Market Data & Analytics ──────────────────────────────
       `  ${sec('Market Data & Analytics')}`,
-      `    ${cmd('scan')}                      Scan markets for opportunities`,
-      `    ${cmd('analyze <asset>')}            Deep market analysis with signals`,
+      `    ${cmd('analyze <asset>')}            Deep market analysis`,
       `    ${cmd('volume')}                    Protocol trading volume`,
       `    ${cmd('open interest')}              OI breakdown by market`,
       `    ${cmd('leaderboard')}               Top traders by PnL or volume`,

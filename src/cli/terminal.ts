@@ -14,7 +14,7 @@ import { getLastWallet, updateLastWallet } from '../wallet/session.js';
 import { shortAddress } from '../utils/format.js';
 import { getErrorMessage } from '../utils/retry.js';
 import { initLogger, getLogger } from '../utils/logger.js';
-import { setAiApiKey, getInspector, getScanner, getRegimeDetector } from '../agent/agent-tools.js';
+import { setAiApiKey, getInspector, getRegimeDetector } from '../agent/agent-tools.js';
 import { formatUsd, formatPrice, colorPercent } from '../utils/format.js';
 import { MarketRegime } from '../regime/regime-types.js';
 import { initSigningGuard } from '../security/signing-guard.js';
@@ -71,7 +71,7 @@ const FAST_DISPATCH: Record<string, ParsedIntent> = {
   'dashboard':   { action: ActionType.Dashboard },
   'dash':        { action: ActionType.Dashboard },
   'risk':        { action: ActionType.RiskReport },
-  'scan':        { action: ActionType.ScanMarkets },
+  // scan command removed — CLI must not suggest trades
   'rebalance':   { action: ActionType.PortfolioRebalance },
   'exposure':    { action: ActionType.PortfolioExposure },
   'risk report':     { action: ActionType.RiskReport },
@@ -129,12 +129,6 @@ interface IntelligenceData {
   portfolioBalance: number;
   totalPnl: number;
   dominantRegime?: string;
-  opportunities?: {
-    market: string;
-    direction: string;
-    confidence: number;
-    regime?: string;
-  }[];
 }
 
 export class FlashTerminal {
@@ -887,7 +881,7 @@ export class FlashTerminal {
     // ─── Quick Start Hints ───────────────────────────────────────
     console.log(theme.section('  Quick Start'));
     console.log(`    ${theme.command('help')}           List all commands`);
-    console.log(`    ${theme.command('scan')}           Find trading opportunities`);
+    console.log(`    ${theme.command('dashboard')}      Protocol & portfolio overview`);
     console.log(`    ${theme.command('monitor')}        Live market monitoring`);
     console.log(`    ${theme.command('wallet tokens')}  View token balances`);
     console.log(`    ${theme.command('markets')}        View available markets`);
@@ -936,28 +930,11 @@ export class FlashTerminal {
       }
     }
 
-    // Top opportunities via scanner
-    try {
-      const scanner = getScanner(this.context);
-      const balance = this.flashClient.getBalance();
-      const opps = await scanner.scan(balance, 3);
-      if (opps.length > 0) {
-        data.opportunities = opps.map((o) => ({
-          market: o.market,
-          direction: o.direction,
-          confidence: o.confidence,
-          regime: o.regime,
-        }));
-      }
-    } catch {
-      // scanner is best-effort
-    }
-
     return data;
   }
 
   private renderIntelligence(intel: IntelligenceData): void {
-    console.log(chalk.bold('  Market Intelligence'));
+    console.log(chalk.bold('  Market Overview'));
     console.log(chalk.dim('  ─────────────────────────────────────────'));
     console.log('');
 
@@ -969,24 +946,7 @@ export class FlashTerminal {
     }
 
     // Coverage
-    console.log(`  Markets:   ${chalk.bold(String(intel.marketCount))} scanned`);
-    console.log('');
-
-    // Top Opportunities
-    if (intel.opportunities && intel.opportunities.length > 0) {
-      console.log(chalk.bold('  Top Opportunities'));
-      for (let i = 0; i < intel.opportunities.length; i++) {
-        const o = intel.opportunities[i];
-        const dir = o.direction === 'long'
-          ? chalk.green('LONG ')
-          : chalk.red('SHORT');
-        const conf = `${(o.confidence * 100).toFixed(0)}%`;
-        console.log(`    ${i + 1}. ${o.market.padEnd(6)} ${dir}  ${conf}`);
-      }
-    } else {
-      console.log(chalk.bold('  Top Opportunities'));
-      console.log(chalk.dim('    No clear signals detected.'));
-    }
+    console.log(`  Markets:   ${chalk.bold(String(intel.marketCount))} active`);
     console.log('');
 
     // Portfolio summary (only if positions exist)
@@ -1586,7 +1546,6 @@ export class FlashTerminal {
       console.log('');
       console.log(theme.section('  Try'));
       console.log(`    ${theme.command('help')}       List all commands`);
-      console.log(`    ${theme.command('scan')}       Find trading opportunities`);
       console.log(`    ${theme.command('markets')}    View available markets`);
       console.log(`    ${theme.command('positions')}  View open positions`);
       console.log(`    ${theme.command('monitor')}    Live market monitoring`);
