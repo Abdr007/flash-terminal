@@ -2037,12 +2037,33 @@ export class FlashTerminal {
     const MAX_EVENTS = 6;
     let recentEvents: MarketEvent[] = [];
 
+    // ─── Telemetry state ────────────────────────────────────────────
+    interface Telemetry {
+      rpcLatencyMs: number;
+      oracleLatencyMs: number;
+      slot: number;
+      slotLag: number;
+      renderTimeMs: number;
+    }
+    let telemetry: Telemetry = { rpcLatencyMs: -1, oracleLatencyMs: -1, slot: -1, slotLag: -1, renderTimeMs: 0 };
+
     const fetchData = async (): Promise<MarketRow[]> => {
       const now = Date.now();
+
+      // Measure oracle latency (prices) and fetch OI in parallel
+      const oracleStart = performance.now();
       const [priceMap, oi] = await Promise.all([
         priceSvc.getPrices(allSymbols).catch(() => new Map()),
         this.fstats.getOpenInterest().catch(() => ({ markets: [] })),
       ]);
+      telemetry.oracleLatencyMs = Math.round(performance.now() - oracleStart);
+
+      // Measure RPC latency + get slot (lightweight call)
+      if (this.rpcManager) {
+        telemetry.rpcLatencyMs = this.rpcManager.activeLatencyMs;
+        telemetry.slot = this.rpcManager.activeSlot;
+        telemetry.slotLag = this.rpcManager.activeSlotLag;
+      }
 
       const rows: MarketRow[] = [];
 
@@ -2167,13 +2188,31 @@ export class FlashTerminal {
     /** Build frame as array of lines (for diff-based rendering) */
     const buildFrame = (rows: MarketRow[]): string[] => {
       const now = new Date().toLocaleTimeString();
+
+      // ── Telemetry status bar ──
+      const rpcStr = telemetry.rpcLatencyMs >= 0
+        ? `RPC ${telemetry.rpcLatencyMs}ms`
+        : `RPC N/A`;
+      const oracleStr = telemetry.oracleLatencyMs >= 0
+        ? `Oracle ${telemetry.oracleLatencyMs}ms`
+        : `Oracle N/A`;
+      const slotStr = telemetry.slot >= 0
+        ? `Slot ${telemetry.slot}`
+        : `Slot N/A`;
+      const lagStr = telemetry.slotLag >= 0
+        ? `Lag ${telemetry.slotLag}`
+        : `Lag N/A`;
+      const renderStr = `Render ${telemetry.renderTimeMs}ms`;
+      const refreshStr = `Refresh ${REFRESH_MS / 1000}s`;
+
+      const telemetryLine = theme.dim(`  ${rpcStr}  |  ${oracleStr}  |  ${slotStr}  |  ${lagStr}  |  ${renderStr}  |  ${refreshStr}`);
+
       const lines: string[] = [
         '',
         `  ${theme.accentBold('FLASH TERMINAL')} ${theme.dim('—')} ${theme.accentBold('MARKET MONITOR')}`,
         '',
-        theme.dim(`  Time: ${now}`),
-        theme.dim(`  Refresh: ${REFRESH_MS / 1000}s`),
-        theme.dim(`  Press q to exit`),
+        telemetryLine,
+        theme.dim(`  ${now}  |  Press ${chalk.bold('q')} to exit`),
         '',
         `  ${theme.separator(72)}`,
         '',
@@ -2278,8 +2317,10 @@ export class FlashTerminal {
 
     // ─── STEP 4: Render initial frame (with data) ─────────────────
     renderer.clear();
+    const renderStart0 = performance.now();
     const initialFrame = buildFrame(initialRows);
     renderer.render(initialFrame);
+    telemetry.renderTimeMs = Math.round(performance.now() - renderStart0);
 
     // ─── STEP 5: Start refresh loop ──────────────────────────────
     let refreshInProgress = false;
@@ -2289,11 +2330,13 @@ export class FlashTerminal {
       try {
         const rows = await fetchData();
         if (!running) return;
+        const renderStart = performance.now();
         const frame = buildFrame(rows);
         // Skip render if nothing changed (diff check)
         if (renderer.hasChanged(frame)) {
           renderer.render(frame);
         }
+        telemetry.renderTimeMs = Math.round(performance.now() - renderStart);
       } catch {
         // Skip failed refresh — keep last good render
       } finally {

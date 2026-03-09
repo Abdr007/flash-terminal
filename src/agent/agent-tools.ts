@@ -356,27 +356,18 @@ export const aiDashboard: ToolDefinition = {
 
     // ─── Parallel data fetch ─────────────────────────────────────────
     // All sources fetched concurrently. Each has independent error handling.
-    const [snapshot, rpcInfo, slotResult] = await Promise.all([
+    const [snapshot, rpcInfo] = await Promise.all([
       inspector.getFullSnapshot(),
       (async () => {
         try {
           const { getRpcManagerInstance } = await import('../network/rpc-manager.js');
           const rpc = getRpcManagerInstance();
-          if (!rpc) return { latency: -1, label: 'Unknown', healthy: false, slot: -1 };
+          if (!rpc) return { latency: -1, label: 'Unknown', healthy: false, slot: -1, slotLag: -1 };
           const latency = rpc.activeLatencyMs;
           const label = rpc.activeEndpoint.label;
           const fr = rpc.getFailureRate(rpc.activeEndpoint.url);
-          return { latency, label, healthy: fr < 0.5, slot: -1 };
-        } catch { return { latency: -1, label: 'Unknown', healthy: false, slot: -1 }; }
-      })(),
-      (async () => {
-        try {
-          const { getRpcManagerInstance } = await import('../network/rpc-manager.js');
-          const rpc = getRpcManagerInstance();
-          if (!rpc) return -1;
-          const slot = await rpc.connection.getSlot('confirmed');
-          return Number.isFinite(slot) ? slot : -1;
-        } catch { return -1; }
+          return { latency, label, healthy: fr < 0.5, slot: rpc.activeSlot, slotLag: rpc.activeSlotLag };
+        } catch { return { latency: -1, label: 'Unknown', healthy: false, slot: -1, slotLag: -1 }; }
       })(),
     ]);
 
@@ -428,8 +419,12 @@ export const aiDashboard: ToolDefinition = {
     lines.push(boxLine(dashPair('RPC Latency:', rpcLatStr)));
 
     // Current Solana slot
-    const slotStr = slotResult > 0 ? slotResult.toLocaleString() : chalk.dim('N/A');
+    const slotStr = rpcInfo.slot > 0 ? rpcInfo.slot.toLocaleString() : chalk.dim('N/A');
     lines.push(boxLine(dashPair('Current Slot:', slotStr)));
+
+    // Slot lag
+    const slotLagStr = rpcInfo.slotLag >= 0 ? String(rpcInfo.slotLag) : chalk.dim('N/A');
+    lines.push(boxLine(dashPair('Slot Lag:', slotLagStr)));
 
     lines.push(boxBot());
     lines.push('');

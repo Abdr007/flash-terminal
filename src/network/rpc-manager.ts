@@ -88,6 +88,16 @@ export class RpcManager {
     return this.latencyHistory.get(this.activeEndpoint.url) ?? -1;
   }
 
+  /** Last known slot for the active endpoint, or -1 if unknown. */
+  get activeSlot(): number {
+    return this.slotHistory.get(this.activeEndpoint.url) ?? -1;
+  }
+
+  /** Slot lag for the active endpoint (0 = synced, -1 = unknown). */
+  get activeSlotLag(): number {
+    return this.getSlotLag(this.activeEndpoint.url);
+  }
+
   /**
    * Register a callback invoked whenever the active connection changes (failover).
    * Used by FlashClient to pick up the new connection automatically.

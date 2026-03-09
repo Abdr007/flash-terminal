@@ -1779,10 +1779,14 @@ export const protocolStatusTool: ToolDefinition = {
       const { getRpcManagerInstance } = await import('../network/rpc-manager.js');
       const mgr = getRpcManagerInstance();
       if (mgr) {
-        const slot = await mgr.connection.getSlot('confirmed');
+        const slot = mgr.activeSlot > 0 ? mgr.activeSlot : await mgr.connection.getSlot('confirmed');
         lines.push(`  RPC Slot:      ${chalk.green(slot.toLocaleString())}`);
         const active = mgr.activeEndpoint;
         lines.push(`  Active RPC:    ${chalk.cyan(active.label)}`);
+        const latency = mgr.activeLatencyMs;
+        lines.push(`  RPC Latency:   ${latency >= 0 ? chalk.green(`${latency}ms`) : chalk.dim('N/A')}`);
+        const lag = mgr.activeSlotLag;
+        lines.push(`  Slot Lag:      ${lag === 0 ? chalk.green('0') : lag > 0 ? chalk.yellow(String(lag)) : chalk.dim('N/A')}`);
       } else {
         lines.push(`  RPC Slot:      ${chalk.dim('not connected')}`);
       }
@@ -1790,15 +1794,17 @@ export const protocolStatusTool: ToolDefinition = {
       lines.push(`  RPC Slot:      ${chalk.red('error')}`);
     }
 
-    // 3. Oracle Health — ping Pyth Hermes
+    // 3. Oracle Health — ping Pyth Hermes with latency measurement
     try {
+      const oracleStart = performance.now();
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), 5_000);
       const resp = await fetch('https://hermes.pyth.network/api/latest_vaas?ids[]=0xef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d', {
         signal: controller.signal,
       });
       clearTimeout(timer);
-      lines.push(`  Oracle Health: ${resp.ok ? chalk.green('OK') : chalk.red(`HTTP ${resp.status}`)}`);
+      const oracleMs = Math.round(performance.now() - oracleStart);
+      lines.push(`  Oracle Health: ${resp.ok ? chalk.green(`OK (${oracleMs}ms)`) : chalk.red(`HTTP ${resp.status}`)}`);
     } catch {
       lines.push(`  Oracle Health: ${chalk.red('unreachable')}`);
     }
