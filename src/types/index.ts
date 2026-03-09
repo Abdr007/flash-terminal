@@ -66,11 +66,17 @@ export enum ActionType {
   RpcTest = 'rpc_test',
   TxInspect = 'tx_inspect',
 
+  // Transaction Debug
+  TxDebug = 'tx_debug',
+
   // Trade Journal
   TradeHistory = 'trade_history',
 
   // Market Monitor
   MarketMonitor = 'market_monitor',
+
+  // Protocol Status
+  ProtocolStatus = 'protocol_status',
 
   // Dry Run
   DryRun = 'dry_run',
@@ -286,12 +292,22 @@ export const TxInspectSchema = z.object({
   signature: z.string().optional(),
 });
 
+export const TxDebugSchema = z.object({
+  action: z.literal(ActionType.TxDebug),
+  signature: z.string().optional(),
+  showState: z.boolean().optional(),
+});
+
 export const TradeHistorySchema = z.object({
   action: z.literal(ActionType.TradeHistory),
 });
 
 export const MarketMonitorSchema = z.object({
   action: z.literal(ActionType.MarketMonitor),
+});
+
+export const ProtocolStatusSchema = z.object({
+  action: z.literal(ActionType.ProtocolStatus),
 });
 
 export const DryRunSchema = z.object({
@@ -343,8 +359,10 @@ export const ParsedIntentSchema = z.discriminatedUnion('action', [
   RpcStatusSchema,
   RpcTestSchema,
   TxInspectSchema,
+  TxDebugSchema,
   TradeHistorySchema,
   MarketMonitorSchema,
+  ProtocolStatusSchema,
   DryRunSchema,
 ]);
 
@@ -808,9 +826,10 @@ export function validateTrade(
   if (leverage >= 20) warnings.push(`High leverage (${leverage}x) — liquidation risk is significant`);
   if (leverage >= 50) warnings.push('Extreme leverage — small price moves can liquidate');
 
+  // Rough pre-trade estimate — actual liq distance computed by SDK post-trade
   const liqDistance = (1 / leverage) * 100;
   if (liqDistance < 5) {
-    warnings.push(`Liquidation within ${liqDistance.toFixed(1)}% price move`);
+    warnings.push(`~${liqDistance.toFixed(1)}% estimated distance to liquidation`);
   }
 
   if (collateral > balance * 0.5) {

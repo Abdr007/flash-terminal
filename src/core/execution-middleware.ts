@@ -53,6 +53,7 @@ const READ_ONLY_ALLOWED = new Set<ActionType>([
   ActionType.RpcStatus,
   ActionType.RpcTest,
   ActionType.TxInspect,
+  ActionType.ProtocolStatus,
   // Trade journal
   ActionType.TradeHistory,
   ActionType.MarketMonitor,

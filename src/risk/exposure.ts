@@ -23,8 +23,12 @@ export function computeExposure(portfolio: Portfolio): ExposureSummary {
   const netExposure = totalLongExposure - totalShortExposure;
   const totalExposure = totalLongExposure + totalShortExposure;
   const totalCollateral = Number.isFinite(portfolio.totalCollateralUsd) ? portfolio.totalCollateralUsd : 0;
-  const rawUtilization = totalCollateral > 0
-    ? (totalExposure / totalCollateral) * 100
+  // Utilization = what percentage of total portfolio value is deployed as collateral
+  // Uses usdcBalance (available capital) + totalCollateral (deployed capital) as denominator
+  const walletBalance = Number.isFinite(portfolio.usdcBalance) ? portfolio.usdcBalance! : 0;
+  const totalCapital = walletBalance + totalCollateral;
+  const rawUtilization = totalCapital > 0
+    ? (totalCollateral / totalCapital) * 100
     : 0;
   const collateralUtilization = Number.isFinite(rawUtilization) ? rawUtilization : 0;
 

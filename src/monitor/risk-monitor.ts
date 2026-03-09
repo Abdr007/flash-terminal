@@ -4,6 +4,7 @@ import { formatUsd, formatPrice, colorSide } from '../utils/format.js';
 import { getLogger } from '../utils/logger.js';
 import { getErrorMessage } from '../utils/retry.js';
 import { safeNumber } from '../utils/safe-math.js';
+import { computeSimulationLiquidationPrice } from '../utils/protocol-liq.js';
 
 // ─── Singleton Access ────────────────────────────────────────────────────────
 
@@ -321,11 +322,10 @@ export class RiskMonitor {
   }
 
   /**
-   * Estimate additional collateral needed to move liquidation price
-   * far enough to achieve TARGET_SAFE_DISTANCE.
-   *
-   * For a long: liqPrice ≈ entryPrice * (1 - 1/leverage * 0.9)
-   * Adding collateral reduces effective leverage → moves liq price lower.
+   * Estimate additional collateral needed to restore safe liquidation distance.
+   * NOTE: Uses an approximation for the search. Actual liquidation prices
+   * are computed by the Flash SDK using on-chain CustodyAccount parameters.
+   * Adding collateral reduces effective leverage → moves liq price further.
    *
    * Simplified: newLeverage = sizeUsd / (collateral + extra)
    *   target distance: abs(currentPrice - newLiqPrice) / entryPrice >= TARGET_SAFE_DISTANCE
@@ -347,14 +347,10 @@ export class RiskMonitor {
     for (let i = 0; i < BINARY_SEARCH_MAX_ITER; i++) {
       const mid = (lo + hi) / 2;
       const newCollateral = collateralUsd + mid;
-      const newLeverage = sizeUsd / newCollateral;
-      const liqDist = (1 / newLeverage) * 0.9;
-      let newLiqPrice: number;
-      if (pos.side === TradeSide.Long) {
-        newLiqPrice = entryPrice * (1 - liqDist);
-      } else {
-        newLiqPrice = entryPrice * (1 + liqDist);
-      }
+      // Use protocol-aligned liquidation formula (matches getLiquidationPriceContractHelper)
+      const newLiqPrice = computeSimulationLiquidationPrice(
+        entryPrice, sizeUsd, newCollateral, pos.side, 0.01, 0.0008,
+      );
       // Use entryPrice as denominator (consistent)
       const newDistance = Math.abs(currentPrice - newLiqPrice) / entryPrice;
       if (newDistance < TARGET_SAFE_DISTANCE) {

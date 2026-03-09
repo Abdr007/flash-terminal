@@ -23,6 +23,8 @@ import {
   humanizeSdkError,
 } from '../utils/format.js';
 import { getErrorMessage } from '../utils/retry.js';
+import { getProtocolFeeRates, calcFeeUsd } from '../utils/protocol-fees.js';
+import { computeSimulationLiquidationPrice } from '../utils/protocol-liq.js';
 import { getSigningGuard, SigningAuditEntry } from '../security/signing-guard.js';
 import { updateLastWallet, clearLastWallet } from '../wallet/session.js';
 import chalk from 'chalk';
@@ -47,13 +49,18 @@ function colorRisk(level: RiskLevel): string {
   }
 }
 
+/**
+ * Compute pre-trade liquidation estimate using the same formula as
+ * Flash SDK's getLiquidationPriceContractHelper().
+ *
+ * Uses protocol defaults: maintenanceMarginRate=1% (100 BPS), closeFee=0.08%.
+ * Live mode will use actual SDK call post-trade for exact values.
+ */
 function estimateLiqPrice(entryPrice: number, leverage: number, side: TradeSide): number {
   if (!Number.isFinite(entryPrice) || !Number.isFinite(leverage) || entryPrice <= 0 || leverage <= 0) return 0;
-  // Approximate: 90% of the 1/leverage distance (10% maintenance margin buffer)
-  const liqDist = (1 / leverage) * 0.9;
-  return side === TradeSide.Long
-    ? entryPrice * (1 - liqDist)
-    : entryPrice * (1 + liqDist);
+  const sizeUsd = 1; // normalized
+  const collateralUsd = sizeUsd / leverage;
+  return computeSimulationLiquidationPrice(entryPrice, sizeUsd, collateralUsd, side, 0.01, 0.0008);
 }
 
 /** Timeout helper — resolves to fallback if promise takes too long. */
@@ -170,6 +177,7 @@ function buildLiveTradeWarnings(market: string, leverage: number, collateral?: n
   if (leverage >= 20) warnings.push(`High leverage (${leverage}x) — liquidation risk is significant`);
   if (leverage >= 50) warnings.push('Extreme leverage — small price moves can liquidate');
 
+  // Rough pre-trade estimate — actual liq distance computed by SDK post-trade
   const liqDistance = (1 / leverage) * 100;
   if (liqDistance < 5) {
     warnings.push(`Liquidation within ${liqDistance.toFixed(1)}% price move`);
@@ -191,7 +199,7 @@ export const flashOpenPosition: ToolDefinition = {
     market: z.string(),
     side: z.nativeEnum(TradeSide),
     collateral: z.number().positive().max(10_000_000),
-    leverage: z.number().min(1).max(100),
+    leverage: z.number().min(1).max(500),  // Per-market protocol limits enforced below
     collateral_token: z.string().optional(),
   }),
   execute: async (params, context): Promise<ToolResult> => {
@@ -259,7 +267,12 @@ export const flashOpenPosition: ToolDefinition = {
     const isLive = !context.simulationMode;
     const guard = getSigningGuard();
     const walletAddr = context.walletAddress ?? 'unknown';
-    const estimatedFee = (sizeUsd * 8) / 10_000; // 0.08% Flash Trade fee
+
+    // Fetch fee rate from CustodyAccount via Flash SDK (cached, 60s TTL)
+    const perpClient = context.simulationMode ? null : (context.flashClient as any).perpClient ?? null;
+    const feeRates = await getProtocolFeeRates(market, perpClient);
+    const estimatedFeeRate = feeRates.openFeeRate;
+    const estimatedFee = calcFeeUsd(sizeUsd, estimatedFeeRate);
 
     // ── Signing Guard: Trade Limit Check ──
     const limitCheck = guard.checkTradeLimits({ collateral, leverage, sizeUsd, market });
@@ -299,7 +312,7 @@ export const flashOpenPosition: ToolDefinition = {
       `  Leverage:    ${chalk.bold(leverage + 'x')}`,
       `  Collateral:  ${chalk.bold(formatUsd(collateral))} ${chalk.dim('USDC')}`,
       `  Size:        ${chalk.bold(formatUsd(sizeUsd))}`,
-      `  Est. Fee:    ${chalk.dim(formatUsd(estimatedFee))}`,
+      `  Est. Fee:    ${chalk.dim('$' + estimatedFee.toFixed(4))}  ${chalk.dim(`(${(estimatedFeeRate * 100).toFixed(2)}%)`)}`,
       `  Wallet:      ${chalk.dim(walletAddr)}`,
     ];
 
@@ -359,20 +372,11 @@ export const flashOpenPosition: ToolDefinition = {
               ? result.txSignature
               : `https://solscan.io/tx/${result.txSignature}`;
 
-            // Compute liquidation price if not returned by SDK
-            let liqPrice = result.liquidationPrice;
-            if (!liqPrice || liqPrice <= 0) {
-              // Approximate: liqPrice = entryPrice * (1 ∓ 1/leverage * 0.9) for long/short
-              if (result.entryPrice > 0 && leverage > 0) {
-                const liqDist = (1 / leverage) * 0.9;
-                liqPrice = side === TradeSide.Long
-                  ? result.entryPrice * (1 - liqDist)
-                  : result.entryPrice * (1 + liqDist);
-              }
-            }
+            // Liquidation price from SDK (protocol math)
+            const liqPrice = result.liquidationPrice ?? 0;
 
-            // Estimate fee: 0.08% of position size (Flash Trade standard fee)
-            const estimatedFee = sizeUsd * 0.0008;
+            // Fee from protocol — use pre-trade estimate (actual fee captured in position.totalFees)
+            const executionFee = sizeUsd * estimatedFeeRate;
 
             // Log session trade
             if (context.sessionTrades) {
@@ -392,7 +396,7 @@ export const flashOpenPosition: ToolDefinition = {
                 `  Entry Price:       ${formatPrice(result.entryPrice)}`,
                 `  Size:              ${formatUsd(result.sizeUsd)}`,
                 `  Liquidation Price: ${liqPrice && liqPrice > 0 ? chalk.yellow(formatPrice(liqPrice)) : chalk.dim('N/A')}`,
-                `  Est. Fee:          ${chalk.dim(formatUsd(estimatedFee))}`,
+                `  Est. Fee:          ${chalk.dim(formatUsd(executionFee))}`,
                 `  TX: ${chalk.dim(txLink)}`,
                 '',
               ].join('\n'),
@@ -1133,7 +1137,7 @@ export const flashGetFees: ToolDefinition = {
       // Trading fee rate info
       lines.push('');
       lines.push(`  ${theme.section('Trading Fee Rate')}`);
-      lines.push(theme.pair('Open/Close', '0.08% of position size'));
+      lines.push(theme.pair('Source', 'On-chain CustodyAccount (per-market)'));
       lines.push(theme.pair('Note', theme.dim('Fees are deducted from collateral at execution')));
 
       lines.push('');
@@ -1749,6 +1753,98 @@ export const systemStatusTool: ToolDefinition = {
   },
 };
 
+export const protocolStatusTool: ToolDefinition = {
+  name: 'protocol_status',
+  description: 'Show protocol connection status overview',
+  parameters: z.object({}),
+  execute: async (_params, context): Promise<ToolResult> => {
+    const lines: string[] = [
+      '',
+      chalk.bold('  PROTOCOL STATUS'),
+      chalk.dim('  ────────────────────────────────────────'),
+      '',
+    ];
+
+    // 1. Program ID
+    try {
+      const { PoolConfig } = await import('flash-sdk');
+      const pc = PoolConfig.fromIdsByName('Crypto.1', 'mainnet-beta');
+      lines.push(`  Program ID:    ${chalk.cyan(pc.programId.toString())}`);
+    } catch {
+      lines.push(`  Program ID:    ${chalk.dim('unavailable')}`);
+    }
+
+    // 2. RPC Slot
+    try {
+      const { getRpcManagerInstance } = await import('../network/rpc-manager.js');
+      const mgr = getRpcManagerInstance();
+      if (mgr) {
+        const slot = await mgr.connection.getSlot('confirmed');
+        lines.push(`  RPC Slot:      ${chalk.green(slot.toLocaleString())}`);
+        const active = mgr.activeEndpoint;
+        lines.push(`  Active RPC:    ${chalk.cyan(active.label)}`);
+      } else {
+        lines.push(`  RPC Slot:      ${chalk.dim('not connected')}`);
+      }
+    } catch {
+      lines.push(`  RPC Slot:      ${chalk.red('error')}`);
+    }
+
+    // 3. Oracle Health — ping Pyth Hermes
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 5_000);
+      const resp = await fetch('https://hermes.pyth.network/api/latest_vaas?ids[]=0xef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d', {
+        signal: controller.signal,
+      });
+      clearTimeout(timer);
+      lines.push(`  Oracle Health: ${resp.ok ? chalk.green('OK') : chalk.red(`HTTP ${resp.status}`)}`);
+    } catch {
+      lines.push(`  Oracle Health: ${chalk.red('unreachable')}`);
+    }
+
+    // 4. SDK Connection
+    const simMode = context?.simulationMode ?? true;
+    if (simMode) {
+      lines.push(`  SDK:           ${chalk.yellow('Simulation mode (no live SDK)')}`);
+    } else {
+      try {
+        const perpClient = (context?.flashClient as any)?.perpClient;
+        if (perpClient) {
+          lines.push(`  SDK:           ${chalk.green('Connected')}`);
+        } else {
+          lines.push(`  SDK:           ${chalk.red('No perpClient')}`);
+        }
+      } catch {
+        lines.push(`  SDK:           ${chalk.red('Error')}`);
+      }
+    }
+
+    // 5. Active Markets
+    try {
+      const { POOL_MARKETS } = await import('../config/index.js');
+      const marketCount = Object.values(POOL_MARKETS).flat().length;
+      lines.push(`  Markets:       ${chalk.bold(String(marketCount))} active`);
+    } catch {
+      lines.push(`  Markets:       ${chalk.dim('unavailable')}`);
+    }
+
+    // 6. Wallet status
+    const walletAddr = context?.walletAddress;
+    if (walletAddr && walletAddr !== 'unknown') {
+      lines.push(`  Wallet:        ${chalk.cyan(walletAddr.slice(0, 4) + '...' + walletAddr.slice(-4))}`);
+    } else {
+      lines.push(`  Wallet:        ${chalk.dim('not connected')}`);
+    }
+
+    // 7. Mode
+    lines.push(`  Mode:          ${simMode ? chalk.yellow('Simulation') : chalk.red('Live Trading')}`);
+
+    lines.push('');
+    return { success: true, message: lines.join('\n') };
+  },
+};
+
 export const rpcStatusTool: ToolDefinition = {
   name: 'rpc_status',
   description: 'Show active RPC connection info',
@@ -1795,6 +1891,25 @@ export const txInspectTool: ToolDefinition = {
       return { success: true, message: chalk.dim('  System diagnostics not initialized.') };
     }
     const msg = await diag.txInspect(signature);
+    return { success: true, message: msg };
+  },
+};
+
+export const txDebugTool: ToolDefinition = {
+  name: 'tx_debug',
+  description: 'Debug a transaction with protocol-level inspection',
+  parameters: z.object({ signature: z.string().optional(), showState: z.boolean().optional() }),
+  execute: async (params): Promise<ToolResult> => {
+    const { signature, showState } = params as { signature?: string; showState?: boolean };
+    if (!signature) {
+      return { success: false, message: chalk.red('  Usage: tx debug <signature> [--state]') };
+    }
+    const { getSystemDiagnostics } = await import('../system/system-diagnostics.js');
+    const diag = getSystemDiagnostics();
+    if (!diag) {
+      return { success: true, message: chalk.dim('  System diagnostics not initialized.') };
+    }
+    const msg = await diag.txDebug(signature, showState ?? false);
     return { success: true, message: msg };
   },
 };
@@ -1911,7 +2026,7 @@ const tradeHistoryTool: ToolDefinition = {
 
 export const liquidationMapTool: ToolDefinition = {
   name: 'liquidation_map',
-  description: 'Display major liquidation clusters around the current price for a market',
+  description: 'Display liquidation risk data: OI by leverage band and whale position analysis',
   parameters: z.object({
     market: z.string().optional(),
   }),
@@ -1945,105 +2060,80 @@ export const liquidationMapTool: ToolDefinition = {
         const oi = oiData.markets.find(m => m.market.toUpperCase() === mkt.symbol.toUpperCase());
         const longOi = oi?.longOi ?? mkt.openInterestLong;
         const shortOi = oi?.shortOi ?? mkt.openInterestShort;
+        const totalOi = longOi + shortOi;
 
-        // Estimate liquidation clusters by leverage band
-        // Long liquidation = entry * (1 - 1/leverage), Short liquidation = entry * (1 + 1/leverage)
-        const leverageBands = [2, 3, 5, 10, 20, 50];
-        const longClusters: { price: number; sizeUsd: number }[] = [];
-        const shortClusters: { price: number; sizeUsd: number }[] = [];
+        lines.push(theme.titleBlock(`LIQUIDATION RISK — ${mkt.symbol}`));
+        lines.push('');
+        lines.push(theme.pair('Current Price', formatPrice(price)));
+        lines.push(theme.pair('Total OI', formatUsd(totalOi)));
+        lines.push(theme.pair('Long OI', formatUsd(longOi)));
+        lines.push(theme.pair('Short OI', formatUsd(shortOi)));
+        lines.push('');
 
-        for (const lev of leverageBands) {
-          // Distribute OI across leverage bands (higher leverage = less OI share)
-          const weight = 1 / lev;
-          const totalWeight = leverageBands.reduce((s, l) => s + 1 / l, 0);
-          const share = weight / totalWeight;
+        // ── Liquidation price levels by leverage ──
+        // Show WHERE liquidation would occur for each leverage tier
+        // This is mathematical fact, not estimated distribution
+        lines.push(`  ${theme.section('Liquidation Price by Leverage')}`);
+        lines.push(theme.dim('  If a position was opened at current price:'));
+        lines.push('');
 
-          const longLiqPrice = price * (1 - 1 / lev);
-          const shortLiqPrice = price * (1 + 1 / lev);
+        const leverageBands = [2, 3, 5, 10, 20, 50, 100];
+        const levHeaders = ['Leverage', 'Long Liq Price', 'Short Liq Price', 'Distance'];
+        const levRows = leverageBands.map(lev => {
+          const longLiq = price * (1 - 1 / lev);
+          const shortLiq = price * (1 + 1 / lev);
+          const distPct = (1 / lev) * 100;
+          return [
+            `${lev}x`,
+            formatPrice(longLiq),
+            formatPrice(shortLiq),
+            `${distPct.toFixed(1)}%`,
+          ];
+        });
+        lines.push(formatTable(levHeaders, levRows));
+        lines.push('');
 
-          if (Number.isFinite(longLiqPrice) && longOi * share > 0) {
-            longClusters.push({ price: longLiqPrice, sizeUsd: longOi * share });
-          }
-          if (Number.isFinite(shortLiqPrice) && shortOi * share > 0) {
-            shortClusters.push({ price: shortLiqPrice, sizeUsd: shortOi * share });
-          }
-        }
-
-        // Add whale position liquidations
+        // ── Whale positions with known data ──
         const mktWhales = whalePositions.filter(w => {
           const sym = (w.market_symbol ?? w.market ?? '').toUpperCase();
           return sym === mkt.symbol.toUpperCase() && Number.isFinite(w.size_usd) && (w.size_usd ?? 0) > 0;
-        });
+        }).sort((a, b) => (Number(b.size_usd) ?? 0) - (Number(a.size_usd) ?? 0));
 
-        for (const w of mktWhales.slice(0, 10)) {
-          const side = String(w.side ?? '').toLowerCase();
-          const size = Number(w.size_usd ?? 0);
-          const entry = Number(w.entry_price ?? w.mark_price ?? price);
-          if (!Number.isFinite(entry) || entry <= 0 || !Number.isFinite(size)) continue;
+        if (mktWhales.length > 0) {
+          lines.push(`  ${theme.section('Whale Positions')}`);
+          lines.push('');
 
-          // Estimate leverage from size and entry
-          const estLev = Math.max(2, Math.min(50, size / (size / 5))); // Conservative estimate
-          if (side === 'long') {
-            longClusters.push({ price: entry * (1 - 1 / estLev), sizeUsd: size });
-          } else if (side === 'short') {
-            shortClusters.push({ price: entry * (1 + 1 / estLev), sizeUsd: size });
-          }
-        }
-
-        // Bucket by price zones (1% bands)
-        const bucketSize = price * 0.01;
-        const bucketMap = new Map<number, { sizeUsd: number; type: 'long' | 'short' }>();
-
-        for (const c of longClusters) {
-          const bucket = Math.round(c.price / bucketSize) * bucketSize;
-          const existing = bucketMap.get(bucket);
-          if (existing) {
-            existing.sizeUsd += c.sizeUsd;
-          } else {
-            bucketMap.set(bucket, { sizeUsd: c.sizeUsd, type: 'long' });
-          }
-        }
-        for (const c of shortClusters) {
-          const bucket = Math.round(c.price / bucketSize) * bucketSize;
-          const existing = bucketMap.get(bucket);
-          if (existing) {
-            existing.sizeUsd += c.sizeUsd;
-          } else {
-            bucketMap.set(bucket, { sizeUsd: c.sizeUsd, type: 'short' });
-          }
-        }
-
-        // Sort by size and show top clusters
-        const sorted = [...bucketMap.entries()]
-          .map(([p, data]) => ({ price: p, ...data }))
-          .sort((a, b) => b.sizeUsd - a.sizeUsd)
-          .slice(0, 10);
-
-        lines.push(theme.titleBlock(`LIQUIDATION MAP — ${mkt.symbol}`));
-        lines.push('');
-        lines.push(theme.pair('Current Price', formatPrice(price)));
-        lines.push('');
-
-        if (sorted.length === 0) {
-          lines.push(theme.dim('  No liquidation data available.'));
-        } else {
-          const headers = ['Price Level', 'Est. Liquidations', 'Type', 'Distance'];
-          const rows = sorted.map(c => {
-            const dist = ((c.price - price) / price) * 100;
-            const typeColor = c.type === 'long' ? theme.negative('LONG LIQ') : theme.positive('SHORT LIQ');
+          const whaleHeaders = ['Side', 'Size', 'Entry Price', 'Dist from Current'];
+          const whaleRows = mktWhales.slice(0, 10).map(w => {
+            const side = String(w.side ?? '?').toUpperCase();
+            const size = Number(w.size_usd ?? 0);
+            const entry = Number(w.entry_price ?? w.mark_price ?? 0);
+            const dist = entry > 0 ? ((price - entry) / entry) * 100 : 0;
+            const sideColor = side === 'LONG' ? theme.positive(side.padEnd(6)) : theme.negative(side.padEnd(6));
             return [
-              formatPrice(c.price),
-              formatUsd(c.sizeUsd),
-              typeColor,
-              formatPercent(dist),
+              sideColor,
+              formatUsd(size),
+              entry > 0 ? formatPrice(entry) : theme.dim('N/A'),
+              Number.isFinite(dist) ? formatPercent(dist) : theme.dim('N/A'),
             ];
           });
-          lines.push(formatTable(headers, rows));
+          lines.push(formatTable(whaleHeaders, whaleRows));
+          lines.push('');
         }
-        lines.push('');
+
+        // OI imbalance summary
+        if (totalOi > 0) {
+          const longPct = (longOi / totalOi) * 100;
+          const imbalance = Math.abs(longPct - 50);
+          if (imbalance > 10) {
+            const direction = longPct > 50 ? 'long-heavy' : 'short-heavy';
+            lines.push(chalk.yellow(`  OI is ${direction} (${longPct.toFixed(0)}/${(100 - longPct).toFixed(0)}) — cascading liquidations more likely on the heavy side.`));
+            lines.push('');
+          }
+        }
       }
 
-      lines.push(theme.dim('  Estimates based on OI distribution across leverage bands.'));
+      lines.push(theme.dim('  Source: Pyth Hermes (price) | fstats (OI, whale positions)'));
       lines.push('');
 
       return { success: true, message: lines.join('\n') };
@@ -2057,7 +2147,7 @@ export const liquidationMapTool: ToolDefinition = {
 
 export const fundingDashboardTool: ToolDefinition = {
   name: 'funding_dashboard',
-  description: 'Display funding rate data for markets',
+  description: 'Display OI imbalance and fee accrual data for markets',
   parameters: z.object({
     market: z.string().optional(),
   }),
@@ -2070,12 +2160,22 @@ export const fundingDashboardTool: ToolDefinition = {
         return { success: false, message: theme.negative(`\n  Market ${marketFilter ?? 'data'} not found.\n`) };
       }
 
+      // Enrich with real OI data from fstats (getMarketData returns zero OI)
+      const oiData = await context.dataClient.getOpenInterest().catch(() => ({ markets: [] }));
+      for (const mkt of markets) {
+        const oiEntry = oiData.markets.find((m: any) => m.market?.toUpperCase()?.includes(mkt.symbol.toUpperCase()));
+        if (oiEntry) {
+          mkt.openInterestLong = oiEntry.longOi ?? 0;
+          mkt.openInterestShort = oiEntry.shortOi ?? 0;
+        }
+      }
+
       const targetMarkets = marketFilter
         ? markets.filter(m => m.symbol.toUpperCase() === marketFilter)
-        : markets.filter(m => Number.isFinite(m.fundingRate));
+        : markets.filter(m => m.openInterestLong + m.openInterestShort > 0);
 
       if (targetMarkets.length === 0) {
-        return { success: false, message: theme.negative(`\n  Market ${marketFilter} not found.\n`) };
+        return { success: false, message: theme.negative(`\n  No market data available${marketFilter ? ` for ${marketFilter}` : ''}.\n`) };
       }
 
       const lines: string[] = [];
@@ -2083,35 +2183,19 @@ export const fundingDashboardTool: ToolDefinition = {
       if (marketFilter && targetMarkets.length === 1) {
         // Single-market detailed view
         const mkt = targetMarkets[0];
-        const rate = mkt.fundingRate;
-        const rateDisplay = Number.isFinite(rate)
-          ? (rate >= 0 ? theme.positive(formatPercent(rate)) : theme.negative(formatPercent(rate)))
-          : theme.dim('N/A');
-
-        // Estimate hourly from current rate (rate is per-interval, approximate windows)
-        const hourlyEst = Number.isFinite(rate) ? rate : 0;
-        const rate4h = hourlyEst * 4;
-        const rate24h = hourlyEst * 24;
-
-        // OI-based funding direction context
         const totalOi = mkt.openInterestLong + mkt.openInterestShort;
         const longPct = totalOi > 0 ? (mkt.openInterestLong / totalOi) * 100 : 50;
         const shortPct = totalOi > 0 ? (mkt.openInterestShort / totalOi) * 100 : 50;
         const imbalance = longPct - shortPct;
 
-        lines.push(theme.titleBlock(`FUNDING DASHBOARD — ${mkt.symbol}`));
+        lines.push(theme.titleBlock(`OI & FEE DASHBOARD — ${mkt.symbol}`));
         lines.push('');
         lines.push(theme.pair('Current Price', formatPrice(mkt.price)));
-        lines.push(theme.pair('Current Funding', rateDisplay));
         lines.push('');
-        lines.push(`  ${theme.section('Projected Accumulation')}`);
-        lines.push(theme.pair('1h', Number.isFinite(hourlyEst) ? formatPercent(hourlyEst) : 'N/A'));
-        lines.push(theme.pair('4h', Number.isFinite(rate4h) ? formatPercent(rate4h) : 'N/A'));
-        lines.push(theme.pair('24h', Number.isFinite(rate24h) ? formatPercent(rate24h) : 'N/A'));
-        lines.push('');
-        lines.push(`  ${theme.section('Open Interest Balance')}`);
-        lines.push(theme.pair('Long', `${formatUsd(mkt.openInterestLong)}  (${longPct.toFixed(0)}%)`));
-        lines.push(theme.pair('Short', `${formatUsd(mkt.openInterestShort)}  (${shortPct.toFixed(0)}%)`));
+        lines.push(`  ${theme.section('Open Interest')}`);
+        lines.push(theme.pair('Total OI', formatUsd(totalOi)));
+        lines.push(theme.pair('Long OI', `${formatUsd(mkt.openInterestLong)}  (${longPct.toFixed(0)}%)`));
+        lines.push(theme.pair('Short OI', `${formatUsd(mkt.openInterestShort)}  (${shortPct.toFixed(0)}%)`));
 
         if (Math.abs(imbalance) > 5) {
           const direction = imbalance > 0 ? 'long-heavy' : 'short-heavy';
@@ -2121,44 +2205,82 @@ export const fundingDashboardTool: ToolDefinition = {
           lines.push(theme.pair('Imbalance', theme.dim('balanced')));
         }
 
+        // Fee accrual from positions (if user has positions in this market)
         lines.push('');
-        lines.push(theme.dim('  Positive funding: longs pay shorts. Negative: shorts pay longs.'));
+        lines.push(`  ${theme.section('Fee Structure')}`);
+        lines.push(theme.dim('  Flash Trade uses borrow/lock fees, not periodic funding rates.'));
+        lines.push(theme.dim('  Fees accrue as unsettledFeesUsd on each position.'));
+
+        // Try to show actual fee rates from CustodyAccount
+        try {
+          const { PoolConfig } = await import('flash-sdk');
+          const { getPoolForMarket: gp } = await import('../config/index.js');
+          const poolName = gp(mkt.symbol);
+          if (poolName) {
+            const pc = PoolConfig.fromIdsByName(poolName, 'mainnet-beta');
+            const custodies = pc.custodies as Array<{ custodyAccount: any; symbol: string }>;
+            const custody = custodies.find(c => c.symbol.toUpperCase() === mkt.symbol.toUpperCase());
+            if (custody) {
+              const perpClient = (context.flashClient as any).perpClient;
+              if (perpClient) {
+                const RATE_POWER = 1_000_000_000;
+                const custodyAcct = await perpClient.program.account.custody.fetch(custody.custodyAccount);
+                const openFee = parseFloat(custodyAcct.fees.openPosition.toString()) / RATE_POWER * 100;
+                const closeFee = parseFloat(custodyAcct.fees.closePosition.toString()) / RATE_POWER * 100;
+                lines.push('');
+                lines.push(theme.pair('Open Fee', `${openFee.toFixed(4)}%`));
+                lines.push(theme.pair('Close Fee', `${closeFee.toFixed(4)}%`));
+              }
+            }
+          }
+        } catch {
+          // Fee rate fetch is best-effort
+        }
+
+        lines.push('');
+        lines.push(theme.dim('  Source: fstats (OI) | Flash SDK (fee rates)'));
         lines.push('');
       } else {
         // Multi-market overview
-        lines.push(theme.titleBlock('FUNDING RATES'));
+        lines.push(theme.titleBlock('OI IMBALANCE'));
         lines.push('');
 
-        const sorted = [...targetMarkets].sort((a, b) => Math.abs(b.fundingRate) - Math.abs(a.fundingRate));
+        // Sort by total OI descending
+        const sorted = [...targetMarkets].sort((a, b) =>
+          (b.openInterestLong + b.openInterestShort) - (a.openInterestLong + a.openInterestShort)
+        );
 
-        const headers = ['Market', 'Funding Rate', 'Long OI', 'Short OI', 'L/S Ratio'];
+        const headers = ['Market', 'Long OI', 'Short OI', 'Total OI', 'L/S Ratio', 'Bias'];
         const rows = sorted.map(m => {
-          const rate = m.fundingRate;
-          const rateStr = Number.isFinite(rate)
-            ? (rate >= 0 ? theme.positive(formatPercent(rate)) : theme.negative(formatPercent(rate)))
-            : theme.dim('N/A');
           const totalOi = m.openInterestLong + m.openInterestShort;
+          const longPct = totalOi > 0 ? (m.openInterestLong / totalOi) * 100 : 50;
           const ratio = totalOi > 0
-            ? `${((m.openInterestLong / totalOi) * 100).toFixed(0)}/${((m.openInterestShort / totalOi) * 100).toFixed(0)}`
+            ? `${longPct.toFixed(0)}/${(100 - longPct).toFixed(0)}`
             : 'N/A';
+          const imbalance = longPct - 50;
+          let bias = theme.dim('balanced');
+          if (imbalance > 10) bias = theme.positive('LONG');
+          else if (imbalance < -10) bias = theme.negative('SHORT');
           return [
             chalk.bold(m.symbol),
-            rateStr,
             formatUsd(m.openInterestLong),
             formatUsd(m.openInterestShort),
+            formatUsd(totalOi),
             ratio,
+            bias,
           ];
         });
 
         lines.push(formatTable(headers, rows));
         lines.push('');
-        lines.push(theme.dim('  Positive: longs pay shorts. Negative: shorts pay longs.'));
+        lines.push(theme.dim('  Flash Trade uses borrow/lock fees, not periodic funding rates.'));
+        lines.push(theme.dim('  Source: fstats (OI data)'));
         lines.push('');
       }
 
       return { success: true, message: lines.join('\n') };
     } catch (error: unknown) {
-      return { success: false, message: theme.dim(`\n  Funding data unavailable: ${getErrorMessage(error)}\n`) };
+      return { success: false, message: theme.dim(`\n  Market data unavailable: ${getErrorMessage(error)}\n`) };
     }
   },
 };
@@ -2419,8 +2541,10 @@ export const allFlashTools: ToolDefinition[] = [
   inspectPool,
   inspectMarketTool,
   systemStatusTool,
+  protocolStatusTool,
   rpcStatusTool,
   rpcTestTool,
   txInspectTool,
+  txDebugTool,
   tradeHistoryTool,
 ];

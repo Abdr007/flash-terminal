@@ -119,9 +119,10 @@ Direct read of Flash Trade on-chain state.
 #### Market Observability
 ```
 liquidations SOL    → clusters by price zone
-funding SOL         → rate + projected accumulation
+funding SOL         → OI imbalance & fee dashboard
 depth SOL           → liquidity around current price
 protocol health     → protocol-wide metrics
+protocol status     → connection & SDK health overview
 ```
 Live data from Pyth, fstats, and on-chain state.
 
@@ -155,7 +156,7 @@ Paper trading with real oracle prices. Preview transactions without signing. Mod
 
 | Category | Commands |
 |:---------|:---------|
-| **Trading** | `open` · `close` · `add` · `remove` · `positions` · `markets` · `trade history` |
+| **Trading** | `open` · `close` · `add` · `remove` · `positions` · `position debug` · `markets` · `trade history` |
 | **Analytics** | `scan` · `analyze` · `volume` · `open interest` · `leaderboard` · `whale activity` · `fees` |
 | **Observability** | `liquidations` · `funding` · `depth` · `protocol health` |
 | **Portfolio** | `portfolio` · `dashboard` · `risk report` · `exposure` · `rebalance` |
@@ -169,27 +170,41 @@ Paper trading with real oracle prices. Preview transactions without signing. Mod
 
 ## Architecture
 
+Flash Terminal acts as a deterministic interface to the Flash protocol. User commands are parsed and routed through the tool engine. The tool engine interacts with the Flash SDK, which communicates with the Flash program through Solana RPC. Market prices are retrieved from the same Pyth Hermes oracle feeds used by the protocol. All calculations — liquidation prices, fees, leverage limits — use the same logic as the Flash protocol. This ensures Flash Terminal always reflects the true state of the protocol.
+
 ```
-User Input
-│
-├─ FAST_DISPATCH ───── single-token commands (instant, no parsing)
-├─ Regex Parser ────── structured trade commands (deterministic)
-└─ LLM Engine ──────── natural language queries (read-only fallback)
-        │
-    ParsedIntent
-        │
-    ExecutionMiddleware
-        │  logging → wallet check → readOnly guard
-        │
-    ToolEngine.dispatch()
-        │
-        ├── flash-tools ─── trading, wallet, market data
-        ├── agent-tools ─── analysis, scanner, dashboard
-        └── plugin-tools ── dynamically loaded at startup
-                │
-          IFlashClient
-                ├── FlashClient ──────────── live (Flash SDK + Solana RPC)
-                └── SimulatedFlashClient ─── paper trading (in-memory)
+User
+  │
+  ▼
+Flash Terminal CLI
+  │
+  ├─ FAST_DISPATCH ─── single-token commands (instant)
+  ├─ Regex Parser ──── structured trade commands (deterministic)
+  └─ NLP Fallback ──── natural language queries (read-only)
+          │
+      ParsedIntent
+          │
+      Market Resolver ── resolveMarket() → canonical market ID
+          │
+      Execution Middleware ── logging → wallet check → readOnly guard
+          │
+      Tool Engine
+          │
+          ├── flash-tools ─── trading, wallet, market data
+          ├── agent-tools ─── analysis, dashboard, observability
+          └── plugin-tools ── dynamically loaded at startup
+                  │
+            IFlashClient
+                  ├── FlashClient ──────────── live (Flash SDK → Solana RPC → Flash Protocol)
+                  └── SimulatedFlashClient ─── paper trading (in-memory)
+
+Data Sources:
+  Prices ──────── Pyth Hermes (same oracle as Flash protocol)
+  Positions ───── Flash SDK perpClient.getUserPositions()
+  Liquidation ─── Flash SDK getLiquidationPriceContractHelper()
+  Fees ────────── Flash SDK CustodyAccount (on-chain)
+  Leverage ────── Flash SDK PoolConfig MarketConfig
+  OI / Volume ─── fstats API (aggregated protocol state)
 ```
 
 <br/>
@@ -240,13 +255,16 @@ flash doctor             # system diagnostics
 
 | Source | Data | Cache |
 |:-------|:-----|:------|
-| **Flash SDK** | Position state, pool config, instructions | Real-time |
-| **Pyth Network** | Oracle prices | 5s |
-| **Solana RPC** | Transaction submission, confirmation | Real-time |
-| **fstats API** | Volume, OI, leaderboards, whales | Per-request |
-| **CoinGecko** | Market prices, 24h change | 15s |
+| **Flash SDK** | Position state, pool config, fees, liquidation math, leverage limits | Real-time |
+| **Pyth Hermes** | Oracle prices (same feeds used by Flash protocol) | 5s |
+| **Solana RPC** | Transaction submission, confirmation, on-chain state | Real-time |
+| **fstats API** | Volume, OI, leaderboards, whale positions | Per-request |
 
-All data is live. No hardcoded prices, no synthetic signals. Unreachable sources degrade gracefully.
+Flash Terminal is a deterministic protocol interface.
+
+All market data, liquidation calculations, fees, and risk metrics are derived directly from Flash protocol state, on-chain accounts, or official oracle feeds. Liquidation prices use `getLiquidationPriceContractHelper()`. Fees and maintenance margin are read from `CustodyAccount`. Leverage limits from `PoolConfig`.
+
+The terminal does not generate trading signals, predictions, or synthetic analytics. Unreachable sources degrade gracefully with stale cache fallback.
 
 <br/>
 

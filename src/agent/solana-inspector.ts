@@ -96,6 +96,23 @@ export class SolanaInspector {
         // OI enrichment is best-effort — market data still valid without it
       }
 
+      // Enrich with 24h price change from Pyth Hermes
+      // (FlashClient.getMarketData() returns priceChange24h: 0)
+      try {
+        const symbols = data.map(m => m.symbol);
+        const pythPrices = await this.priceService.getPrices(symbols);
+        for (const m of data) {
+          if (m.priceChange24h === 0) {
+            const tp = pythPrices.get(m.symbol);
+            if (tp && Number.isFinite(tp.priceChange24h)) {
+              m.priceChange24h = tp.priceChange24h;
+            }
+          }
+        }
+      } catch {
+        // priceChange24h enrichment is best-effort
+      }
+
       this.setCache(cacheKey, data, MARKET_CACHE_TTL);
       return data;
     } catch {

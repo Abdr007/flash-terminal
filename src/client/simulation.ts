@@ -18,15 +18,14 @@ import { PriceService } from '../data/prices.js';
 import { FStatsClient } from '../data/fstats.js';
 import { getLogger } from '../utils/logger.js';
 import { getErrorMessage } from '../utils/retry.js';
+import { getProtocolFeeRates, calcFeeUsd } from '../utils/protocol-fees.js';
+import { computeSimulationLiquidationPrice } from '../utils/protocol-liq.js';
 
 const MAX_TRADE_HISTORY = 500;
 const MAX_LIVE_PRICE_ENTRIES = 100;
 
 // Feed IDs are centralized in PriceService (src/data/prices.ts).
 // Simulation delegates all price fetching to PriceService (Pyth Hermes).
-
-// Simulated trading fee: 0.08% of position size (Flash Trade typical)
-const SIM_FEE_BPS = 8;
 
 /**
  * SimulatedFlashClient implements IFlashClient for paper trading.
@@ -121,37 +120,27 @@ export class SimulatedFlashClient implements IFlashClient {
   }
 
   /**
-   * Calculate liquidation price using the same formula structure as the Flash Trade protocol.
+   * Compute liquidation price using the same formula as Flash SDK's
+   * getLiquidationPriceContractHelper(). Uses protocol constants
+   * (maxLeverage, closeFeeRate) derived from CustodyAccount parameters.
    *
-   * Protocol formula:
-   *   exitFee = sizeUsd × closeFeeBps / RATE_POWER
-   *   maintenanceMargin = sizeUsd × BPS_POWER / maxLeverage
-   *   liabilities = maintenanceMargin + exitFee
-   *   priceDist = (collateral - liabilities) / sizeUsd × entryPrice
-   *
-   * In simulation we approximate with:
-   *   closeFeeBps = 0.08% (8/10000)
-   *   maxLeverage = 100x → maintenanceMargin = 1% of size
+   * Reference: flash-sdk/src/PerpetualsClient.ts#L2244
    */
-  private calcLiquidationPrice(entryPrice: number, leverage: number, side: TradeSide): number {
+  private calcLiquidationPrice(
+    entryPrice: number,
+    leverage: number,
+    side: TradeSide,
+    maintenanceMarginRate: number = 0.01,
+    closeFeeRate: number = 0.0008,
+  ): number {
     if (!Number.isFinite(leverage) || leverage <= 0 || !Number.isFinite(entryPrice) || entryPrice <= 0) {
       return 0;
     }
-    // Simulate the protocol's liability calculation
-    const collateralRatio = 1 / leverage;                  // collateral / size
-    const maintenanceMarginRatio = 1 / 100;                // sizeUsd / maxLeverage (100x)
-    const closeFeeRatio = 8 / 10_000;                      // 0.08% close fee
-    const liabilityRatio = maintenanceMarginRatio + closeFeeRatio; // ~1.08%
-    const priceDist = (collateralRatio - liabilityRatio) * entryPrice;
-
-    if (priceDist <= 0) {
-      // Collateral doesn't cover liabilities — position at immediate risk
-      return side === TradeSide.Long ? entryPrice : entryPrice;
-    }
-
-    return side === TradeSide.Long
-      ? entryPrice - priceDist
-      : entryPrice + priceDist;
+    const sizeUsd = 1; // normalized
+    const collateralUsd = sizeUsd / leverage;
+    return computeSimulationLiquidationPrice(
+      entryPrice, sizeUsd, collateralUsd, side, maintenanceMarginRate, closeFeeRate,
+    );
   }
 
   async openPosition(
@@ -186,15 +175,17 @@ export class SimulatedFlashClient implements IFlashClient {
 
     const price = this.getPrice(market);
     const sizeUsd = collateralAmount * leverage;
+
+    // Fetch fee rates from protocol (CustodyAccount via Flash SDK)
+    const feeRates = await getProtocolFeeRates(market, null);
+    const openFee = calcFeeUsd(sizeUsd, feeRates.openFeeRate);
+
     const liquidationPrice = this.calcLiquidationPrice(price, leverage, side);
 
     // Reject positions where liquidation price equals entry (instant liquidation)
     if (liquidationPrice === price || liquidationPrice <= 0) {
       throw new Error(`Leverage ${leverage}x is too high — position would be immediately liquidated. Reduce leverage.`);
     }
-
-    // Trading fee: 0.08% of position size
-    const openFee = (sizeUsd * SIM_FEE_BPS) / 10_000;
 
     if (collateralAmount + openFee > this.state.balance) {
       throw new Error(`Insufficient balance for collateral + fee: need $${(collateralAmount + openFee).toFixed(2)}, have $${this.state.balance.toFixed(2)}`);
@@ -252,8 +243,9 @@ export class SimulatedFlashClient implements IFlashClient {
       ? (priceDelta / position.entryPrice) * position.sizeUsd * pnlMultiplier
       : 0;
 
-    // Close fee: 0.08% of position size
-    const closeFee = (position.sizeUsd * SIM_FEE_BPS) / 10_000;
+    // Close fee from protocol
+    const closeFeeRates = await getProtocolFeeRates(market, null);
+    const closeFee = calcFeeUsd(position.sizeUsd, closeFeeRates.closeFeeRate);
     this.state.totalFeesPaid += closeFee;
     this.state.totalRealizedPnl += pnl;
 
@@ -440,7 +432,8 @@ export class SimulatedFlashClient implements IFlashClient {
     const price = this.getPrice(market);
     const sizeUsd = collateralAmount * leverage;
     const liqPrice = this.calcLiquidationPrice(price, leverage, side);
-    const fee = (sizeUsd * SIM_FEE_BPS) / 10_000;
+    const previewFeeRates = await getProtocolFeeRates(market, null);
+    const fee = calcFeeUsd(sizeUsd, previewFeeRates.openFeeRate);
 
     return {
       market: market.toUpperCase(),

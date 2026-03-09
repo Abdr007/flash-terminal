@@ -5,7 +5,7 @@ import { join, resolve } from 'path';
 import chalk from 'chalk';
 import { AIInterpreter, OfflineInterpreter } from '../ai/interpreter.js';
 import { ToolEngine } from '../tools/engine.js';
-import { ToolContext, ToolResult, FlashConfig, IFlashClient, ActionType, ParsedIntent, DryRunPreview, TradeSide } from '../types/index.js';
+import { ToolContext, ToolResult, FlashConfig, IFlashClient, ActionType, ParsedIntent, DryRunPreview, TradeSide, Position } from '../types/index.js';
 import { SimulatedFlashClient } from '../client/simulation.js';
 import { FStatsClient } from '../data/fstats.js';
 import { PriceService } from '../data/prices.js';
@@ -16,7 +16,7 @@ import { shortAddress } from '../utils/format.js';
 import { getErrorMessage } from '../utils/retry.js';
 import { initLogger, getLogger } from '../utils/logger.js';
 import { setAiApiKey, getInspector, getRegimeDetector } from '../agent/agent-tools.js';
-import { formatUsd, formatPrice, colorPercent, humanizeSdkError } from '../utils/format.js';
+import { formatUsd, formatPrice, colorPercent, colorPnl, humanizeSdkError } from '../utils/format.js';
 import { MarketRegime } from '../regime/regime-types.js';
 import { initSigningGuard } from '../security/signing-guard.js';
 import { RpcManager, buildRpcEndpoints, initRpcManager } from '../network/rpc-manager.js';
@@ -29,6 +29,7 @@ import { startWatch } from './watch.js';
 import { theme } from './theme.js';
 import { completer, getSuggestions } from './completer.js';
 import { resolveMarket } from '../utils/market-resolver.js';
+import { computeSimulationLiquidationPrice } from '../utils/protocol-liq.js';
 import type { MonitorType } from '../monitor/event-monitor.js';
 
 /** Alias for backward compat — delegates to centralized resolver */
@@ -109,6 +110,8 @@ const FAST_DISPATCH: Record<string, ParsedIntent> = {
   'market monitor':    { action: ActionType.MarketMonitor },
   'monitor':           { action: ActionType.MarketMonitor },
   'watch':             { action: ActionType.MarketMonitor },
+  'protocol status':   { action: ActionType.ProtocolStatus },
+  'protocol':          { action: ActionType.ProtocolStatus },
 };
 
 /** Timeout wrapper for command execution */
@@ -400,6 +403,11 @@ export class FlashTerminal {
         this.pendingConfirmation = null;
         cb(line);
         return;
+      }
+
+      // Reset session idle timer on any user activity (not just trades)
+      if (this.walletManager?.isConnected) {
+        this.walletManager.resetIdleTimer();
       }
 
       // Sanitize: strip control chars (null bytes, etc.) and collapse whitespace
@@ -1436,6 +1444,17 @@ export class FlashTerminal {
       intent = fastIntent;
     } else if (this.showUsageHint(lower)) {
       return;
+    } else if (lower.startsWith('position debug ') || lower.startsWith('pos debug ')) {
+      const prefix = lower.startsWith('position debug ') ? 'position debug ' : 'pos debug ';
+      const rawMarket = input.slice(prefix.length).trim();
+      if (!rawMarket) {
+        console.log(chalk.yellow(`  Usage: position debug <market>`));
+        console.log(chalk.dim(`  Example: position debug sol`));
+        return;
+      }
+      const market = resolveMarketAlias(rawMarket);
+      await this.handlePositionDebug(market);
+      return;
     } else if (lower.startsWith('dryrun ') || lower.startsWith('dry-run ') || lower.startsWith('dry run ')) {
       const prefix = lower.startsWith('dryrun ') ? 'dryrun ' : lower.startsWith('dry-run ') ? 'dry-run ' : 'dry run ';
       const innerCmd = input.slice(prefix.length).trim();
@@ -1547,6 +1566,11 @@ export class FlashTerminal {
     } else if (lower.startsWith('tx inspect ')) {
       const signature = input.slice('tx inspect '.length).trim();
       intent = { action: ActionType.TxInspect, signature } as ParsedIntent;
+    } else if (lower.startsWith('tx debug ')) {
+      const rest = input.slice('tx debug '.length).trim();
+      const showState = rest.includes('--state');
+      const signature = rest.replace('--state', '').trim();
+      intent = { action: ActionType.TxDebug, signature, showState } as ParsedIntent;
     } else {
       // Full interpreter path (regex + AI)
       process.stdout.write(chalk.dim('  Parsing...\r'));
@@ -1907,30 +1931,105 @@ export class FlashTerminal {
   // ─── Dry Run Handler ─────────────────────────────────────────────
 
   /**
-   * Handle market monitor — live-updating market table.
-   * Refreshes every 5 seconds. Press any key to exit.
+   * Market monitor — professional full-screen market table with event velocity intelligence.
+   * Redraws in place every 5s. Press 'q' to exit cleanly.
+   *
+   * Data sources:
+   *   Prices:        Pyth Hermes (same oracle as Flash protocol)
+   *   Open Interest:  fstats API (aggregated Flash protocol state)
+   *
+   * Event velocity pipeline:
+   *   Market Data Fetch → State Tracking → Delta Detection → Velocity Annotation
+   *   → Event Engine (threshold filtering) → Event Buffer (last 6) → Terminal Rendering
+   *
+   * Only markets with open interest > 0 are shown (unless filterMarket is set).
    */
   private async handleMarketMonitor(filterMarket?: string): Promise<void> {
     const { PriceService } = await import('../data/prices.js');
     const priceSvc = new PriceService();
     const { POOL_MARKETS } = await import('../config/index.js');
 
-    // Collect all unique market symbols, optionally filter to a single market
+    // All unique market symbols from Flash SDK pool config
     let allSymbols = [...new Set(Object.values(POOL_MARKETS).flat().map(s => s.toUpperCase()))];
     if (filterMarket) {
       allSymbols = allSymbols.filter(s => s === filterMarket.toUpperCase());
     }
 
     let running = true;
-    let hasData = false;
+    const REFRESH_MS = 5_000;
 
-    const fetchData = async () => {
+    // ─── In-memory state for event detection ───────────────────────
+    const prevPrices = new Map<string, number>();
+    const prevOi = new Map<string, number>();
+    const prevLongPct = new Map<string, number>();
+
+    // Event thresholds — only fire on meaningful changes
+    const PRICE_MOVE_PCT = 1.0;     // 1% price move between cycles
+    const OI_CHANGE_USD = 10_000;   // $10k OI change between cycles
+    const RATIO_SHIFT_PCT = 5;      // 5pp long/short ratio shift
+
+    // ─── Rolling history buffer for velocity tracking ──────────────
+    // Keeps last 12 snapshots per market (≈60s at 5s refresh)
+    const HISTORY_DEPTH = 12;
+
+    interface MarketSnapshot {
+      timestamp: number;
+      price: number;
+      totalOi: number;
+      longPct: number;
+    }
+
+    const marketHistory = new Map<string, MarketSnapshot[]>();
+
+    /** Push a new snapshot and trim to HISTORY_DEPTH */
+    const pushSnapshot = (sym: string, snap: MarketSnapshot) => {
+      let buf = marketHistory.get(sym);
+      if (!buf) {
+        buf = [];
+        marketHistory.set(sym, buf);
+      }
+      buf.push(snap);
+      if (buf.length > HISTORY_DEPTH) {
+        buf.splice(0, buf.length - HISTORY_DEPTH);
+      }
+    };
+
+    /** Compute velocity label: time window in which the delta occurred */
+    const velocityLabel = (sym: string): string => {
+      const buf = marketHistory.get(sym);
+      if (!buf || buf.length < 2) return `${REFRESH_MS / 1000}s`;
+      const elapsed = Math.round((buf[buf.length - 1].timestamp - buf[buf.length - 2].timestamp) / 1000);
+      return `${elapsed > 0 ? elapsed : REFRESH_MS / 1000}s`;
+    };
+
+    interface MarketRow {
+      symbol: string;
+      price: number;
+      change: number;
+      totalOi: number;
+      longPct: number;
+      shortPct: number;
+      priceDirection: 'up' | 'down' | 'flat';
+    }
+
+    interface MarketEvent {
+      message: string;
+      color: 'green' | 'red' | 'yellow';
+      timestamp: number;
+    }
+
+    // Rolling event buffer — keeps last N events across cycles
+    const MAX_EVENTS = 6;
+    let recentEvents: MarketEvent[] = [];
+
+    const fetchData = async (): Promise<MarketRow[]> => {
+      const now = Date.now();
       const [priceMap, oi] = await Promise.all([
         priceSvc.getPrices(allSymbols).catch(() => new Map()),
         this.fstats.getOpenInterest().catch(() => ({ markets: [] })),
       ]);
 
-      const rows: { symbol: string; price: number; change: number; totalOi: number; longPct: number; shortPct: number }[] = [];
+      const rows: MarketRow[] = [];
 
       for (const sym of allSymbols) {
         const tp = priceMap.get(sym);
@@ -1939,91 +2038,248 @@ export class FlashTerminal {
         const longOi = oiEntry?.longOi ?? 0;
         const shortOi = oiEntry?.shortOi ?? 0;
         const totalOi = longOi + shortOi;
+
+        // Filter: only show markets with open interest (unless explicitly filtered)
+        if (!filterMarket && totalOi <= 0) continue;
+
         const longPct = totalOi > 0 ? Math.round((longOi / totalOi) * 100) : 50;
         const shortPct = totalOi > 0 ? 100 - longPct : 50;
-        rows.push({ symbol: sym, price: tp.price, change: tp.priceChange24h, totalOi, longPct, shortPct });
+
+        // Price direction detection
+        const prev = prevPrices.get(sym);
+        let priceDirection: 'up' | 'down' | 'flat' = 'flat';
+        if (prev !== undefined) {
+          if (tp.price > prev) priceDirection = 'up';
+          else if (tp.price < prev) priceDirection = 'down';
+        }
+
+        // ─── Event detection with velocity annotation ──────────────
+        const vLabel = velocityLabel(sym);
+
+        if (prev !== undefined && prev > 0) {
+          const pricePctChange = ((tp.price - prev) / prev) * 100;
+          if (Math.abs(pricePctChange) >= PRICE_MOVE_PCT) {
+            const dir = pricePctChange > 0 ? '+' : '';
+            recentEvents.push({
+              message: `${sym} price moved ${dir}${pricePctChange.toFixed(2)}% (${vLabel})`,
+              color: pricePctChange > 0 ? 'green' : 'red',
+              timestamp: now,
+            });
+          }
+        }
+
+        const prevOiVal = prevOi.get(sym);
+        if (prevOiVal !== undefined && prevOiVal > 0) {
+          const oiDelta = totalOi - prevOiVal;
+          if (Math.abs(oiDelta) >= OI_CHANGE_USD) {
+            const dir = oiDelta > 0 ? '+' : '-';
+            recentEvents.push({
+              message: `${sym} OI ${dir}${formatUsd(Math.abs(oiDelta))} (${vLabel})`,
+              color: oiDelta > 0 ? 'green' : 'yellow',
+              timestamp: now,
+            });
+          }
+        }
+
+        const prevLong = prevLongPct.get(sym);
+        if (prevLong !== undefined) {
+          const shift = longPct - prevLong;
+          if (Math.abs(shift) >= RATIO_SHIFT_PCT) {
+            const desc = shift > 0 ? `longs +${shift}pp` : `shorts +${Math.abs(shift)}pp`;
+            recentEvents.push({
+              message: `${sym} ratio shifted: ${desc} (${vLabel})`,
+              color: 'yellow',
+              timestamp: now,
+            });
+          }
+        }
+
+        // Update state maps
+        prevPrices.set(sym, tp.price);
+        prevOi.set(sym, totalOi);
+        prevLongPct.set(sym, longPct);
+
+        // Push snapshot to rolling history buffer
+        pushSnapshot(sym, { timestamp: now, price: tp.price, totalOi, longPct });
+
+        rows.push({ symbol: sym, price: tp.price, change: tp.priceChange24h, totalOi, longPct, shortPct, priceDirection });
       }
 
+      // Trim event buffer
+      if (recentEvents.length > MAX_EVENTS) {
+        recentEvents = recentEvents.slice(-MAX_EVENTS);
+      }
+
+      // Sort by total OI descending (most active markets first)
       rows.sort((a, b) => b.totalOi - a.totalOi);
       return rows;
     };
 
-    const renderTable = (rows: { symbol: string; price: number; change: number; totalOi: number; longPct: number; shortPct: number }[]) => {
-      process.stdout.write('\x1B[H\x1B[J');
-      const now = new Date().toLocaleTimeString();
-      console.log('');
-      const title = filterMarket ? `MARKET MONITOR — ${filterMarket.toUpperCase()}` : 'MARKET MONITOR';
-      console.log(`  ${theme.accentBold(title)}`);
-      console.log(theme.dim(`  ${now}  |  Refresh 5s  |  Press any key to exit`));
-      console.log(`  ${theme.separator(68)}`);
-      console.log('');
+    /** Format 1m momentum line for a market from its rolling history */
+    const format1mMomentum = (sym: string): string | null => {
+      const buf = marketHistory.get(sym);
+      if (!buf || buf.length < 2) return null;
 
-      const hdr = [
-        theme.tableHeader('  Asset'.padEnd(12)),
-        theme.tableHeader('Price'.padStart(12)),
-        theme.tableHeader('24h Change'.padStart(12)),
-        theme.tableHeader('Open Interest'.padStart(15)),
-        theme.tableHeader('Long / Short'.padStart(14)),
-      ].join('  ');
-      console.log(hdr);
-      console.log(`  ${theme.separator(68)}`);
+      const latest = buf[buf.length - 1];
+      const oldest = buf[0];
+      const elapsedSec = (latest.timestamp - oldest.timestamp) / 1000;
+      if (elapsedSec < 10) return null; // Need at least 10s of history
 
-      for (const r of rows) {
-        const sym = chalk.bold(('  ' + r.symbol).padEnd(12));
-        const price = formatPrice(r.price).padStart(12);
-        const change = colorPercent(r.change).padStart(12);
-        const oiStr = formatUsd(r.totalOi).padStart(15);
-        const ratio = `${r.longPct} / ${r.shortPct}`.padStart(14);
-        const ratioColored = r.longPct > 60 ? theme.positive(ratio) : r.shortPct > 60 ? theme.negative(ratio) : theme.dim(ratio);
-        console.log(`${sym}  ${price}  ${change}  ${oiStr}  ${ratioColored}`);
+      const priceDelta = oldest.price > 0
+        ? ((latest.price - oldest.price) / oldest.price) * 100
+        : 0;
+      const oiDelta = latest.totalOi - oldest.totalOi;
+      const ratioDelta = latest.longPct - oldest.longPct;
+
+      // Only show if there's meaningful movement over the window
+      const hasPriceMove = Math.abs(priceDelta) >= 0.1;
+      const hasOiMove = Math.abs(oiDelta) >= 1000;
+      const hasRatioMove = Math.abs(ratioDelta) >= 1;
+
+      if (!hasPriceMove && !hasOiMove && !hasRatioMove) return null;
+
+      const windowLabel = elapsedSec >= 55 ? '1m' : `${Math.round(elapsedSec)}s`;
+      const parts: string[] = [];
+
+      if (hasPriceMove) {
+        const dir = priceDelta > 0 ? '+' : '';
+        const pStr = `${dir}${priceDelta.toFixed(2)}%`;
+        parts.push(priceDelta > 0 ? chalk.green(pStr) : chalk.red(pStr));
+      }
+      if (hasOiMove) {
+        const dir = oiDelta > 0 ? '+' : '-';
+        parts.push(chalk.cyan(`OI ${dir}${formatUsd(Math.abs(oiDelta))}`));
+      }
+      if (hasRatioMove) {
+        const dir = ratioDelta > 0 ? `L+${ratioDelta}pp` : `S+${Math.abs(ratioDelta)}pp`;
+        parts.push(chalk.yellow(dir));
       }
 
+      return `  ${chalk.bold(sym.padEnd(6))} ${theme.dim(windowLabel.padEnd(4))} ${parts.join(theme.dim(' | '))}`;
+    };
+
+    const renderTable = (rows: MarketRow[]) => {
+      // Full screen clear — redraws in place, no scroll spam
+      process.stdout.write('\x1Bc');
+      const now = new Date().toLocaleTimeString();
+      console.log('');
+      console.log(`  ${theme.accentBold('FLASH TERMINAL')} ${theme.dim('—')} ${theme.accentBold('MARKET MONITOR')}`);
+      console.log('');
+      console.log(theme.dim(`  Time: ${now}`));
+      console.log(theme.dim(`  Refresh: 5s`));
+      console.log(theme.dim(`  Press q to exit`));
+      console.log('');
+      console.log(`  ${theme.separator(72)}`);
+      console.log('');
+
+      // Header
+      const hdr = [
+        theme.tableHeader('  Asset'.padEnd(14)),
+        theme.tableHeader('Price'.padStart(14)),
+        theme.tableHeader('24h Change'.padStart(12)),
+        theme.tableHeader('Open Interest'.padStart(16)),
+        theme.tableHeader('Long / Short'.padStart(14)),
+      ].join('');
+      console.log(hdr);
+      console.log(`  ${theme.separator(72)}`);
+      console.log('');
+
+      for (const r of rows) {
+        const sym = chalk.bold(('  ' + r.symbol).padEnd(14));
+
+        // Bloomberg-style price coloring: green = price up, red = price down
+        const priceStr = formatPrice(r.price).padStart(14);
+        const coloredPrice = r.priceDirection === 'up'
+          ? chalk.green(priceStr)
+          : r.priceDirection === 'down'
+            ? chalk.red(priceStr)
+            : priceStr;
+
+        const change = colorPercent(r.change).padStart(12);
+        const oiStr = formatUsd(r.totalOi).padStart(16);
+        const ratio = `${r.longPct} / ${r.shortPct}`.padStart(14);
+        const ratioColored = r.longPct > 60 ? theme.positive(ratio) : r.shortPct > 60 ? theme.negative(ratio) : theme.dim(ratio);
+        console.log(`${sym}${coloredPrice}${change}${oiStr}${ratioColored}`);
+      }
+
+      if (rows.length === 0) {
+        console.log(theme.dim('  No active markets found.'));
+      }
+
+      console.log('');
+
+      // ─── Momentum panel (rolling window summary) ─────────────────
+      const momentumLines: string[] = [];
+      for (const r of rows) {
+        const mLine = format1mMomentum(r.symbol);
+        if (mLine) momentumLines.push(mLine);
+      }
+      if (momentumLines.length > 0) {
+        console.log(`  ${theme.section('Momentum')}`);
+        console.log(`  ${theme.separator(72)}`);
+        console.log('');
+        for (const line of momentumLines) {
+          console.log(line);
+        }
+        console.log('');
+      }
+
+      // ─── Market Events panel ─────────────────────────────────────
+      if (recentEvents.length > 0) {
+        console.log(`  ${theme.section('Market Events')}`);
+        console.log(`  ${theme.separator(72)}`);
+        console.log('');
+        for (const evt of recentEvents) {
+          const colorFn = evt.color === 'green' ? chalk.green
+            : evt.color === 'red' ? chalk.red
+            : chalk.yellow;
+          // Show age of event relative to now
+          const ageSec = Math.round((Date.now() - evt.timestamp) / 1000);
+          const ageLabel = ageSec < 5 ? '' : theme.dim(` ${ageSec}s ago`);
+          console.log(`  ${colorFn('●')} ${evt.message}${ageLabel}`);
+        }
+        console.log('');
+      }
+
+      console.log(`  ${theme.separator(72)}`);
+      console.log(theme.dim(`  Source: Pyth Hermes (oracle) | fstats (open interest)`));
       console.log('');
     };
 
-    // Show loading message, then wait for first successful data fetch
-    console.log(theme.dim('\n  Loading market data...\n'));
+    // ─── Initial fetch ─────────────────────────────────────────────
+    // Show loading, then block until first data arrives
+    process.stdout.write('\x1Bc');
+    console.log('');
+    console.log(`  ${theme.accentBold('FLASH TERMINAL')} ${theme.dim('—')} ${theme.accentBold('MARKET MONITOR')}`);
+    console.log('');
+    console.log(theme.dim('  Loading market data...'));
+    console.log('');
 
     try {
       const initialRows = await fetchData();
-      if (initialRows.length > 0) {
-        hasData = true;
-        renderTable(initialRows);
-      } else {
-        // Data fetched but no prices yet — show loading state once (no spam)
-        process.stdout.write('\x1B[H\x1B[J');
-        console.log('');
-        console.log(`  ${theme.accentBold('MARKET MONITOR')}`);
-        console.log(theme.dim('  Waiting for price data...  |  Press any key to exit'));
-        console.log('');
-      }
+      renderTable(initialRows);
     } catch {
       console.log(chalk.red('  Failed to fetch market data.'));
       return;
     }
 
-    // Refresh interval — only redraw when there's data
+    // ─── Refresh loop ──────────────────────────────────────────────
     let refreshInProgress = false;
     const interval = setInterval(async () => {
       if (!running || refreshInProgress) return;
       refreshInProgress = true;
       try {
         const rows = await fetchData();
-        if (rows.length > 0) {
-          hasData = true;
-          renderTable(rows);
-        }
-        // If no data, don't redraw — keep whatever was last shown
+        if (running) renderTable(rows);
       } catch {
-        // Silently skip failed refreshes
+        // Skip failed refresh — keep last good render
       } finally {
         refreshInProgress = false;
       }
-    }, 5_000);
+    }, REFRESH_MS);
 
-    // Wait for keypress to exit — pause readline, use raw mode for single-key detection
+    // ─── Exit on 'q' keypress ──────────────────────────────────────
     await new Promise<void>((resolve) => {
-      // Pause readline to prevent it from consuming stdin while we're in raw mode
       this.rl.pause();
 
       const wasRaw = process.stdin.isRaw;
@@ -2032,18 +2288,24 @@ export class FlashTerminal {
       }
       process.stdin.resume();
 
-      const onKey = () => {
-        // Remove listener FIRST to prevent double-fire
+      const onKey = (buf: Buffer) => {
+        const key = buf.toString();
+        // Only exit on 'q' or Ctrl+C
+        if (key !== 'q' && key !== 'Q' && key !== '\x03') return;
+
         process.stdin.removeListener('data', onKey);
         running = false;
         clearInterval(interval);
         if (process.stdin.isTTY) {
           process.stdin.setRawMode(wasRaw ?? false);
         }
-        // Resume readline before printing output
+        // Drain any buffered stdin before resuming readline
+        // This prevents stray keypresses from leaking into the CLI prompt
+        process.stdin.pause();
+        process.stdin.resume();
         this.rl.resume();
         // Clear screen and return to prompt
-        process.stdout.write('\x1B[H\x1B[J');
+        process.stdout.write('\x1Bc');
         resolve();
       };
 
@@ -2068,6 +2330,384 @@ export class FlashTerminal {
       this.rl.resume();
       console.log('');
     });
+  }
+
+  /**
+   * Position debug — protocol-level debugging view of an open position.
+   *
+   * Data sources:
+   *   Position data:      Flash SDK perpClient.getUserPositions()
+   *   Price data:         Pyth Hermes oracle (same as Flash protocol)
+   *   Liquidation math:   Flash SDK getLiquidationPriceContractHelper()
+   *   Fees/margin:        Flash SDK CustodyAccount (on-chain)
+   *   Leverage limits:    Flash SDK PoolConfig MarketConfig
+   */
+  private async handlePositionDebug(market: string): Promise<void> {
+    const upper = market.toUpperCase();
+
+    // ─── 1. Fetch position ──────────────────────────────────────────
+    let positions: Position[];
+    try {
+      positions = await this.flashClient.getPositions();
+    } catch (e: unknown) {
+      console.log(chalk.red(`  Failed to fetch positions: ${getErrorMessage(e)}`));
+      return;
+    }
+
+    const pos = positions.find(p => p.market.toUpperCase() === upper);
+    if (!pos) {
+      console.log('');
+      console.log(chalk.yellow(`  No open position found for ${upper}`));
+      console.log(chalk.dim(`  Open one with: open 5x long ${upper} $100`));
+      console.log('');
+      return;
+    }
+
+    // ─── 2. Load protocol parameters (live mode only) ──────────────
+    let openFeePct = 0;
+    let closeFeePct = 0;
+    let maintenanceMarginPct = 0;
+    let maxLeverage = 0;
+    let protocolParamsAvailable = false;
+    const RATE_POWER = 1_000_000_000; // Flash SDK RATE_DECIMALS = 9
+
+    // SDK objects retained for collateral scenario calculations
+    let sdkCustodyAcct: any = null;
+    let sdkEntryOraclePrice: any = null;
+    let sdkRawPosition: any = null;
+    let sdkSide: any = null;
+    let sdkPerpClient: any = null;
+
+    if (!this.config.simulationMode) {
+      try {
+        const {
+          PoolConfig: SDKPoolConfig,
+          CustodyAccount: SDKCustodyAccount,
+          OraclePrice: SDKOraclePrice,
+          PositionAccount: SDKPositionAccount,
+          Side: SDKSide,
+          BN_ZERO: SDK_BN_ZERO,
+        } = await import('flash-sdk');
+        const BN = (await import('bn.js')).default;
+        const { getPoolForMarket } = await import('../config/index.js');
+        const poolName = getPoolForMarket(upper);
+        if (poolName) {
+          const pc = SDKPoolConfig.fromIdsByName(poolName, this.config.network);
+          const custodies = pc.custodies as Array<{ custodyAccount: any; symbol: string }>;
+          const tokens = pc.tokens as Array<{ symbol: string; mintKey: any }>;
+          const targetToken = tokens.find(t => t.symbol.toUpperCase() === upper);
+          const perpClient = (this.flashClient as any).perpClient;
+
+          if (targetToken && perpClient) {
+            sdkPerpClient = perpClient;
+            const custodyInfo = custodies.find(c => c.symbol === targetToken.symbol);
+            if (custodyInfo) {
+              // Fetch on-chain custody account for fee and margin data
+              const custodyData = await perpClient.program?.account?.custody?.fetch(custodyInfo.custodyAccount);
+              if (custodyData) {
+                const custodyAcct = SDKCustodyAccount.from(custodyInfo.custodyAccount, custodyData);
+                sdkCustodyAcct = custodyAcct;
+                openFeePct = parseFloat(custodyAcct.fees.openPosition.toString()) / RATE_POWER * 100;
+                closeFeePct = parseFloat(custodyAcct.fees.closePosition.toString()) / RATE_POWER * 100;
+                // Maintenance margin from pricing params.
+                // pricing.maxLeverage is a u32 in BPS units (e.g. 10000000 = 1000x leverage).
+                // SDK formula: liabilities = sizeUsd * BPS_POWER / maxLeverage
+                // Human max leverage = maxLeverage / BPS_POWER
+                // Maintenance margin % = BPS_POWER / maxLeverage * 100
+                const BPS_POWER = 10_000;
+                const rawMaxLev = (custodyAcct as any).pricing?.maxLeverage;
+                const rawNum = typeof rawMaxLev === 'object' && rawMaxLev?.toNumber
+                  ? rawMaxLev.toNumber()
+                  : typeof rawMaxLev === 'number' ? rawMaxLev : 0;
+                if (Number.isFinite(rawNum) && rawNum > 0) {
+                  const humanMaxLev = rawNum / BPS_POWER;
+                  if (humanMaxLev > 0 && humanMaxLev <= 2000) {
+                    maxLeverage = humanMaxLev;
+                    maintenanceMarginPct = (BPS_POWER / rawNum) * 100;
+                  }
+                }
+                protocolParamsAvailable = true;
+              }
+            }
+
+            // Fetch raw position for SDK liquidation math in collateral scenarios
+            const markets = pc.markets as Array<{ marketAccount: any; targetMint: any; side: any }>;
+            const positionSide = pos.side === TradeSide.Long ? SDKSide.Long : SDKSide.Short;
+            sdkSide = positionSide;
+            const marketConfig = markets.find(
+              m => m.targetMint.equals(targetToken.mintKey) && m.side === positionSide,
+            );
+
+            if (marketConfig && perpClient.program?.account?.position) {
+              try {
+                const wallet = (this.flashClient as any).wallet?.publicKey;
+                if (wallet) {
+                  const allPositions = await perpClient.program.account.position.all([
+                    { memcmp: { offset: 8, bytes: wallet.toBase58() } },
+                  ]);
+                  // Find the raw position matching this market/side
+                  for (const rawPos of allPositions) {
+                    const raw = rawPos.account;
+                    if (raw.market?.equals?.(marketConfig.marketAccount)) {
+                      sdkRawPosition = { ...raw, pubkey: rawPos.publicKey };
+                      // Build entry oracle price from raw position
+                      if (raw.entryPrice && typeof raw.entryPrice === 'object' && 'price' in raw.entryPrice && 'exponent' in raw.entryPrice) {
+                        sdkEntryOraclePrice = SDKOraclePrice.from({
+                          price: raw.entryPrice.price,
+                          exponent: new BN(raw.entryPrice.exponent),
+                          confidence: SDK_BN_ZERO,
+                          timestamp: SDK_BN_ZERO,
+                        });
+                      }
+                      break;
+                    }
+                  }
+                }
+              } catch {
+                // Non-critical: raw position fetch failed, collateral scenarios will fall back
+              }
+            }
+          }
+        }
+      } catch {
+        // Protocol params unavailable — proceed with position data only
+      }
+    }
+
+    // Fallback max leverage from config
+    if (maxLeverage === 0) {
+      const { getMaxLeverage: getMaxLev } = await import('../config/index.js');
+      maxLeverage = getMaxLev(upper, false);
+      if (maintenanceMarginPct === 0 && maxLeverage > 0) {
+        maintenanceMarginPct = (1 / maxLeverage) * 100;
+      }
+    }
+
+    // SDK-exact collateral scenarios available when all raw data is loaded
+    const canUseSDK = !!(sdkPerpClient && sdkCustodyAcct && sdkEntryOraclePrice && sdkRawPosition && sdkSide !== null);
+
+    // ─── 3. Derived values ──────────────────────────────────────────
+    const distToLiq = pos.liquidationPrice > 0 && pos.currentPrice > 0
+      ? Math.abs(pos.currentPrice - pos.liquidationPrice) / pos.currentPrice * 100
+      : 0;
+
+    const pnlPct = pos.collateralUsd > 0 ? (pos.unrealizedPnl / pos.collateralUsd) * 100 : 0;
+    const sideLabel = pos.side === TradeSide.Long ? 'Long' : 'Short';
+
+    // ─── 4. Render position debug ───────────────────────────────────
+    const lines: string[] = [''];
+    const sec = theme.section;
+    const pair = theme.pair;
+    const dim = theme.dim;
+    const sep = theme.separator;
+
+    lines.push(`  ${theme.accentBold(`Position Debug — ${upper} ${sideLabel}`)}`);
+    lines.push(`  ${sep(44)}`);
+    lines.push('');
+
+    // Position structure
+    lines.push(`  ${sec('Position')}`);
+    lines.push(pair('Size', formatUsd(pos.sizeUsd)));
+    lines.push(pair('Collateral', formatUsd(pos.collateralUsd)));
+    lines.push(pair('Entry Price', formatPrice(pos.entryPrice)));
+    lines.push(pair('Current Price', formatPrice(pos.currentPrice)));
+    lines.push(pair('Leverage', `${pos.leverage.toFixed(2)}x`));
+    lines.push('');
+
+    // PnL
+    lines.push(`  ${sec('PnL')}`);
+    lines.push(pair('Unrealized PnL', colorPnl(pos.unrealizedPnl)));
+    lines.push(pair('PnL %', `${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}%`));
+    lines.push('');
+
+    // Margin & liquidation
+    lines.push(`  ${sec('Margin & Liquidation')}`);
+    if (maintenanceMarginPct > 0) {
+      lines.push(pair('Maint. Margin', `${maintenanceMarginPct.toFixed(2)}%`));
+    }
+    if (maxLeverage > 0) {
+      lines.push(pair('Max Leverage', `${maxLeverage}x`));
+    }
+    if (pos.liquidationPrice > 0) {
+      lines.push(pair('Liquidation Price', chalk.yellow(formatPrice(pos.liquidationPrice))));
+      lines.push(pair('Distance to Liq', `${distToLiq.toFixed(1)}%`));
+    } else {
+      lines.push(pair('Liquidation Price', dim('Unavailable')));
+    }
+    lines.push('');
+
+    // Fees (from protocol)
+    lines.push(`  ${sec('Fees')}`);
+    if (protocolParamsAvailable) {
+      lines.push(pair('Open Fee Rate', `${openFeePct.toFixed(4)}%`));
+      lines.push(pair('Close Fee Rate', `${closeFeePct.toFixed(4)}%`));
+    }
+    lines.push(pair('Unsettled Fees', formatUsd(pos.totalFees)));
+    lines.push('');
+
+    // ─── 5. Price impact scenarios ──────────────────────────────────
+    lines.push(`  ${sec('What If Scenarios')}`);
+    lines.push(`  ${sep(44)}`);
+    lines.push('');
+
+    const scenarios = [-15, -10, -5, 5, 10, 15];
+    for (const pctMove of scenarios) {
+      const simPrice = pos.currentPrice * (1 + pctMove / 100);
+      const priceDelta = simPrice - pos.entryPrice;
+      const mult = pos.side === TradeSide.Long ? 1 : -1;
+      const simPnl = pos.entryPrice > 0 ? (priceDelta / pos.entryPrice) * pos.sizeUsd * mult : 0;
+
+      // Check if this scenario would be liquidated
+      const isLiquidated = pos.liquidationPrice > 0 && (
+        (pos.side === TradeSide.Long && simPrice <= pos.liquidationPrice) ||
+        (pos.side === TradeSide.Short && simPrice >= pos.liquidationPrice)
+      );
+
+      if (isLiquidated) {
+        const liqDistAtScenario = Math.abs(simPrice - pos.liquidationPrice) / simPrice * 100;
+        lines.push(`  Price ${pctMove > 0 ? '+' : ''}${pctMove}%     → ${chalk.red('LIQUIDATED')}`);
+      } else {
+        const scenarioLiqDist = pos.liquidationPrice > 0
+          ? Math.abs(simPrice - pos.liquidationPrice) / simPrice * 100
+          : 0;
+        // Pad the raw PnL string BEFORE colorizing to avoid ANSI codes breaking alignment
+        const rawPnl = simPnl >= 0 ? `$${simPnl.toFixed(2)}` : `-$${Math.abs(simPnl).toFixed(2)}`;
+        const paddedPnl = rawPnl.padEnd(12);
+        const pnlStr = simPnl >= 0 ? chalk.green(paddedPnl) : chalk.red(paddedPnl);
+        const liqStr = scenarioLiqDist > 0 ? `Liq Distance: ${scenarioLiqDist.toFixed(1)}%` : '';
+        lines.push(`  Price ${(pctMove > 0 ? '+' : '') + pctMove + '%'}${' '.repeat(Math.max(1, 6 - String(pctMove).length))} → PnL: ${pnlStr}  ${liqStr}`);
+      }
+    }
+    lines.push('');
+
+    // ─── 6. Collateral adjustment simulation ────────────────────────
+    if (pos.liquidationPrice > 0) {
+      lines.push(`  ${sec('Add Collateral Scenarios')}`);
+      lines.push(`  ${sep(44)}`);
+      lines.push('');
+
+      const addAmounts = [50, 100, 200, 500];
+      const USD_DECIMALS = 6;
+
+      for (const addAmt of addAmounts) {
+        const newCollateral = pos.collateralUsd + addAmt;
+        const newLeverage = pos.sizeUsd / newCollateral;
+
+        if (canUseSDK) {
+          // SDK-exact: clone raw position with increased collateral, compute exact liq price
+          try {
+            const BN = (await import('bn.js')).default;
+            const { PositionAccount: SDKPositionAccount } = await import('flash-sdk');
+            const addBN = new BN(Math.round(addAmt * Math.pow(10, USD_DECIMALS)));
+            const newCollateralBN = sdkRawPosition.collateralUsd.add(addBN);
+            // Create modified position with increased collateral
+            const modifiedRaw = { ...sdkRawPosition, collateralUsd: newCollateralBN };
+            const modPosAcct = SDKPositionAccount.from(
+              sdkRawPosition.pubkey,
+              modifiedRaw as unknown as ConstructorParameters<typeof SDKPositionAccount>[1],
+            );
+            const unsettledFees = sdkRawPosition.unsettledFeesUsd ?? new BN(0);
+            const liqOraclePrice = sdkPerpClient.getLiquidationPriceContractHelper(
+              sdkEntryOraclePrice, unsettledFees, sdkSide, sdkCustodyAcct, modPosAcct,
+            );
+            const liqUi = parseFloat(liqOraclePrice.toUiPrice(8));
+            if (Number.isFinite(liqUi) && liqUi > 0) {
+              lines.push(`  Add ${formatUsd(addAmt).padEnd(8)} → Liq Price: ${chalk.yellow(formatPrice(liqUi))}  (${newLeverage.toFixed(1)}x leverage)`);
+              continue;
+            }
+          } catch {
+            // Fall through to approximation
+          }
+        }
+
+        // Fallback: use protocol-aligned formula (matches getLiquidationPriceContractHelper)
+        if (newLeverage < 1) {
+          // Fully collateralized — collateral exceeds position size, no liquidation risk
+          lines.push(`  Add ${formatUsd(addAmt).padEnd(8)} → ${chalk.green('Liquidation: None')}  ${dim(`(fully collateralized, ${newLeverage.toFixed(2)}x effective leverage)`)}`);
+        } else if (pos.sizeUsd > 0 && pos.entryPrice > 0) {
+          const fallbackLiqPrice = computeSimulationLiquidationPrice(
+            pos.entryPrice, pos.sizeUsd, newCollateral, pos.side, 0.01, 0.0008,
+          );
+          if (Number.isFinite(fallbackLiqPrice) && fallbackLiqPrice > 0) {
+            lines.push(`  Add ${formatUsd(addAmt).padEnd(8)} → Liq Price: ${chalk.yellow(formatPrice(fallbackLiqPrice))}  (${newLeverage.toFixed(1)}x leverage)`);
+          }
+        }
+      }
+      lines.push('');
+    }
+
+    // ─── 7. Reduce position size scenarios ──────────────────────────
+    if (pos.liquidationPrice > 0 && pos.leverage > 1 && pos.collateralUsd > 0) {
+      // Generate leverage targets below current, down to 1x
+      // For fractional leverage (e.g. 1.33x), start from floor and include 1x
+      const targetLeverages: number[] = [];
+      // If leverage > 2, show integer steps down
+      for (let lev = Math.floor(pos.leverage) - 1; lev >= 1 && targetLeverages.length < 4; lev--) {
+        targetLeverages.push(lev);
+      }
+      // If current leverage is fractional and > 1 but < 2, show 1x explicitly
+      if (targetLeverages.length === 0 && pos.leverage > 1) {
+        targetLeverages.push(1);
+      }
+
+      if (targetLeverages.length > 0) {
+        lines.push(`  ${sec('Reduce Position Size')}`);
+        lines.push(`  ${sep(44)}`);
+        lines.push('');
+
+        const USD_DECIMALS_SIZE = 6;
+
+        for (const targetLev of targetLeverages) {
+          const newSizeUsd = pos.collateralUsd * targetLev;
+
+          if (canUseSDK) {
+            // SDK-exact: clone raw position with reduced sizeUsd, compute exact liq price
+            try {
+              const BN = (await import('bn.js')).default;
+              const { PositionAccount: SDKPositionAccount } = await import('flash-sdk');
+              const newSizeBN = new BN(Math.round(newSizeUsd * Math.pow(10, USD_DECIMALS_SIZE)));
+              const modifiedRaw = { ...sdkRawPosition, sizeUsd: newSizeBN };
+              const modPosAcct = SDKPositionAccount.from(
+                sdkRawPosition.pubkey,
+                modifiedRaw as unknown as ConstructorParameters<typeof SDKPositionAccount>[1],
+              );
+              const unsettledFees = sdkRawPosition.unsettledFeesUsd ?? new BN(0);
+              const liqOraclePrice = sdkPerpClient.getLiquidationPriceContractHelper(
+                sdkEntryOraclePrice, unsettledFees, sdkSide, sdkCustodyAcct, modPosAcct,
+              );
+              const liqUi = parseFloat(liqOraclePrice.toUiPrice(8));
+              if (Number.isFinite(liqUi) && liqUi > 0) {
+                lines.push(`  Reduce to ${targetLev}x → Size: ${formatUsd(newSizeUsd).padEnd(10)} → Liq Price: ${chalk.yellow(formatPrice(liqUi))}`);
+                continue;
+              }
+            } catch {
+              // Fall through to approximation
+            }
+          }
+
+          // Fallback: use protocol-aligned liquidation formula
+          if (targetLev >= 1 && pos.entryPrice > 0) {
+            const fallbackLiq = computeSimulationLiquidationPrice(
+              pos.entryPrice, newSizeUsd, pos.collateralUsd, pos.side, 0.01, 0.0008,
+            );
+            if (Number.isFinite(fallbackLiq) && fallbackLiq > 0) {
+              lines.push(`  Reduce to ${targetLev}x → Size: ${formatUsd(newSizeUsd).padEnd(10)} → Liq Price: ${chalk.yellow(formatPrice(fallbackLiq))}`);
+            }
+          }
+        }
+        lines.push('');
+      }
+    }
+
+    // ─── 8. Data source labels ──────────────────────────────────────
+    lines.push(`  ${sep(44)}`);
+    lines.push(dim(`  Price Source:       Pyth Hermes`));
+    const sdkLabel = canUseSDK ? ' (on-chain CustodyAccount + getLiquidationPriceContractHelper)' : protocolParamsAvailable ? ' (on-chain CustodyAccount)' : '';
+    lines.push(dim(`  Liquidation Math:  Flash SDK${sdkLabel}`));
+    lines.push(dim(`  Position Data:     ${this.config.simulationMode ? 'Simulation' : 'Flash SDK perpClient.getUserPositions()'}`));
+    lines.push('');
+
+    console.log(lines.join('\n'));
   }
 
   /**

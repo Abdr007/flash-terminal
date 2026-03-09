@@ -253,8 +253,14 @@ export class ToolEngine {
       case ActionType.RpcTest:
         return { toolName: 'rpc_test', params: {} };
 
+      case ActionType.ProtocolStatus:
+        return { toolName: 'protocol_status', params: {} };
+
       case ActionType.TxInspect:
         return { toolName: 'tx_inspect', params: { signature: intent.signature } };
+
+      case ActionType.TxDebug:
+        return { toolName: 'tx_debug', params: { signature: intent.signature, showState: intent.showState } };
 
       case ActionType.TradeHistory:
         return { toolName: 'trade_history', params: {} };
@@ -281,6 +287,7 @@ export class ToolEngine {
       `    ${cmd('add $200 to SOL long')}      Add collateral to position`,
       `    ${cmd('remove $100 from ETH long')} Remove collateral`,
       `    ${cmd('positions')}                 View open positions`,
+      `    ${cmd('position debug <asset>')}    Protocol-level position debug`,
       `    ${cmd('markets')}                   List available markets`,
       `    ${cmd('trade history')}              View recent trades`,
       '',
@@ -292,8 +299,8 @@ export class ToolEngine {
       `    ${cmd('leaderboard')}               Top traders by PnL or volume`,
       `    ${cmd('whale activity')}             Recent large positions`,
       `    ${cmd('fees')}                      Protocol fee data`,
-      `    ${cmd('liquidations <asset>')}       Liquidation clusters by price`,
-      `    ${cmd('funding <asset>')}            Funding rate dashboard`,
+      `    ${cmd('liquidations <asset>')}       Liquidation risk data`,
+      `    ${cmd('funding <asset>')}            OI imbalance & fee dashboard`,
       `    ${cmd('depth <asset>')}              Liquidity depth around price`,
       `    ${cmd('protocol health')}            Protocol health overview`,
       '',
@@ -331,10 +338,13 @@ export class ToolEngine {
       `    ${cmd('monitor liquidations <mkt>')} Liquidation cluster alerts`,
       `    ${cmd('monitor protocol')}          Protocol health monitor`,
       `    ${cmd('watch <command>')}           Auto-refresh any command`,
+      `    ${cmd('protocol status')}            Protocol connection overview`,
       `    ${cmd('system status')}             System health overview`,
       `    ${cmd('rpc status')}                Active RPC endpoint info`,
       `    ${cmd('rpc test')}                  Test all RPC endpoints`,
       `    ${cmd('tx inspect <sig>')}          Inspect a transaction`,
+      `    ${cmd('tx debug <sig>')}            Debug transaction with protocol context`,
+      `    ${cmd('tx debug <sig> --state')}    Debug + show protocol state`,
       `    ${cmd('doctor')}                    Run terminal diagnostic`,
       `    ${cmd('degen')}                     Toggle degen mode`,
       '',

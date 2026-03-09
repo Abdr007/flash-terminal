@@ -37,7 +37,7 @@ import {
   getLeverageLimits,
 } from '../types/index.js';
 import { PythHttpClient, getPythProgramKeyForCluster, PriceData } from '@pythnetwork/client';
-import { getPoolForMarket, isTradeablePool, POOL_NAMES } from '../config/index.js';
+import { getPoolForMarket, isTradeablePool, POOL_NAMES, getMaxLeverage } from '../config/index.js';
 import { getLogger } from '../utils/logger.js';
 import { getErrorMessage, withRetry } from '../utils/retry.js';
 import type { WalletManager } from '../wallet/walletManager.js';
@@ -1323,7 +1323,15 @@ export class FlashClient implements IFlashClient {
       positionSize: collateralAmount * leverage,
       entryPrice: targetPrice.uiPrice,
       liquidationPrice: liqPrice,
-      estimatedFee: (collateralAmount * leverage * 8) / 10_000, // 0.08% fee
+      estimatedFee: (() => {
+        try {
+          const RATE_POWER = 1_000_000_000;
+          const openFeeBps = parseFloat(targetCustodyAcct.fees.openPosition.toString()) / RATE_POWER;
+          return collateralAmount * leverage * openFeeBps;
+        } catch {
+          return 0; // SDK fee unavailable
+        }
+      })(),
       programId: poolConfig.programId.toBase58(),
       accountCount: accountSet.size,
       instructionCount: allIxs.length,
@@ -1522,7 +1530,7 @@ export class FlashClient implements IFlashClient {
           liquidationPrice,
           openFee: 0,
           totalFees,
-          fundingRate: 0,
+          fundingRate: 0, // Flash Trade uses lock fees (included in unsettledFeesUsd), not periodic funding rates
           timestamp: raw.openTime ? Number(raw.openTime.toString()) : Date.now() / 1000,
         });
       } catch (error: unknown) {
@@ -1584,8 +1592,8 @@ export class FlashClient implements IFlashClient {
             priceChange24h: 0,
             openInterestLong: 0,
             openInterestShort: 0,
-            maxLeverage: 100,
-            fundingRate: 0,
+            maxLeverage: getMaxLeverage(token.symbol, false),
+            fundingRate: 0, // Flash Trade uses lock fees, not periodic funding rates
           });
         }
       } catch { /* skip pools with price fetch failures */ }

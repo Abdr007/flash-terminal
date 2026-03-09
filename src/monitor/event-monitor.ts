@@ -444,40 +444,39 @@ export class EventMonitor {
       return;
     }
 
-    // Estimate liquidation prices from position data
-    // Group positions by proximity to create "clusters"
-    interface LiqCluster {
+    // Analyze real position data — sizes, counts, weighted entry prices
+    // No fabricated liquidation price estimates
+    interface PositionCluster {
       side: string;
-      priceLevel: number;
-      totalSize: number;
-      count: number;
-      distancePct: number;
+      avgEntry: number;       // size-weighted average entry price (real data)
+      totalSize: number;      // total position size in USD
+      count: number;          // number of positions
+      distancePct: number;    // distance from current price to avg entry (real data)
     }
 
-    const clusters: LiqCluster[] = [];
+    const clusters: PositionCluster[] = [];
 
-    // Longs liquidate below current price, shorts above
     const longPositions = marketPositions.filter(p => (p.side ?? '').toLowerCase() === 'long');
     const shortPositions = marketPositions.filter(p => (p.side ?? '').toLowerCase() === 'short');
 
-    // Estimate liquidation zones for longs (below current price)
+    // Long position cluster — real data only
     if (longPositions.length > 0) {
       const totalLongSize = longPositions.reduce((sum, p) => sum + (p.size_usd ?? 0), 0);
-      // Average entry price as proxy for cluster center
-      const weightedEntry = longPositions.reduce((sum, p) => {
-        const entry = p.entry_price ?? currentPrice;
-        const size = p.size_usd ?? 0;
-        return sum + entry * size;
-      }, 0) / totalLongSize;
+      const weightedEntry = totalLongSize > 0
+        ? longPositions.reduce((sum, p) => {
+            const entry = p.entry_price ?? currentPrice;
+            const size = p.size_usd ?? 0;
+            return sum + entry * size;
+          }, 0) / totalLongSize
+        : currentPrice;
 
-      // Estimate liq price ~10-20% below entry depending on leverage
-      const estLiqPrice = weightedEntry * 0.85;
-      const distancePct = currentPrice > 0 ? ((currentPrice - estLiqPrice) / currentPrice) * 100 : 0;
+      // Distance from current price to average entry — this is real, observable data
+      const distancePct = currentPrice > 0 ? ((currentPrice - weightedEntry) / currentPrice) * 100 : 0;
 
       if (totalLongSize >= WHALE_SIZE_THRESHOLD_USD) {
         clusters.push({
           side: 'LONG',
-          priceLevel: estLiqPrice,
+          avgEntry: weightedEntry,
           totalSize: totalLongSize,
           count: longPositions.length,
           distancePct,
@@ -485,22 +484,23 @@ export class EventMonitor {
       }
     }
 
-    // Estimate liquidation zones for shorts (above current price)
+    // Short position cluster — real data only
     if (shortPositions.length > 0) {
       const totalShortSize = shortPositions.reduce((sum, p) => sum + (p.size_usd ?? 0), 0);
-      const weightedEntry = shortPositions.reduce((sum, p) => {
-        const entry = p.entry_price ?? currentPrice;
-        const size = p.size_usd ?? 0;
-        return sum + entry * size;
-      }, 0) / totalShortSize;
+      const weightedEntry = totalShortSize > 0
+        ? shortPositions.reduce((sum, p) => {
+            const entry = p.entry_price ?? currentPrice;
+            const size = p.size_usd ?? 0;
+            return sum + entry * size;
+          }, 0) / totalShortSize
+        : currentPrice;
 
-      const estLiqPrice = weightedEntry * 1.15;
-      const distancePct = currentPrice > 0 ? ((estLiqPrice - currentPrice) / currentPrice) * 100 : 0;
+      const distancePct = currentPrice > 0 ? ((weightedEntry - currentPrice) / currentPrice) * 100 : 0;
 
       if (totalShortSize >= WHALE_SIZE_THRESHOLD_USD) {
         clusters.push({
           side: 'SHORT',
-          priceLevel: estLiqPrice,
+          avgEntry: weightedEntry,
           totalSize: totalShortSize,
           count: shortPositions.length,
           distancePct,
@@ -517,14 +517,17 @@ export class EventMonitor {
     }
 
     for (const cluster of clusters) {
-      const severity = cluster.distancePct < 5 ? 'critical' : cluster.distancePct < 15 ? 'warning' : 'info';
+      // Severity based on how close current price is to average entry (tighter = more positions in profit/loss)
+      const absDist = Math.abs(cluster.distancePct);
+      const severity: MonitorEvent['severity'] = absDist < 2 ? 'warning' : 'info';
       const sideLabel = cluster.side.toLowerCase();
+      const distDir = cluster.distancePct >= 0 ? '+' : '';
 
       if (this.cycleCount === 1 || severity !== 'info') {
         events.push({
           type: 'liquidation',
           severity,
-          message: `${cluster.side} liquidation cluster at ${formatPrice(cluster.priceLevel)} (${cluster.distancePct.toFixed(1)}% away) — ${formatUsd(cluster.totalSize)} across ${cluster.count} ${sideLabel} positions`,
+          message: `${cluster.side} position cluster — Avg Entry: ${formatPrice(cluster.avgEntry)} (${distDir}${cluster.distancePct.toFixed(1)}% from price) — ${formatUsd(cluster.totalSize)} across ${cluster.count} ${sideLabel} positions`,
         });
       }
     }

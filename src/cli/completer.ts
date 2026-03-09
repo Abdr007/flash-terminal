@@ -21,6 +21,7 @@ const COMMANDS: string[] = [
   'add',
   'remove',
   'positions',
+  'position debug',
   'markets',
   'trade history',
   // Market Data & Analytics
@@ -64,10 +65,12 @@ const COMMANDS: string[] = [
   'monitor position',
   'monitor liquidations',
   'watch',
+  'protocol status',
   'system status',
   'rpc status',
   'rpc test',
   'tx inspect',
+  'tx debug',
   'doctor',
   'flash doctor',
   'degen',
@@ -239,6 +242,17 @@ function matchMarketContext(lower: string, original: string): [string[], string]
   if (removeMatch) {
     const partial = removeMatch[1].toUpperCase();
     const prefix = original.slice(0, original.length - removeMatch[1].length);
+    const matches = ALL_MARKETS.filter(m => m.startsWith(partial));
+    if (matches.length > 0) {
+      return [matches.map(m => prefix + m), original];
+    }
+  }
+
+  // "position debug s" → suggest market
+  const posDebugMatch = lower.match(/^pos(?:ition)?\s+debug\s+(\S*)$/);
+  if (posDebugMatch) {
+    const partial = posDebugMatch[1].toUpperCase();
+    const prefix = original.slice(0, original.length - posDebugMatch[1].length);
     const matches = ALL_MARKETS.filter(m => m.startsWith(partial));
     if (matches.length > 0) {
       return [matches.map(m => prefix + m), original];
