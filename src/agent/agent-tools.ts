@@ -408,15 +408,8 @@ export const aiDashboard: ToolDefinition = {
     const hasStats = stats && (stats.volumeUsd > 0 || stats.trades > 0);
     lines.push(boxLine(dashPair('24h Volume:', hasStats ? formatUsd(stats.volumeUsd) : chalk.dim('Data unavailable'))));
 
-    // Average funding rate (computed from real market data)
-    const marketsWithFunding = snapshot.markets.filter(m => Number.isFinite(m.fundingRate) && m.fundingRate !== 0);
-    if (marketsWithFunding.length > 0) {
-      const avgFunding = marketsWithFunding.reduce((s, m) => s + m.fundingRate, 0) / marketsWithFunding.length;
-      const fundingColor = avgFunding >= 0 ? chalk.hex('#00FF88') : chalk.red;
-      lines.push(boxLine(dashPair('Avg Funding Rate:', fundingColor(formatPercent(avgFunding)))));
-    } else {
-      lines.push(boxLine(dashPair('Avg Funding Rate:', chalk.dim('Data unavailable'))));
-    }
+    // Flash Trade uses borrow/lock fees, not periodic funding rates
+    lines.push(boxLine(dashPair('Fee Model:', 'Borrow/Lock fees')));
 
     lines.push(boxEmpty());
 
@@ -501,27 +494,13 @@ export const aiDashboard: ToolDefinition = {
     lines.push('');
 
     // ═══════════════════════════════════════════════════════════════════
-    // SECTION 4 — Funding Rates
-    // Source: Flash SDK market data (fundingRate field per market)
+    // SECTION 4 — Fee Model
+    // Flash Trade uses borrow/lock fees, not periodic funding rates
     // ═══════════════════════════════════════════════════════════════════
-    lines.push(boxTop(' Funding Rates '));
-
-    if (marketsWithFunding.length > 0) {
-      // Sort by absolute funding rate (most active first)
-      const fundingSorted = [...marketsWithFunding]
-        .sort((a, b) => Math.abs(b.fundingRate) - Math.abs(a.fundingRate))
-        .slice(0, 8);
-
-      for (const m of fundingSorted) {
-        const sym = chalk.bold(m.symbol.padEnd(18));
-        const rate = m.fundingRate;
-        const rateColor = rate >= 0 ? chalk.hex('#00FF88') : chalk.red;
-        lines.push(boxLine(`${sym}${rateColor(formatPercent(rate))}`));
-      }
-    } else {
-      lines.push(boxLine(chalk.dim('Data unavailable')));
-    }
-
+    lines.push(boxTop(' Fee Structure '));
+    lines.push(boxLine(chalk.dim('Flash Trade uses borrow/lock fees,')));
+    lines.push(boxLine(chalk.dim('not periodic funding rates.')));
+    lines.push(boxLine(chalk.dim('Per-market fees: use "funding <asset>"')));
     lines.push(boxBot());
     lines.push('');
 
@@ -532,7 +511,8 @@ export const aiDashboard: ToolDefinition = {
     lines.push(boxTop(' Your Portfolio '));
 
     lines.push(boxLine(dashPair('Positions:', String(snapshot.positions.length))));
-    lines.push(boxLine(dashPair('Balance:', formatUsd(snapshot.portfolio.balance))));
+    const displayBalance = snapshot.portfolio.usdcBalance ?? snapshot.portfolio.balance;
+    lines.push(boxLine(dashPair('Balance:', formatUsd(displayBalance))));
 
     if (snapshot.positions.length > 0) {
       const exposure = computeExposure(snapshot.portfolio);
@@ -716,8 +696,11 @@ export const portfolioStateTool: ToolDefinition = {
     const inspector = getInspector(context);
     const pm = getPortfolioManager();
 
-    const [positions] = await Promise.all([inspector.getPositions()]);
-    const balance = context.flashClient.getBalance();
+    const [positions, portfolio] = await Promise.all([
+      inspector.getPositions(),
+      inspector.getPortfolio(),
+    ]);
+    const balance = portfolio.usdcBalance ?? context.flashClient.getBalance();
     const state = pm.getState(positions, balance);
 
     const lines = [
@@ -779,7 +762,7 @@ export const portfolioExposureTool: ToolDefinition = {
       inspector.getPositions(),
       inspector.getPortfolio(),
     ]);
-    const balance = context.flashClient.getBalance();
+    const balance = portfolio.usdcBalance ?? context.flashClient.getBalance();
     const state = pm.getState(positions, balance);
     const exposure = computeExposure(portfolio);
 
@@ -831,8 +814,11 @@ export const portfolioRebalanceTool: ToolDefinition = {
     const inspector = getInspector(context);
     const pm = getPortfolioManager();
 
-    const positions = await inspector.getPositions();
-    const balance = context.flashClient.getBalance();
+    const [positions, rbPortfolio] = await Promise.all([
+      inspector.getPositions(),
+      inspector.getPortfolio(),
+    ]);
+    const balance = rbPortfolio.usdcBalance ?? context.flashClient.getBalance();
 
     if (positions.length === 0) {
       return {

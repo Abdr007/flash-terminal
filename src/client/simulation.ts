@@ -409,6 +409,7 @@ export class SimulatedFlashClient implements IFlashClient {
       totalFees: this.state.totalFeesPaid,
       positions,
       totalPositionValue,
+      usdcBalance: this.state.balance, // Simulation balance is USDC
     };
   }
 
