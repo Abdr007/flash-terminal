@@ -60,6 +60,9 @@ const COMMANDS: string[] = [
   // Utilities
   'dryrun',
   'monitor',
+  'monitor protocol',
+  'monitor position',
+  'monitor liquidations',
   'watch',
   'system status',
   'rpc status',
@@ -108,6 +111,16 @@ const USAGE_EXAMPLES: Record<string, string[]> = {
   'dryrun': [
     'dryrun open 5x long SOL $500',
     'dryrun close ETH short',
+  ],
+  'monitor': [
+    'monitor SOL',
+    'monitor BTC',
+    'monitor ETH',
+    'monitor protocol',
+    'monitor position SOL',
+    'monitor position BTC',
+    'monitor liquidations SOL',
+    'monitor liquidations BTC',
   ],
   'watch': [
     'watch positions',

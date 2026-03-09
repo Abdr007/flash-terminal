@@ -853,11 +853,11 @@ export const flashGetMarketData: ToolDefinition = {
       return { success: true, message: theme.dim('\n  Market data unavailable. Try again later.\n') };
     }
 
-    // Enrich with fstats OI data and CoinGecko 24h change
+    // Enrich with fstats OI data and Pyth 24h change
     try {
       const { PriceService } = await import('../data/prices.js');
       const priceSvc = new PriceService();
-      const [oi, cgPrices] = await Promise.all([
+      const [oi, pythPrices] = await Promise.all([
         context.dataClient.getOpenInterest().catch(() => ({ markets: [] as MarketOI[] })),
         priceSvc.getPrices(markets.map(m => m.symbol)).catch(() => new Map()),
       ]);
@@ -869,9 +869,9 @@ export const flashGetMarketData: ToolDefinition = {
           m.openInterestLong = oiData.longOi;
           m.openInterestShort = oiData.shortOi;
         }
-        const cgPrice = cgPrices.get(m.symbol);
-        if (cgPrice && m.priceChange24h === 0) {
-          m.priceChange24h = cgPrice.priceChange24h;
+        const pythPrice = pythPrices.get(m.symbol);
+        if (pythPrice && m.priceChange24h === 0) {
+          m.priceChange24h = pythPrice.priceChange24h;
         }
       }
     } catch { /* ignore enrichment errors */ }

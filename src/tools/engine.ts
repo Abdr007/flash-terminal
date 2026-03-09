@@ -325,7 +325,11 @@ export class ToolEngine {
       // ── 6. Utilities ────────────────────────────────────────────
       `  ${sec('Utilities')}`,
       `    ${cmd('dryrun <command>')}          Preview trade without executing`,
-      `    ${cmd('monitor')}                   Live market monitor`,
+      `    ${cmd('monitor')}                   Live market table`,
+      `    ${cmd('monitor <market>')}          Event-driven market monitor`,
+      `    ${cmd('monitor position <mkt>')}    Track position PnL & risk`,
+      `    ${cmd('monitor liquidations <mkt>')} Liquidation cluster alerts`,
+      `    ${cmd('monitor protocol')}          Protocol health monitor`,
       `    ${cmd('watch <command>')}           Auto-refresh any command`,
       `    ${cmd('system status')}             System health overview`,
       `    ${cmd('rpc status')}                Active RPC endpoint info`,

@@ -317,7 +317,7 @@ export const aiRiskReport: ToolDefinition = {
 // ─── dashboard ─────────────────────────────────────────────────────────────────
 //
 // Production observability dashboard — deterministic, data-driven, no signals.
-// Data sources: Flash SDK, fstats API, Solana RPC, Pyth oracle, CoinGecko.
+// Data sources: Flash SDK, fstats API, Solana RPC, Pyth Hermes oracle.
 // Every metric comes from a real source. Missing data shows "Data unavailable".
 //
 

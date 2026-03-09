@@ -8,6 +8,7 @@ import { ToolEngine } from '../tools/engine.js';
 import { ToolContext, ToolResult, FlashConfig, IFlashClient, ActionType, ParsedIntent, DryRunPreview, TradeSide } from '../types/index.js';
 import { SimulatedFlashClient } from '../client/simulation.js';
 import { FStatsClient } from '../data/fstats.js';
+import { PriceService } from '../data/prices.js';
 import { WalletManager, createConnection } from '../wallet/index.js';
 import { WalletStore } from '../wallet/wallet-store.js';
 import { getLastWallet, updateLastWallet } from '../wallet/session.js';
@@ -28,6 +29,7 @@ import { startWatch } from './watch.js';
 import { theme } from './theme.js';
 import { completer, getSuggestions } from './completer.js';
 import { resolveMarket } from '../utils/market-resolver.js';
+import type { MonitorType } from '../monitor/event-monitor.js';
 
 /** Alias for backward compat — delegates to centralized resolver */
 function resolveMarketAlias(input: string): string {
@@ -1316,6 +1318,12 @@ export class FlashTerminal {
 
     this.saveHistory();
     try {
+      // Flush price history to disk so 24h change persists across restarts
+      new PriceService().flushHistory();
+    } catch {
+      // Best-effort cleanup
+    }
+    try {
       if (this.statusBar) this.statusBar.stop();
     } catch {
       // Best-effort cleanup
@@ -1451,21 +1459,60 @@ export class FlashTerminal {
       const market = resolveMarketAlias(rawMarket);
       intent = { action: ActionType.LiquidityDepth, market } as ParsedIntent;
     } else if (lower.startsWith('monitor ') || lower.startsWith('market monitor ')) {
-      // "monitor oil", "monitor crude oil", "market monitor sol" → single-market monitor
+      // Event-driven monitoring commands
       const prefix = lower.startsWith('market monitor ') ? 'market monitor ' : 'monitor ';
-      const rawMarket = input.slice(prefix.length).trim();
-      if (rawMarket) {
+      const rest = input.slice(prefix.length).trim();
+      const restLower = rest.toLowerCase();
+
+      if (restLower === 'protocol') {
+        // "monitor protocol" → protocol health monitor
+        await this.handleEventMonitor('protocol');
+        return;
+      } else if (restLower.startsWith('position ') || restLower.startsWith('pos ')) {
+        // "monitor position sol" → position monitor
+        const rawMarket = restLower.startsWith('position ') ? rest.slice('position '.length).trim() : rest.slice('pos '.length).trim();
         const market = resolveMarketAlias(rawMarket);
         const { getPoolForMarket } = await import('../config/index.js');
         if (!getPoolForMarket(market)) {
           console.log(chalk.red(`  Unknown market: ${rawMarket}`));
-          console.log(chalk.dim(`  Try: monitor sol, monitor crude oil, monitor btc`));
+          console.log(chalk.dim(`  Try: monitor position sol, monitor position btc`));
           return;
         }
-        await this.handleMarketMonitor(market);
+        await this.handleEventMonitor('position', market);
+        return;
+      } else if (restLower.startsWith('liquidation') || restLower.startsWith('liq')) {
+        // "monitor liquidations sol" → liquidation monitor
+        const keyword = restLower.startsWith('liquidations ') ? 'liquidations ' :
+                        restLower.startsWith('liquidation ') ? 'liquidation ' :
+                        restLower.startsWith('liqs ') ? 'liqs ' :
+                        restLower.startsWith('liq ') ? 'liq ' : '';
+        const rawMarket = keyword ? rest.slice(keyword.length).trim() : '';
+        if (!rawMarket) {
+          console.log(chalk.yellow(`  Usage: monitor liquidations <market>`));
+          console.log(chalk.dim(`  Example: monitor liquidations sol`));
+          return;
+        }
+        const market = resolveMarketAlias(rawMarket);
+        const { getPoolForMarket } = await import('../config/index.js');
+        if (!getPoolForMarket(market)) {
+          console.log(chalk.red(`  Unknown market: ${rawMarket}`));
+          return;
+        }
+        await this.handleEventMonitor('liquidations', market);
+        return;
+      } else if (rest) {
+        // "monitor sol", "monitor crude oil" → market event monitor
+        const market = resolveMarketAlias(rest);
+        const { getPoolForMarket } = await import('../config/index.js');
+        if (!getPoolForMarket(market)) {
+          console.log(chalk.red(`  Unknown market: ${rest}`));
+          console.log(chalk.dim(`  Try: monitor sol, monitor btc, monitor protocol`));
+          return;
+        }
+        await this.handleEventMonitor('market', market);
         return;
       }
-      // No market specified — show all markets
+      // No args — fall through to full market table monitor
       intent = { action: ActionType.MarketMonitor } as ParsedIntent;
     } else if (lower === 'inspect pool' || lower.startsWith('inspect pool ')) {
       const poolInput = lower === 'inspect pool' ? '' : input.slice('inspect pool '.length).trim();
@@ -1875,14 +1922,14 @@ export class FlashTerminal {
     }
 
     let running = true;
+    let hasData = false;
 
-    const render = async () => {
+    const fetchData = async () => {
       const [priceMap, oi] = await Promise.all([
         priceSvc.getPrices(allSymbols).catch(() => new Map()),
         this.fstats.getOpenInterest().catch(() => ({ markets: [] })),
       ]);
 
-      // Build rows only for markets with live price data
       const rows: { symbol: string; price: number; change: number; totalOi: number; longPct: number; shortPct: number }[] = [];
 
       for (const sym of allSymbols) {
@@ -1897,11 +1944,11 @@ export class FlashTerminal {
         rows.push({ symbol: sym, price: tp.price, change: tp.priceChange24h, totalOi, longPct, shortPct });
       }
 
-      // Sort by total OI descending (most active markets first)
       rows.sort((a, b) => b.totalOi - a.totalOi);
+      return rows;
+    };
 
-      // Move cursor to top-left and clear from cursor to end of screen
-      // This avoids the flicker caused by full screen clear (\x1B[2J)
+    const renderTable = (rows: { symbol: string; price: number; change: number; totalOi: number; longPct: number; shortPct: number }[]) => {
       process.stdout.write('\x1B[H\x1B[J');
       const now = new Date().toLocaleTimeString();
       console.log('');
@@ -1911,7 +1958,6 @@ export class FlashTerminal {
       console.log(`  ${theme.separator(68)}`);
       console.log('');
 
-      // Header
       const hdr = [
         theme.tableHeader('  Asset'.padEnd(12)),
         theme.tableHeader('Price'.padStart(12)),
@@ -1922,41 +1968,58 @@ export class FlashTerminal {
       console.log(hdr);
       console.log(`  ${theme.separator(68)}`);
 
-      if (rows.length === 0) {
-        console.log(theme.dim('\n  Waiting for price data...\n'));
-      } else {
-        for (const r of rows) {
-          const sym = chalk.bold(('  ' + r.symbol).padEnd(12));
-          const price = formatPrice(r.price).padStart(12);
-          const change = colorPercent(r.change).padStart(12);
-          const oiStr = formatUsd(r.totalOi).padStart(15);
-          const ratio = `${r.longPct} / ${r.shortPct}`.padStart(14);
-          const ratioColored = r.longPct > 60 ? theme.positive(ratio) : r.shortPct > 60 ? theme.negative(ratio) : theme.dim(ratio);
-          console.log(`${sym}  ${price}  ${change}  ${oiStr}  ${ratioColored}`);
-        }
+      for (const r of rows) {
+        const sym = chalk.bold(('  ' + r.symbol).padEnd(12));
+        const price = formatPrice(r.price).padStart(12);
+        const change = colorPercent(r.change).padStart(12);
+        const oiStr = formatUsd(r.totalOi).padStart(15);
+        const ratio = `${r.longPct} / ${r.shortPct}`.padStart(14);
+        const ratioColored = r.longPct > 60 ? theme.positive(ratio) : r.shortPct > 60 ? theme.negative(ratio) : theme.dim(ratio);
+        console.log(`${sym}  ${price}  ${change}  ${oiStr}  ${ratioColored}`);
       }
 
       console.log('');
     };
 
-    // Initial render
+    // Show loading message, then wait for first successful data fetch
+    console.log(theme.dim('\n  Loading market data...\n'));
+
     try {
-      await render();
+      const initialRows = await fetchData();
+      if (initialRows.length > 0) {
+        hasData = true;
+        renderTable(initialRows);
+      } else {
+        // Data fetched but no prices yet — show loading state once (no spam)
+        process.stdout.write('\x1B[H\x1B[J');
+        console.log('');
+        console.log(`  ${theme.accentBold('MARKET MONITOR')}`);
+        console.log(theme.dim('  Waiting for price data...  |  Press any key to exit'));
+        console.log('');
+      }
     } catch {
       console.log(chalk.red('  Failed to fetch market data.'));
       return;
     }
 
-    // Set up refresh interval
+    // Refresh interval — only redraw when there's data
+    let refreshInProgress = false;
     const interval = setInterval(async () => {
-      if (!running) return;
+      if (!running || refreshInProgress) return;
+      refreshInProgress = true;
       try {
-        await render();
+        const rows = await fetchData();
+        if (rows.length > 0) {
+          hasData = true;
+          renderTable(rows);
+        }
+        // If no data, don't redraw — keep whatever was last shown
       } catch {
         // Silently skip failed refreshes
+      } finally {
+        refreshInProgress = false;
       }
     }, 5_000);
-    interval.unref();
 
     // Wait for keypress to exit — pause readline, use raw mode for single-key detection
     await new Promise<void>((resolve) => {
@@ -1985,6 +2048,25 @@ export class FlashTerminal {
       };
 
       process.stdin.on('data', onKey);
+    });
+  }
+
+  /**
+   * Handle event-driven monitoring — detects and reports meaningful state changes.
+   * Replaces repetitive polling with threshold-based event detection.
+   */
+  private async handleEventMonitor(type: MonitorType, market?: string): Promise<void> {
+    const { EventMonitor } = await import('../monitor/event-monitor.js');
+
+    const monitor = new EventMonitor(this.flashClient, type, market);
+
+    // Pause readline so keypress doesn't leak into CLI input
+    this.rl.pause();
+
+    await monitor.start(() => {
+      // onExit callback — resume readline
+      this.rl.resume();
+      console.log('');
     });
   }
 
