@@ -2047,6 +2047,10 @@ export class FlashTerminal {
     }
     let telemetry: Telemetry = { rpcLatencyMs: -1, oracleLatencyMs: -1, slot: -1, slotLag: -1, renderTimeMs: 0 };
 
+    // Slot freeze detection — tracks consecutive cycles where slot doesn't advance
+    let previousSlot = -1;
+    let slotFreezeCount = 0;
+
     const fetchData = async (): Promise<MarketRow[]> => {
       const now = Date.now();
 
@@ -2058,11 +2062,21 @@ export class FlashTerminal {
       ]);
       telemetry.oracleLatencyMs = Math.round(performance.now() - oracleStart);
 
-      // Measure RPC latency + get slot (lightweight call)
+      // Measure RPC latency + get slot (lightweight — reuses cached values)
       if (this.rpcManager) {
         telemetry.rpcLatencyMs = this.rpcManager.activeLatencyMs;
         telemetry.slot = this.rpcManager.activeSlot;
         telemetry.slotLag = this.rpcManager.activeSlotLag;
+
+        // Slot freeze detection
+        if (telemetry.slot > 0) {
+          if (telemetry.slot === previousSlot) {
+            slotFreezeCount++;
+          } else {
+            slotFreezeCount = 0;
+          }
+          previousSlot = telemetry.slot;
+        }
       }
 
       const rows: MarketRow[] = [];
@@ -2189,23 +2203,36 @@ export class FlashTerminal {
     const buildFrame = (rows: MarketRow[]): string[] => {
       const now = new Date().toLocaleTimeString();
 
-      // ── Telemetry status bar ──
-      const rpcStr = telemetry.rpcLatencyMs >= 0
-        ? `RPC ${telemetry.rpcLatencyMs}ms`
-        : `RPC N/A`;
-      const oracleStr = telemetry.oracleLatencyMs >= 0
-        ? `Oracle ${telemetry.oracleLatencyMs}ms`
-        : `Oracle N/A`;
-      const slotStr = telemetry.slot >= 0
-        ? `Slot ${telemetry.slot}`
-        : `Slot N/A`;
-      const lagStr = telemetry.slotLag >= 0
-        ? `Lag ${telemetry.slotLag}`
-        : `Lag N/A`;
-      const renderStr = `Render ${telemetry.renderTimeMs}ms`;
-      const refreshStr = `Refresh ${REFRESH_MS / 1000}s`;
+      // ── Telemetry status bar with health coloring ──
+      // RPC: green <150ms, yellow 150-400ms, red >400ms
+      const rpcMs = telemetry.rpcLatencyMs;
+      const rpcStr = rpcMs < 0 ? theme.dim('RPC N/A')
+        : rpcMs < 150 ? chalk.green(`RPC ${rpcMs}ms`)
+        : rpcMs < 400 ? chalk.yellow(`RPC ${rpcMs}ms`)
+        : chalk.red(`RPC ${rpcMs}ms`);
 
-      const telemetryLine = theme.dim(`  ${rpcStr}  |  ${oracleStr}  |  ${slotStr}  |  ${lagStr}  |  ${renderStr}  |  ${refreshStr}`);
+      // Oracle: green <1000ms, red+warning >1000ms
+      const oMs = telemetry.oracleLatencyMs;
+      const oracleStr = oMs < 0 ? theme.dim('Oracle N/A')
+        : oMs <= 1000 ? chalk.green(`Oracle ${oMs}ms`)
+        : chalk.red(`Oracle ${oMs}ms ⚠`);
+
+      // Slot: show freeze warning if slot unchanged for >=2 cycles
+      const slotStr = telemetry.slot < 0 ? theme.dim('Slot N/A')
+        : slotFreezeCount >= 2 ? chalk.red(`Slot ${telemetry.slot} ⚠`)
+        : chalk.green(`Slot ${telemetry.slot}`);
+
+      // Slot lag: green=0, yellow=1-5, red=>5
+      const lag = telemetry.slotLag;
+      const lagStr = lag < 0 ? theme.dim('Lag N/A')
+        : lag === 0 ? chalk.green('Lag 0')
+        : lag <= 5 ? chalk.yellow(`Lag ${lag}`)
+        : chalk.red(`Lag ${lag}`);
+
+      const renderStr = theme.dim(`Render ${telemetry.renderTimeMs}ms`);
+      const refreshStr = theme.dim(`Refresh ${REFRESH_MS / 1000}s`);
+
+      const telemetryLine = `  ${rpcStr}  ${theme.dim('|')}  ${oracleStr}  ${theme.dim('|')}  ${slotStr}  ${theme.dim('|')}  ${lagStr}  ${theme.dim('|')}  ${renderStr}  ${theme.dim('|')}  ${refreshStr}`;
 
       const lines: string[] = [
         '',
