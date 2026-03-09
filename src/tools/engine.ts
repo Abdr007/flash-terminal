@@ -374,6 +374,7 @@ export class ToolEngine {
       `    ${cmd('dryrun <command>')}          Preview without executing`,
       `    ${cmd('doctor')}                  Run terminal diagnostic`,
       `    ${cmd('watch <command>')}          Auto-refresh a command`,
+      `    ${cmd('degen')}                   Toggle degen mode (500x on SOL/BTC/ETH)`,
       '',
       `  ${theme.separator(48)}`,
       `  ${cmd('exit')}                        Close the terminal`,

@@ -717,6 +717,18 @@ export class AIInterpreter {
       }
 
       const validated = ParsedIntentSchema.parse(parsed);
+
+      // Reject negative amounts that AI may have silently converted to positive
+      const intentAny = validated as Record<string, unknown>;
+      if (typeof intentAny.collateral === 'number' && intentAny.collateral <= 0) {
+        logger.info('AI', `${source} returned non-positive collateral: ${intentAny.collateral}`);
+        return null;
+      }
+      if (typeof intentAny.amount === 'number' && intentAny.amount <= 0) {
+        logger.info('AI', `${source} returned non-positive amount: ${intentAny.amount}`);
+        return null;
+      }
+
       logger.debug('AI', `${source} parsed intent`, { action: validated.action });
       return validated;
     } catch (error: unknown) {

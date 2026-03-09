@@ -37,7 +37,7 @@ import {
   getLeverageLimits,
 } from '../types/index.js';
 import { PythHttpClient, getPythProgramKeyForCluster, PriceData } from '@pythnetwork/client';
-import { getPoolForMarket } from '../config/index.js';
+import { getPoolForMarket, POOL_NAMES } from '../config/index.js';
 import { getLogger } from '../utils/logger.js';
 import { getErrorMessage, withRetry } from '../utils/retry.js';
 import type { WalletManager } from '../wallet/walletManager.js';
@@ -648,7 +648,8 @@ export class FlashClient implements IFlashClient {
             }
           } catch (simError: unknown) {
             const simMsg = getErrorMessage(simError);
-            if (simMsg.includes('simulation failed')) throw simError;
+            // Re-throw program errors (from mapProgramError) and simulation failures
+            if (simMsg.includes('simulation failed') || simMsg.includes('Trade rejected') || simMsg.includes('Transaction rejected')) throw simError;
             // Non-critical simulation failures (RPC timeout etc) — proceed with send
             logger.debug('CLIENT', `Pre-send simulation skipped: ${scrubSensitive(simMsg)}`);
           }
@@ -1065,11 +1066,28 @@ export class FlashClient implements IFlashClient {
         );
       }
 
+      // Compute PnL before sending the close transaction
+      let pnl = 0;
+      try {
+        const existingPositions = await this.getPositions();
+        const pos = existingPositions.find(
+          p => p.market?.toUpperCase() === market.toUpperCase() && p.side === side
+        );
+        if (pos && pos.entryPrice > 0 && pos.sizeUsd > 0) {
+          const priceDelta = targetPrice.uiPrice - pos.entryPrice;
+          const pnlMult = side === TradeSide.Long ? 1 : -1;
+          pnl = (priceDelta / pos.entryPrice) * pos.sizeUsd * pnlMult;
+          if (!Number.isFinite(pnl)) pnl = 0;
+        }
+      } catch {
+        // Non-critical — PnL display is best-effort
+      }
+
       const txSignature = await this.sendTx(result.instructions, result.additionalSigners, poolConfig);
       this.recordRecentTrade(cacheKey);
 
-      logger.trade('CLOSE', { market, side, price: targetPrice.uiPrice, tx: txSignature });
-      return { txSignature, exitPrice: targetPrice.uiPrice, pnl: 0 };
+      logger.trade('CLOSE', { market, side, price: targetPrice.uiPrice, pnl, tx: txSignature });
+      return { txSignature, exitPrice: targetPrice.uiPrice, pnl };
     } finally {
       this.releaseTradeLock(market, side);
     }
@@ -1339,17 +1357,37 @@ export class FlashClient implements IFlashClient {
   // ─── Queries ──────────────────────────────────────────────────────────────
 
   async getPositions(): Promise<Position[]> {
-    const rawPositions = await this.perpClient.getUserPositions(this.wallet.publicKey, this.poolConfig);
-    if (rawPositions.length === 0) return [];
+    // Query ALL pools for user positions — not just the default pool.
+    // Users may have positions across Crypto.1, Governance.1, Virtual.1, etc.
+    const allPoolNames = POOL_NAMES;
+    const allPositions: Position[] = [];
 
-    const priceMap = await this.getPriceMap(this.poolConfig);
-    const positions: Position[] = [];
-    const markets = this.poolConfig.markets as unknown as Array<{
+    for (const poolName of allPoolNames) {
+      try {
+        await this.getPositionsForPool(poolName, allPositions);
+      } catch (error: unknown) {
+        getLogger().debug('CLIENT', `Pool ${poolName} position query failed: ${getErrorMessage(error)}`);
+      }
+    }
+
+    return allPositions;
+  }
+
+  private async getPositionsForPool(poolName: string, positions: Position[]): Promise<void> {
+    const poolConfig = poolName === this.poolConfig.poolName
+      ? this.poolConfig
+      : PoolConfig.fromIdsByName(poolName, this.config.network);
+
+    const rawPositions = await this.perpClient.getUserPositions(this.wallet.publicKey, poolConfig);
+    if (rawPositions.length === 0) return;
+
+    const priceMap = await this.getPriceMap(poolConfig);
+    const markets = poolConfig.markets as unknown as Array<{
       marketAccount: PublicKey; targetMint: PublicKey; collateralMint: PublicKey;
       side: typeof Side.Long | typeof Side.Short;
     }>;
-    const tokens = this.poolConfig.tokens as Array<{ symbol: string; mintKey: PublicKey; decimals: number }>;
-    const custodies = this.poolConfig.custodies as Array<{ custodyAccount: PublicKey; symbol: string }>;
+    const tokens = poolConfig.tokens as Array<{ symbol: string; mintKey: PublicKey; decimals: number }>;
+    const custodies = poolConfig.custodies as Array<{ custodyAccount: PublicKey; symbol: string }>;
 
     // Batch-fetch all custody accounts for SDK liquidation math
     const custodyKeys = custodies.map(c => c.custodyAccount);
@@ -1366,8 +1404,7 @@ export class FlashClient implements IFlashClient {
         }
       }
     } catch {
-      // Non-critical: liquidation will fall back to 0 if custody fetch fails
-      getLogger().debug('CLIENT', 'Custody fetch for liquidation calc failed, liq prices may be unavailable');
+      getLogger().debug('CLIENT', `Custody fetch for ${poolName} failed, liq prices may be unavailable`);
     }
 
     for (const raw of rawPositions as unknown as Array<{
@@ -1479,7 +1516,6 @@ export class FlashClient implements IFlashClient {
       }
     }
 
-    return positions;
   }
 
   async getMarketData(market?: string): Promise<MarketData[]> {

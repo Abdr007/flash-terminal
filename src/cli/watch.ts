@@ -149,6 +149,9 @@ export async function startWatch(
   interval.unref();
 
   // ─── Key listener — exit on 'q' ───────────────────────────────
+  // Pause readline to prevent it from consuming stdin while we're in raw mode
+  deps.rl.pause();
+
   await new Promise<void>((resolve) => {
     const wasRaw = process.stdin.isRaw;
     if (process.stdin.isTTY) {
@@ -161,17 +164,19 @@ export async function startWatch(
 
       // Exit on 'q', 'Q', or Ctrl+C (0x03)
       if (key === 'q' || key === 'Q' || key === '\x03') {
+        // Remove listener FIRST to prevent double-fire
+        process.stdin.removeListener('data', onKey);
         running = false;
         clearInterval(interval);
-        process.stdin.removeListener('data', onKey);
         if (process.stdin.isTTY) {
           process.stdin.setRawMode(wasRaw ?? false);
         }
+        // Resume readline before output
+        deps.rl.resume();
 
         // Clear screen and show exit message
         readline.cursorTo(process.stdout, 0, 0);
         readline.clearScreenDown(process.stdout);
-        console.log(theme.dim('  Watch mode stopped.\n'));
         resolve();
       }
     };

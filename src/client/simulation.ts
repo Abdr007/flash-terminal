@@ -22,12 +22,49 @@ import { getErrorMessage } from '../utils/retry.js';
 const MAX_TRADE_HISTORY = 500;
 const MAX_LIVE_PRICE_ENTRIES = 100;
 
+// Pyth Hermes price feed IDs for ALL Flash Trade markets.
+// This is the PRIMARY price source — same oracle Flash Trade uses on-chain.
+// Feed IDs sourced from hermes.pyth.network & Flash SDK PoolConfig.json pythPriceId.
+const PYTH_HERMES_FEEDS: Record<string, string> = {
+  // ── Crypto.1 ──
+  SOL:      '0xef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d',
+  BTC:      '0xe62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43',
+  ETH:      '0xff61491a931112ddf1bd8147cd1b641375f79f5825126d665480874634fd0ace',
+  ZEC:      '0xbe9b59d178f0d6a97ab4c343bff2aa69caa1eaae3e9048a65788c529b125bb24',
+  BNB:      '0x2f95862b045670cd22bee3114c39763a4a08beeb663b145d283c31d7d1101c4f',
+  // ── Governance.1 ──
+  JTO:      '0xb43660a5f790c69354b0729a5ef9d50d68f1df92107540210b9cccba1f947cc2',
+  JUP:      '0x0a0408d619e9380abad35060f9192039ed5042fa6f82301d0e48bb52be830996',
+  PYTH:     '0x0bbf28e9a841a1cc788f6a361b17ca072d0ea3098a1e5df1c3922d06719579ff',
+  RAY:      '0x91568baa8beb53db23eb3fb7f22c6e8bd303d103919e19733f2bb642d3e7987a',
+  HYPE:     '0x4279e31cc369bbcc2faf022b382b080e32a8e689ff20fbc530d2a603eb6cd98b',
+  MET:      '0x0292e0f405bcd4a496d34e48307f6787349ad2bcd8505c3d3a9f77d81a67a682',
+  KMNO:     '0xb17e5bc5de742a8a378b54c9c75442b7d51e30ada63f28d9bd28d3c0e26511a0',
+  // ── Community.1 / Community.2 / Trump.1 / Ore.1 ──
+  PUMP:     '0x7a01fca212788bba7c5bf8c9efd576a8a722f070d2c17596ff7bb609b8d5c3b9',
+  BONK:     '0x72b021217ca3fe68922a19aaf990109cb9d84e9ad004b4d2025ad6f529314419',
+  PENGU:    '0xbed3097008b9b5e3c93bec20be79cb43986b85a996475589351a21e67bae9b61',
+  WIF:      '0x4ca4beeca86f0d164160323817a4e42b10010a724c2217c6ee41b54cd4cc61fc',
+  FARTCOIN: '0x58cd29ef0e714c5affc44f269b2c1899a52da4169d7acc147b9da692e6953608',
+  ORE:      '0x142b804c658e14ff60886783e46e5a51bdf398b4871d9d8f7c28aa1585cad504',
+  // ── Virtual.1 (commodities, forex) ──
+  XAU:      '0x765d2ba906dbc32ca17cc11f5310a89e9ee1f6420508c63861f2f8ba4ee34bb2',
+  XAG:      '0xf2fb02c32b055c805e7238d628e5e9dadef274376114eb1f012337cabe93871e',
+  CRUDEOIL: '0x6a60b0d1ea6809b47dbe599f24a71c8bda335aa5c77e503e7260cde5ba2f4694',
+  EUR:      '0xa995d00bb36a63cef7fd2c287dc105fc8f3d93779f062f09551b0af3e81ec30b',
+  GBP:      '0x84c2dde9633d93d1bcad84e7dc41c9d56578b7ec52fabedc1f335d673df0a7c1',
+  USDJPY:   '0xef2c98c804ba503c6a707e38be4dfbb16683775f195b091252bf24693042fd52',
+  USDCNH:   '0xeef52e09c878ad41f6a81803e3640fe04dceea727de894edd4ea117e2e332e66',
+};
+const PYTH_HERMES_URL = 'https://hermes.pyth.network/v2/updates/price/latest';
+
 // Simulated trading fee: 0.08% of position size (Flash Trade typical)
 const SIM_FEE_BPS = 8;
 
 /**
  * SimulatedFlashClient implements IFlashClient for paper trading.
- * Uses CoinGecko prices as primary, fstats as enrichment. No hardcoded fallbacks.
+ * Uses Pyth Hermes as primary price source (same oracle as Flash Trade on-chain).
+ * CoinGecko is secondary — used only for 24h change % stats.
  * No real transactions are ever submitted.
  */
 export class SimulatedFlashClient implements IFlashClient {
@@ -66,29 +103,57 @@ export class SimulatedFlashClient implements IFlashClient {
       }
     }
 
-    // Primary: CoinGecko via PriceService
+    // ── PRIMARY: Pyth Hermes — same oracle Flash Trade uses on-chain ──
+    // Real-time (~400ms), free, no API key, no rate limits, covers ALL 25 markets
+    try {
+      const allFeeds = Object.entries(PYTH_HERMES_FEEDS);
+      const idsParam = allFeeds.map(([, id]) => `ids[]=${id}`).join('&');
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 8_000);
+      const resp = await fetch(`${PYTH_HERMES_URL}?${idsParam}&parsed=true`, { signal: controller.signal });
+      clearTimeout(timeout);
+      if (resp.ok) {
+        const data = await resp.json() as { parsed?: Array<{ id: string; price: { price: string; expo: number } }> };
+        const feedToSymbol = new Map(allFeeds.map(([sym, id]) => [id.replace('0x', ''), sym]));
+        let updated = 0;
+        for (const item of data.parsed ?? []) {
+          const sym = feedToSymbol.get(item.id);
+          if (sym && item.price) {
+            const price = Number(item.price.price) * Math.pow(10, item.price.expo);
+            if (price > 0 && Number.isFinite(price)) {
+              this.livePrices.set(sym, price);
+              updated++;
+            }
+          }
+        }
+        logger.debug('SIM', `Pyth Hermes: updated ${updated}/${allFeeds.length} prices`);
+      }
+    } catch (error: unknown) {
+      logger.info('SIM', `Pyth Hermes fetch failed: ${getErrorMessage(error)}`);
+    }
+
+    // ── SECONDARY: CoinGecko — only for 24h change % (supplementary stats) ──
     try {
       const defaultSymbols = ['SOL', 'BTC', 'ETH', 'BNB', 'JUP', 'PYTH', 'RAY', 'BONK', 'WIF'];
       const symbols = this.livePrices.size > 0
         ? Array.from(this.livePrices.keys())
         : defaultSymbols;
       const prices = await this.priceService.getPrices(symbols);
-      let updated = 0;
       for (const [sym, tp] of prices) {
-        if (tp.price > 0) {
-          this.livePrices.set(sym, tp.price);
+        // Only take 24h change stats — Pyth Hermes prices are authoritative
+        if (tp.priceChange24h !== 0) {
           this.priceChanges24h.set(sym, tp.priceChange24h);
-          updated++;
+        }
+        // Fallback: if Pyth missed a market, use CoinGecko price
+        if ((!this.livePrices.has(sym) || this.livePrices.get(sym) === 0) && tp.price > 0) {
+          this.livePrices.set(sym, tp.price);
         }
       }
-      if (updated > 0) {
-        logger.debug('SIM', `Updated ${updated} prices from PriceService`);
-      }
     } catch (error: unknown) {
-      logger.info('SIM', `PriceService failed: ${getErrorMessage(error)}`);
+      logger.debug('SIM', `CoinGecko stats fetch failed: ${getErrorMessage(error)}`);
     }
 
-    // Secondary: enrich with fstats open positions (may have additional markets)
+    // ── TERTIARY: fstats — fallback for any remaining gaps ──
     try {
       const positions = await this.fstats.getOpenPositions();
       const priceMap = new Map<string, number[]>();
@@ -102,7 +167,6 @@ export class SimulatedFlashClient implements IFlashClient {
       }
       for (const [sym, prices] of priceMap) {
         const avg = prices.reduce((a, b) => a + b, 0) / prices.length;
-        // Only use fstats price if we don't have a CoinGecko price or fstats is likely fresher
         if (!this.livePrices.has(sym) || this.livePrices.get(sym) === 0) {
           this.livePrices.set(sym, avg);
         }
@@ -165,6 +229,21 @@ export class SimulatedFlashClient implements IFlashClient {
     const logger = getLogger();
     await this.refreshPrices();
 
+    // Reject duplicate positions (same market + side) — matches Flash Trade protocol
+    const existing = this.state.positions.find(
+      p => p.market === market.toUpperCase() && p.side === side,
+    );
+    if (existing) {
+      throw new Error(`Already have an open ${side} position on ${market}. Close it first or adjust collateral.`);
+    }
+
+    // Per-market leverage limit (from Flash Trade protocol)
+    const { getMaxLeverage } = await import('../config/index.js');
+    const maxLev = getMaxLeverage(market, true); // allow up to degen max; tool layer enforces degen flag
+    if (leverage > maxLev) {
+      throw new Error(`Maximum leverage for ${market}: ${maxLev}x`);
+    }
+
     // Validate
     const validation = validateTrade(market, side, collateralAmount, leverage, this.state.balance);
     if (!validation.valid) {
@@ -174,6 +253,11 @@ export class SimulatedFlashClient implements IFlashClient {
     const price = this.getPrice(market);
     const sizeUsd = collateralAmount * leverage;
     const liquidationPrice = this.calcLiquidationPrice(price, leverage, side);
+
+    // Reject positions where liquidation price equals entry (instant liquidation)
+    if (liquidationPrice === price || liquidationPrice <= 0) {
+      throw new Error(`Leverage ${leverage}x is too high — position would be immediately liquidated. Reduce leverage.`);
+    }
 
     // Trading fee: 0.08% of position size
     const openFee = (sizeUsd * SIM_FEE_BPS) / 10_000;
@@ -264,6 +348,9 @@ export class SimulatedFlashClient implements IFlashClient {
   }
 
   async addCollateral(market: string, side: TradeSide, amount: number): Promise<CollateralResult> {
+    if (!Number.isFinite(amount) || amount <= 0) {
+      throw new Error('Collateral amount must be a positive number');
+    }
     if (amount > this.state.balance) {
       throw new Error(`Insufficient balance: $${this.state.balance.toFixed(2)} available`);
     }
@@ -282,14 +369,32 @@ export class SimulatedFlashClient implements IFlashClient {
   }
 
   async removeCollateral(market: string, side: TradeSide, amount: number): Promise<CollateralResult> {
+    if (!Number.isFinite(amount) || amount <= 0) {
+      throw new Error('Collateral amount must be a positive number');
+    }
     const pos = this.state.positions.find(
       (p) => p.market === market.toUpperCase() && p.side === side
     );
     if (!pos) throw new Error(`No open ${side} position on ${market}`);
     if (amount >= pos.collateralUsd) throw new Error('Cannot remove all collateral — close position instead');
 
-    pos.collateralUsd -= amount;
-    const newLev = pos.collateralUsd > 0 ? pos.sizeUsd / pos.collateralUsd : 0;
+    // Check that removal won't cause instant liquidation
+    const newCollateral = pos.collateralUsd - amount;
+    const newLev = newCollateral > 0 ? pos.sizeUsd / newCollateral : 0;
+    if (newLev > 0) {
+      const currentPrice = this.livePrices.get(pos.market) ?? pos.entryPrice;
+      const newLiqPrice = this.calcLiquidationPrice(pos.entryPrice, newLev, side);
+      const wouldLiquidate = side === TradeSide.Long
+        ? newLiqPrice >= currentPrice
+        : newLiqPrice <= currentPrice;
+      if (wouldLiquidate || newLiqPrice <= 0 || newLiqPrice === pos.entryPrice) {
+        throw new Error(
+          `Removing $${amount.toFixed(2)} would push leverage to ${newLev.toFixed(1)}x — position would be liquidated. Reduce the amount.`
+        );
+      }
+    }
+
+    pos.collateralUsd = newCollateral;
     pos.leverage = Number.isFinite(newLev) ? newLev : 0;
     this.state.balance += amount;
 

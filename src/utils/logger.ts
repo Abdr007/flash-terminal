@@ -109,8 +109,8 @@ export class Logger {
       this.writeToFile(entry);
     }
 
-    // Show in CLI (only for warn/error by default, or if showInCli is true)
-    if (this.showInCli || level >= LogLevel.Warn) {
+    // Show in CLI only if explicitly enabled (showInCli) or for errors
+    if (this.showInCli || level >= LogLevel.Error) {
       this.writeToConsole(entry);
     }
   }

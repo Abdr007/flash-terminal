@@ -86,7 +86,7 @@ export const OpenPositionSchema = z.object({
   market: z.string(),
   side: z.nativeEnum(TradeSide),
   collateral: z.number().positive().max(10_000_000),
-  leverage: z.number().min(1).max(100),
+  leverage: z.number().min(1).max(500),  // per-market limits enforced at tool level
   collateral_token: z.string().optional(),
 });
 
@@ -562,6 +562,7 @@ export interface AutopilotState {
   lastCycleAt: number | null;
   lastSuggestion: TradeSuggestion | null;
   lastSignals: StrategySignal[];
+  lastSkipReason: string | null;
 }
 
 export interface AggregatedSignal {
@@ -720,6 +721,7 @@ export interface ToolContext {
   flashClient: IFlashClient;
   dataClient: IDataClient;
   simulationMode: boolean;
+  degenMode: boolean;
   walletAddress: string;
   walletName: string;
   walletManager?: WalletManager;
@@ -798,15 +800,38 @@ export interface SimulatedTrade {
 
 // ─── Validation ──────────────────────────────────────────────────────────────
 
-export const LEVERAGE_LIMITS: Record<string, { min: number; max: number }> = {
-  SOL: { min: 1.1, max: 100 },
-  BTC: { min: 1.1, max: 100 },
-  ETH: { min: 1.1, max: 100 },
-  DEFAULT: { min: 1.1, max: 50 },
+// Per-market leverage limits — sourced from Flash Trade SDK PoolConfig.json
+const LEVERAGE_LIMITS: Record<string, { min: number; max: number }> = {
+  SOL:      { min: 1.1, max: 500 },  // degen max (tool layer enforces normal vs degen)
+  BTC:      { min: 1.1, max: 500 },
+  ETH:      { min: 1.1, max: 500 },
+  ZEC:      { min: 1.1, max: 10 },
+  BNB:      { min: 1.1, max: 50 },
+  XAU:      { min: 1.1, max: 100 },
+  XAG:      { min: 1.1, max: 100 },
+  CRUDEOIL: { min: 1.1, max: 50 },
+  EUR:      { min: 1.1, max: 500 },
+  GBP:      { min: 1.1, max: 500 },
+  USDJPY:   { min: 1.1, max: 500 },
+  USDCNH:   { min: 1.1, max: 500 },
+  JTO:      { min: 1.1, max: 50 },
+  JUP:      { min: 1.1, max: 50 },
+  PYTH:     { min: 1.1, max: 50 },
+  RAY:      { min: 1.1, max: 50 },
+  HYPE:     { min: 1.1, max: 20 },
+  MET:      { min: 1.1, max: 10 },
+  KMNO:     { min: 1.1, max: 50 },
+  PUMP:     { min: 1.1, max: 25 },
+  BONK:     { min: 1.1, max: 25 },
+  PENGU:    { min: 1.1, max: 25 },
+  WIF:      { min: 1.1, max: 25 },
+  FARTCOIN: { min: 1.1, max: 25 },
+  ORE:      { min: 1.1, max: 5 },
+  DEFAULT:  { min: 1.1, max: 100 },
 };
 
 export function getLeverageLimits(market: string): { min: number; max: number } {
-  return LEVERAGE_LIMITS[market] ?? LEVERAGE_LIMITS['DEFAULT'];
+  return LEVERAGE_LIMITS[market.toUpperCase()] ?? LEVERAGE_LIMITS['DEFAULT'];
 }
 
 export interface TradeValidation {

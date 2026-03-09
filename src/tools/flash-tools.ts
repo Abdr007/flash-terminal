@@ -228,6 +228,30 @@ export const flashOpenPosition: ToolDefinition = {
       return { success: false, message: chalk.red(`  Minimum collateral is $10 (got $${collateral}).`) };
     }
 
+    // Per-market leverage limit from Flash Trade protocol
+    const { getMaxLeverage, hasDegenMode, getDegenMinLeverage } = await import('../config/index.js');
+    const maxLev = getMaxLeverage(market, context.degenMode);
+    if (leverage > maxLev) {
+      if (!context.degenMode && hasDegenMode(market)) {
+        const degenMax = getMaxLeverage(market, true);
+        return { success: false, message: chalk.red(
+          `  Maximum leverage for ${market}: ${maxLev}x. ` +
+          `Enable degen mode for up to ${degenMax}x (min ${getDegenMinLeverage(market)}x).`
+        ) };
+      }
+      return { success: false, message: chalk.red(`  Maximum leverage for ${market}: ${maxLev}x`) };
+    }
+
+    // Degen mode: enforce minimum leverage requirement
+    if (context.degenMode && hasDegenMode(market)) {
+      const degenMin = getDegenMinLeverage(market);
+      if (leverage > getMaxLeverage(market, false) && leverage < degenMin) {
+        return { success: false, message: chalk.red(
+          `  Degen mode on ${market} requires minimum ${degenMin}x leverage (got ${leverage}x).`
+        ) };
+      }
+    }
+
     const sizeUsd = collateral * leverage;
     const isLive = !context.simulationMode;
     const guard = getSigningGuard();
@@ -426,6 +450,19 @@ export const flashClosePosition: ToolDefinition = {
       return { success: false, message: chalk.red(`  ${rateCheck.reason}`) };
     }
 
+    // Pre-check: verify position exists before showing confirmation
+    try {
+      const positions = await context.flashClient.getPositions();
+      const exists = positions.some(p =>
+        (p.market ?? '').toUpperCase() === market.toUpperCase() && p.side === side,
+      );
+      if (!exists) {
+        return { success: false, message: chalk.red(`  No open ${side} position on ${market}.`) };
+      }
+    } catch {
+      // Non-critical: let the close attempt handle the error
+    }
+
     // Position details for close confirmation
     const posLines = await buildPositionPreview(context, market, side);
     const closeLines = [
@@ -540,6 +577,19 @@ export const flashAddCollateral: ToolDefinition = {
       return { success: false, message: chalk.red(`  ${rateCheck.reason}`) };
     }
 
+    // Pre-check: verify position exists before showing confirmation
+    try {
+      const positions = await context.flashClient.getPositions();
+      const exists = positions.some(p =>
+        (p.market ?? '').toUpperCase() === market.toUpperCase() && p.side === side,
+      );
+      if (!exists) {
+        return { success: false, message: chalk.red(`  No open ${side} position on ${market}.`) };
+      }
+    } catch {
+      // Non-critical: let the add attempt handle the error
+    }
+
     const addPosLines = await buildPositionPreview(context, market, side);
     return {
       success: true,
@@ -637,6 +687,23 @@ export const flashRemoveCollateral: ToolDefinition = {
         result: 'rate_limited', reason: rateCheck.reason,
       });
       return { success: false, message: chalk.red(`  ${rateCheck.reason}`) };
+    }
+
+    // Pre-check: verify position exists before showing confirmation
+    try {
+      const positions = await context.flashClient.getPositions();
+      const pos = positions.find(p =>
+        (p.market ?? '').toUpperCase() === market.toUpperCase() && p.side === side,
+      );
+      if (!pos) {
+        return { success: false, message: chalk.red(`  No open ${side} position on ${market}.`) };
+      }
+      // Check if remove amount exceeds collateral
+      if (pos.collateralUsd && amount >= pos.collateralUsd) {
+        return { success: false, message: chalk.red(`  Cannot remove ${formatUsd(amount)} — position only has ${formatUsd(pos.collateralUsd)} collateral. Close position instead.`) };
+      }
+    } catch {
+      // Non-critical: let the remove attempt handle the error
     }
 
     const rmPosLines = await buildPositionPreview(context, market, side);
@@ -1367,6 +1434,18 @@ export const walletBalance: ToolDefinition = {
   execute: async (_params, context): Promise<ToolResult> => {
     const wm = context.walletManager;
     if (!wm || !wm.isConnected) {
+      // In simulation mode, show sim balance instead of error
+      if (context.simulationMode) {
+        const balance = context.flashClient.getBalance();
+        const lines = [
+          theme.titleBlock('WALLET BALANCE (SIM)'),
+          '',
+          theme.pair('USDC', theme.positive(formatUsd(balance))),
+          theme.dim('  Simulation wallet — no real tokens'),
+          '',
+        ];
+        return { success: true, message: lines.join('\n') };
+      }
       return { success: true, message: chalk.dim('  No wallet connected. Use "wallet import <name> <path>" or "wallet connect <path>".') };
     }
     try {
@@ -1397,6 +1476,18 @@ export const walletTokens: ToolDefinition = {
   execute: async (_params, context): Promise<ToolResult> => {
     const wm = context.walletManager;
     if (!wm || (!wm.isConnected && !wm.hasAddress)) {
+      // In simulation mode, show sim balance instead of error
+      if (context.simulationMode) {
+        const balance = context.flashClient.getBalance();
+        const lines = [
+          theme.titleBlock('TOKENS IN WALLET (SIM)'),
+          '',
+          theme.pair('USDC', theme.positive(formatUsd(balance))),
+          theme.dim('  Simulation wallet — no real tokens on-chain'),
+          '',
+        ];
+        return { success: true, message: lines.join('\n') };
+      }
       return { success: true, message: chalk.dim('  No wallet connected. Use "wallet import <name> <path>" or "wallet connect <path>".') };
     }
     try {

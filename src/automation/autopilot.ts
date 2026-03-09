@@ -48,6 +48,7 @@ export class Autopilot {
     lastCycleAt: null,
     lastSuggestion: null,
     lastSignals: [],
+    lastSkipReason: null,
   };
 
   constructor(context: ToolContext, config: AutopilotConfig) {
@@ -188,6 +189,12 @@ export class Autopilot {
       lines.push(`    ${sideColor(s.side.toUpperCase())} ${s.market} ${s.leverage}x — ${(s.confidence * 100).toFixed(0)}% confidence`);
     }
 
+    if (this.state.lastSkipReason) {
+      lines.push('');
+      lines.push(chalk.bold('  Last Skip Reason:'));
+      lines.push(`    ${chalk.yellow(this.state.lastSkipReason)}`);
+    }
+
     lines.push('');
     return lines.join('\n');
   }
@@ -221,6 +228,7 @@ export class Autopilot {
       const balance = usdcBalance > 0 ? usdcBalance : this.context.flashClient.getBalance();
 
       if (balance < MIN_TRADE_BALANCE) {
+        this.state.lastSkipReason = `Insufficient balance ($${balance.toFixed(2)} < $${MIN_TRADE_BALANCE})`;
         logger.info('AUTOPILOT', `Cycle ${this.state.cycleCount}: Balance $${balance.toFixed(2)} below minimum $${MIN_TRADE_BALANCE} — skipping`);
         this.log(chalk.yellow(`  [Autopilot] Insufficient balance ($${balance.toFixed(2)}) — skipping cycle`));
         return;
@@ -228,6 +236,7 @@ export class Autopilot {
 
       // Position count cap
       if (positions.length >= Autopilot.MAX_POSITIONS) {
+        this.state.lastSkipReason = `Max positions (${Autopilot.MAX_POSITIONS}) reached`;
         logger.info('AUTOPILOT', `Cycle ${this.state.cycleCount}: Max positions (${Autopilot.MAX_POSITIONS}) reached`);
         this.log(chalk.yellow(`  [Autopilot] Max positions (${Autopilot.MAX_POSITIONS}) reached — skipping`));
         return;
@@ -237,11 +246,13 @@ export class Autopilot {
       const markets = await this.inspector.getMarkets();
       const validPriceMarkets = markets.filter((m) => m.price > 0 && Number.isFinite(m.price));
       if (validPriceMarkets.length === 0) {
+        this.state.lastSkipReason = 'No live price data available';
         logger.info('AUTOPILOT', `Cycle ${this.state.cycleCount}: No markets with valid prices — skipping`);
         this.log(chalk.yellow('  [Autopilot] No live price data available — skipping cycle'));
         return;
       }
       if (validPriceMarkets.length < markets.length * 0.5) {
+        this.state.lastSkipReason = `Insufficient price data (${validPriceMarkets.length}/${markets.length} markets)`;
         logger.info('AUTOPILOT', `Cycle ${this.state.cycleCount}: Only ${validPriceMarkets.length}/${markets.length} markets have live prices — skipping`);
         this.log(chalk.yellow('  [Autopilot] Insufficient live price data — skipping cycle'));
         return;
@@ -251,6 +262,7 @@ export class Autopilot {
       const opportunities = await this.scanner.scan(balance);
 
       if (opportunities.length === 0) {
+        this.state.lastSkipReason = 'No trade opportunities found';
         logger.debug('AUTOPILOT', `Cycle ${this.state.cycleCount}: No opportunities found`);
         return;
       }
@@ -260,6 +272,7 @@ export class Autopilot {
       const configuredOpps = opportunities.filter((o) => configuredMarkets.has(o.market.toUpperCase()));
 
       if (configuredOpps.length === 0) {
+        this.state.lastSkipReason = 'No opportunities in configured markets (SOL, BTC, ETH)';
         logger.debug('AUTOPILOT', `Cycle ${this.state.cycleCount}: No opportunities in configured markets`);
         return;
       }
@@ -274,6 +287,7 @@ export class Autopilot {
       );
 
       if (!bestOpp) {
+        this.state.lastSkipReason = 'No opportunities passed portfolio constraints';
         logger.debug('AUTOPILOT', `Cycle ${this.state.cycleCount}: No opportunities passed portfolio constraints`);
         return;
       }
@@ -300,6 +314,7 @@ export class Autopilot {
 
       // Confidence floor: reject low-confidence signals
       if (suggestion.confidence < Autopilot.MIN_CONFIDENCE) {
+        this.state.lastSkipReason = `Confidence too low (${(suggestion.confidence * 100).toFixed(0)}% < ${(Autopilot.MIN_CONFIDENCE * 100).toFixed(0)}%)`;
         logger.info('AUTOPILOT', `Cycle ${this.state.cycleCount}: Confidence ${(suggestion.confidence * 100).toFixed(0)}% below minimum ${(Autopilot.MIN_CONFIDENCE * 100).toFixed(0)}%`);
         return;
       }
@@ -308,6 +323,7 @@ export class Autopilot {
       const now = Date.now();
       if (this.lastTradeAt > 0 && (now - this.lastTradeAt) < Autopilot.TRADE_COOLDOWN_MS) {
         const remaining = Math.ceil((Autopilot.TRADE_COOLDOWN_MS - (now - this.lastTradeAt)) / 1000);
+        this.state.lastSkipReason = `Trade cooldown (${remaining}s remaining)`;
         logger.debug('AUTOPILOT', `Cycle ${this.state.cycleCount}: Cooldown — ${remaining}s remaining`);
         return;
       }
@@ -324,6 +340,7 @@ export class Autopilot {
       });
 
       if (!riskCheck.passed) {
+        this.state.lastSkipReason = `Risk check: ${riskCheck.reason}`;
         logger.info('AUTOPILOT', `Cycle ${this.state.cycleCount}: Risk check blocked — ${riskCheck.reason}`);
         this.log(chalk.yellow(`  [Autopilot] Trade blocked by risk: ${riskCheck.reason}`));
         return;
@@ -334,6 +351,7 @@ export class Autopilot {
         const risks = assessAllPositions(positions);
         const criticalPositions = risks.filter((r) => r.riskLevel === 'critical');
         if (criticalPositions.length > 0) {
+          this.state.lastSkipReason = `${criticalPositions.length} position(s) at critical risk`;
           logger.info('AUTOPILOT', `Cycle ${this.state.cycleCount}: Skipping — ${criticalPositions.length} critical position(s)`);
           this.log(chalk.yellow(`  [Autopilot] Skipping: ${criticalPositions.length} position(s) at critical risk`));
           return;

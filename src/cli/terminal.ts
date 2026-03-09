@@ -174,6 +174,8 @@ export class FlashTerminal {
   private processing = false;
   /** Suppress repeated "Please wait" messages during a single command */
   private processingWarnShown = false;
+  /** Buffer for input received while processing (e.g. pre-typed "y" for confirmation) */
+  private bufferedLine: string | null = null;
   /** Cleanup callback for risk monitor on shutdown */
   private riskMonitorCleanup: (() => void) | null = null;
   /** RPC manager for failover support */
@@ -240,6 +242,17 @@ export class FlashTerminal {
 
     this.config.simulationMode = mode === 'simulation';
     this.modeLocked = true;
+
+    // Re-initialize signing guard with relaxed rate limits for simulation
+    if (this.config.simulationMode) {
+      initSigningGuard({
+        maxCollateralPerTrade: this.config.maxCollateralPerTrade,
+        maxPositionSize: this.config.maxPositionSize,
+        maxLeverage: this.config.maxLeverage,
+        maxTradesPerMinute: 60,
+        minDelayBetweenTradesMs: 500,
+      });
+    }
 
     // ─── Mode-Specific Setup ──────────────────────────────────────────
     let walletInfo: { address: string; name: string } | null = null;
@@ -319,6 +332,7 @@ export class FlashTerminal {
       flashClient: this.flashClient,
       dataClient: this.fstats,
       simulationMode: this.config.simulationMode,
+      degenMode: false,
       walletAddress: walletInfo?.address ?? this.flashClient.walletAddress ?? 'unknown',
       walletName: walletInfo?.name ?? '',
       walletManager: this.walletManager,
@@ -442,10 +456,9 @@ export class FlashTerminal {
       }
 
       if (this.processing) {
-        if (!this.processingWarnShown) {
-          this.processingWarnShown = true;
-          console.log(chalk.dim('  Please wait for the current command to finish.'));
-        }
+        // Buffer input during processing so confirmation prompts can use it
+        // (e.g. user pre-types "y" before the confirmation prompt appears)
+        this.bufferedLine = trimmed;
         return;
       }
 
@@ -460,6 +473,7 @@ export class FlashTerminal {
       } finally {
         this.processing = false;
         this.processingWarnShown = false;
+        this.bufferedLine = null;
         this.lastCommand = trimmed;
         this.lastCommandMs = Date.now() - cmdStart;
         this.renderExecutionTimer();
@@ -1457,6 +1471,29 @@ export class FlashTerminal {
       }
     }
 
+    // ─── Degen Mode Toggle ──────────────────────────────────────
+    if (lower === 'degen' || lower === 'degen mode' || lower === 'degen on' || lower === 'degen off' || lower === 'degen toggle') {
+      if (lower === 'degen off') {
+        this.context.degenMode = false;
+      } else if (lower === 'degen on') {
+        this.context.degenMode = true;
+      } else {
+        this.context.degenMode = !this.context.degenMode;
+      }
+      if (this.context.degenMode) {
+        console.log('');
+        console.log(chalk.red.bold('  ⚡ DEGEN MODE ENABLED'));
+        console.log(chalk.yellow('  Max leverage unlocked: SOL/BTC/ETH up to 500x (min 125x)'));
+        console.log(chalk.dim('  Type "degen off" to disable'));
+        console.log('');
+      } else {
+        console.log('');
+        console.log(chalk.green('  Degen mode disabled — standard leverage limits active'));
+        console.log('');
+      }
+      return;
+    }
+
     // Fast dispatch for single-token commands
     let intent: ParsedIntent;
     const fastIntent = FAST_DISPATCH[lower];
@@ -1696,7 +1733,9 @@ export class FlashTerminal {
             'transaction',
           );
           const elapsed = ((Date.now() - submitStart) / 1000).toFixed(1);
-          console.log(chalk.green(`  ✔ Confirmed in ${elapsed}s`));
+          if (execResult.success) {
+            console.log(chalk.green(`  ✔ Confirmed in ${elapsed}s`));
+          }
           console.log(execResult.message);
 
           // Post-trade verification (live mode only)
@@ -1946,8 +1985,11 @@ export class FlashTerminal {
     }, 5_000);
     interval.unref();
 
-    // Wait for any keypress to exit
+    // Wait for keypress to exit — pause readline, use raw mode for single-key detection
     await new Promise<void>((resolve) => {
+      // Pause readline to prevent it from consuming stdin while we're in raw mode
+      this.rl.pause();
+
       const wasRaw = process.stdin.isRaw;
       if (process.stdin.isTTY) {
         process.stdin.setRawMode(true);
@@ -1955,15 +1997,17 @@ export class FlashTerminal {
       process.stdin.resume();
 
       const onKey = () => {
+        // Remove listener FIRST to prevent double-fire
+        process.stdin.removeListener('data', onKey);
         running = false;
         clearInterval(interval);
-        process.stdin.removeListener('data', onKey);
         if (process.stdin.isTTY) {
           process.stdin.setRawMode(wasRaw ?? false);
         }
+        // Resume readline before printing output
+        this.rl.resume();
         // Clear screen and return to prompt
         process.stdout.write('\x1B[H\x1B[J');
-        console.log(theme.dim('  Market monitor stopped.\n'));
         resolve();
       };
 
@@ -2159,6 +2203,24 @@ export class FlashTerminal {
   private confirm(prompt: string): Promise<boolean> {
     return new Promise((resolve) => {
       process.stdout.write(`  ${chalk.yellow(prompt)} ${chalk.dim('(yes/no)')} `);
+
+      // Check if user pre-typed a response while the command was processing.
+      // In live mode, discard buffered input so the user must see the trade
+      // summary before confirming — prevents accidental auto-confirmation.
+      if (this.bufferedLine) {
+        if (this.config.simulationMode) {
+          const answer = this.bufferedLine;
+          this.bufferedLine = null;
+          resolve(
+            answer.toLowerCase() === 'yes' ||
+            answer.toLowerCase() === 'y'
+          );
+          return;
+        }
+        // Live mode: discard pre-typed input — user must confirm after seeing details
+        this.bufferedLine = null;
+      }
+
       const timeout = setTimeout(() => {
         this.pendingConfirmation = null;
         process.stdout.write(`\n  ${chalk.yellow('Confirmation timed out — trade cancelled.')}\n`);

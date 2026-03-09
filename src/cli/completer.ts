@@ -64,6 +64,9 @@ const COMMANDS: string[] = [
   'autopilot start',
   'autopilot stop',
   'autopilot status',
+  'degen',
+  'degen on',
+  'degen off',
   'exit',
 ];
 
