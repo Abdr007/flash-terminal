@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs-site/public/logo.svg" width="80" height="80" alt="Flash Terminal" />
+  <img src="assets/logo.svg" width="80" height="80" alt="Flash Terminal" />
 </p>
 
 <h1 align="center">Flash Terminal</h1>
