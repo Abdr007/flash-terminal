@@ -38,6 +38,10 @@ Available actions:
 - risk_report: Show position risk assessment
 - dashboard: Combined portfolio/market/stats view
 - whale_activity: Show recent large positions
+- liquidation_map: Show liquidation clusters for a market
+- funding_dashboard: Show funding rate data for a market
+- liquidity_depth: Show liquidity depth around current price
+- protocol_health: Show protocol health overview
 - scan_markets: Scan all markets for trade opportunities
 - portfolio_state: Show portfolio capital allocation state
 - portfolio_exposure: Show portfolio exposure breakdown
@@ -72,6 +76,10 @@ Examples:
 - "dashboard" -> {"action":"dashboard"}
 - "whale activity" -> {"action":"whale_activity"}
 - "whale activity SOL" -> {"action":"whale_activity","market":"SOL"}
+- "liquidations SOL" -> {"action":"liquidation_map","market":"SOL"}
+- "funding BTC" -> {"action":"funding_dashboard","market":"BTC"}
+- "depth ETH" -> {"action":"liquidity_depth","market":"ETH"}
+- "protocol health" -> {"action":"protocol_health"}
 - "scan" -> {"action":"scan_markets"}
 - "scan markets" -> {"action":"scan_markets"}
 - "portfolio state" -> {"action":"portfolio_state"}
@@ -424,6 +432,38 @@ export function localParse(input: string): ParsedIntent | null {
       action: ActionType.WhaleActivity,
       ...(whaleMatch[1] ? { market: whaleMatch[1].toUpperCase() } : {}),
     };
+  }
+
+  // Liquidation map: "liquidations SOL", "liquidation BTC"
+  const liqMatch = lower.match(/^liquidations?\s+([a-z]+)$/);
+  if (liqMatch) {
+    return { action: ActionType.LiquidationMap, market: liqMatch[1].toUpperCase() };
+  }
+  if (/^liquidations?$/.test(lower)) {
+    return { action: ActionType.LiquidationMap };
+  }
+
+  // Funding: "funding SOL", "funding"
+  const fundingMatch = lower.match(/^funding\s+([a-z]+)$/);
+  if (fundingMatch) {
+    return { action: ActionType.FundingDashboard, market: fundingMatch[1].toUpperCase() };
+  }
+  if (/^funding$/.test(lower)) {
+    return { action: ActionType.FundingDashboard };
+  }
+
+  // Depth: "depth SOL", "depth"
+  const depthMatch = lower.match(/^depth\s+([a-z]+)$/);
+  if (depthMatch) {
+    return { action: ActionType.LiquidityDepth, market: depthMatch[1].toUpperCase() };
+  }
+  if (/^depth$/.test(lower)) {
+    return { action: ActionType.LiquidityDepth };
+  }
+
+  // Protocol health
+  if (/^protocol\s+health$/.test(lower)) {
+    return { action: ActionType.ProtocolHealth };
   }
 
   // Market Scanner

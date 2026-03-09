@@ -49,6 +49,12 @@ export enum ActionType {
   PortfolioRebalance = 'portfolio_rebalance',
 
 
+  // Market Observability
+  LiquidationMap = 'liquidation_map',
+  FundingDashboard = 'funding_dashboard',
+  LiquidityDepth = 'liquidity_depth',
+  ProtocolHealth = 'protocol_health',
+
   // Protocol Inspector
   InspectProtocol = 'inspect_protocol',
   InspectPool = 'inspect_pool',
@@ -230,6 +236,25 @@ export const PortfolioRebalanceSchema = z.object({
   action: z.literal(ActionType.PortfolioRebalance),
 });
 
+export const LiquidationMapSchema = z.object({
+  action: z.literal(ActionType.LiquidationMap),
+  market: z.string().optional(),
+});
+
+export const FundingDashboardSchema = z.object({
+  action: z.literal(ActionType.FundingDashboard),
+  market: z.string().optional(),
+});
+
+export const LiquidityDepthSchema = z.object({
+  action: z.literal(ActionType.LiquidityDepth),
+  market: z.string().optional(),
+});
+
+export const ProtocolHealthSchema = z.object({
+  action: z.literal(ActionType.ProtocolHealth),
+});
+
 export const InspectProtocolSchema = z.object({
   action: z.literal(ActionType.InspectProtocol),
 });
@@ -307,6 +332,10 @@ export const ParsedIntentSchema = z.discriminatedUnion('action', [
   PortfolioStateSchema,
   PortfolioExposureSchema,
   PortfolioRebalanceSchema,
+  LiquidationMapSchema,
+  FundingDashboardSchema,
+  LiquidityDepthSchema,
+  ProtocolHealthSchema,
   InspectProtocolSchema,
   InspectPoolSchema,
   InspectMarketSchema,

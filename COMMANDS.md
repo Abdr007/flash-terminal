@@ -82,6 +82,10 @@ Commands that display live market data. All data sourced from on-chain state, fs
 | `leaderboard` | Top traders ranked by PnL or volume | `leaderboard` |
 | `whale activity` | Recent large positions across markets | `whale activity` |
 | `fees` | Protocol fee data | `fees` |
+| `liquidations <asset>` | Liquidation clusters around current price | `liquidations SOL` |
+| `funding <asset>` | Funding rate dashboard | `funding SOL` |
+| `depth <asset>` | Liquidity depth around current price | `depth SOL` |
+| `protocol health` | Protocol-wide health metrics | `protocol health` |
 
 ### Details
 
@@ -93,6 +97,14 @@ Commands that display live market data. All data sourced from on-chain state, fs
 
 **leaderboard** — Top traders by PnL or volume. Supports metric and period filtering.
 
+**liquidations** — Estimates liquidation price clusters by distributing open interest across leverage bands (2x–50x). Includes whale position liquidation levels when available. Shows distance from current price for each cluster.
+
+**funding** — Single-market view shows current funding rate, projected 1h/4h/24h accumulation, and OI balance with imbalance detection. Without a market argument, shows a funding rate overview table for all markets sorted by absolute rate.
+
+**depth** — Estimates liquidity distribution around the current price using OI and exponential decay modeling. Displays bid/ask depth bands with visual bar chart. Useful for assessing available liquidity at various price levels.
+
+**protocol health** — Aggregated protocol view: active markets, total OI, long/short ratio, 30d activity stats (volume, trades, traders, fees), top markets by OI, and infrastructure metrics (RPC latency, block height).
+
 ### Aliases
 
 | Input | Resolves to |
@@ -101,6 +113,7 @@ Commands that display live market data. All data sourced from on-chain state, fs
 | `whales` | `whale activity` |
 | `fee` | `fees` |
 | `rankings` | `leaderboard` |
+| `liquidation` | `liquidations` |
 
 ---
 

@@ -14,6 +14,7 @@ import {
 import {
   formatUsd,
   formatPrice,
+  formatPercent,
   colorPnl,
   colorPercent,
   colorSide,
@@ -1773,6 +1774,486 @@ const tradeHistoryTool: ToolDefinition = {
   },
 };
 
+// ─── Liquidation Map ────────────────────────────────────────────────────────
+
+export const liquidationMapTool: ToolDefinition = {
+  name: 'liquidation_map',
+  description: 'Display major liquidation clusters around the current price for a market',
+  parameters: z.object({
+    market: z.string().optional(),
+  }),
+  execute: async (params, context): Promise<ToolResult> => {
+    try {
+      const marketFilter = params.market ? String(params.market).toUpperCase() : undefined;
+      const [markets, oiData, whalePositions] = await Promise.all([
+        context.flashClient.getMarketData(marketFilter),
+        context.dataClient.getOpenInterest(),
+        context.dataClient.getOpenPositions?.() ?? Promise.resolve([]),
+      ]);
+
+      if (markets.length === 0) {
+        return { success: false, message: theme.negative(`\n  Market ${marketFilter ?? 'data'} not found.\n`) };
+      }
+
+      const targetMarkets = marketFilter
+        ? markets.filter(m => m.symbol.toUpperCase() === marketFilter)
+        : markets.slice(0, 3);
+
+      if (targetMarkets.length === 0) {
+        return { success: false, message: theme.negative(`\n  Market ${marketFilter} not found.\n`) };
+      }
+
+      const lines: string[] = [];
+
+      for (const mkt of targetMarkets) {
+        const price = mkt.price;
+        if (!Number.isFinite(price) || price <= 0) continue;
+
+        const oi = oiData.markets.find(m => m.market.toUpperCase() === mkt.symbol.toUpperCase());
+        const longOi = oi?.longOi ?? mkt.openInterestLong;
+        const shortOi = oi?.shortOi ?? mkt.openInterestShort;
+
+        // Estimate liquidation clusters by leverage band
+        // Long liquidation = entry * (1 - 1/leverage), Short liquidation = entry * (1 + 1/leverage)
+        const leverageBands = [2, 3, 5, 10, 20, 50];
+        const longClusters: { price: number; sizeUsd: number }[] = [];
+        const shortClusters: { price: number; sizeUsd: number }[] = [];
+
+        for (const lev of leverageBands) {
+          // Distribute OI across leverage bands (higher leverage = less OI share)
+          const weight = 1 / lev;
+          const totalWeight = leverageBands.reduce((s, l) => s + 1 / l, 0);
+          const share = weight / totalWeight;
+
+          const longLiqPrice = price * (1 - 1 / lev);
+          const shortLiqPrice = price * (1 + 1 / lev);
+
+          if (Number.isFinite(longLiqPrice) && longOi * share > 0) {
+            longClusters.push({ price: longLiqPrice, sizeUsd: longOi * share });
+          }
+          if (Number.isFinite(shortLiqPrice) && shortOi * share > 0) {
+            shortClusters.push({ price: shortLiqPrice, sizeUsd: shortOi * share });
+          }
+        }
+
+        // Add whale position liquidations
+        const mktWhales = whalePositions.filter(w => {
+          const sym = (w.market_symbol ?? w.market ?? '').toUpperCase();
+          return sym === mkt.symbol.toUpperCase() && Number.isFinite(w.size_usd) && (w.size_usd ?? 0) > 0;
+        });
+
+        for (const w of mktWhales.slice(0, 10)) {
+          const side = String(w.side ?? '').toLowerCase();
+          const size = Number(w.size_usd ?? 0);
+          const entry = Number(w.entry_price ?? w.mark_price ?? price);
+          if (!Number.isFinite(entry) || entry <= 0 || !Number.isFinite(size)) continue;
+
+          // Estimate leverage from size and entry
+          const estLev = Math.max(2, Math.min(50, size / (size / 5))); // Conservative estimate
+          if (side === 'long') {
+            longClusters.push({ price: entry * (1 - 1 / estLev), sizeUsd: size });
+          } else if (side === 'short') {
+            shortClusters.push({ price: entry * (1 + 1 / estLev), sizeUsd: size });
+          }
+        }
+
+        // Bucket by price zones (1% bands)
+        const bucketSize = price * 0.01;
+        const bucketMap = new Map<number, { sizeUsd: number; type: 'long' | 'short' }>();
+
+        for (const c of longClusters) {
+          const bucket = Math.round(c.price / bucketSize) * bucketSize;
+          const existing = bucketMap.get(bucket);
+          if (existing) {
+            existing.sizeUsd += c.sizeUsd;
+          } else {
+            bucketMap.set(bucket, { sizeUsd: c.sizeUsd, type: 'long' });
+          }
+        }
+        for (const c of shortClusters) {
+          const bucket = Math.round(c.price / bucketSize) * bucketSize;
+          const existing = bucketMap.get(bucket);
+          if (existing) {
+            existing.sizeUsd += c.sizeUsd;
+          } else {
+            bucketMap.set(bucket, { sizeUsd: c.sizeUsd, type: 'short' });
+          }
+        }
+
+        // Sort by size and show top clusters
+        const sorted = [...bucketMap.entries()]
+          .map(([p, data]) => ({ price: p, ...data }))
+          .sort((a, b) => b.sizeUsd - a.sizeUsd)
+          .slice(0, 10);
+
+        lines.push(theme.titleBlock(`LIQUIDATION MAP — ${mkt.symbol}`));
+        lines.push('');
+        lines.push(theme.pair('Current Price', formatPrice(price)));
+        lines.push('');
+
+        if (sorted.length === 0) {
+          lines.push(theme.dim('  No liquidation data available.'));
+        } else {
+          const headers = ['Price Level', 'Est. Liquidations', 'Type', 'Distance'];
+          const rows = sorted.map(c => {
+            const dist = ((c.price - price) / price) * 100;
+            const typeColor = c.type === 'long' ? theme.negative('LONG LIQ') : theme.positive('SHORT LIQ');
+            return [
+              formatPrice(c.price),
+              formatUsd(c.sizeUsd),
+              typeColor,
+              formatPercent(dist),
+            ];
+          });
+          lines.push(formatTable(headers, rows));
+        }
+        lines.push('');
+      }
+
+      lines.push(theme.dim('  Estimates based on OI distribution across leverage bands.'));
+      lines.push('');
+
+      return { success: true, message: lines.join('\n') };
+    } catch (error: unknown) {
+      return { success: false, message: theme.dim(`\n  Liquidation data unavailable: ${getErrorMessage(error)}\n`) };
+    }
+  },
+};
+
+// ─── Funding Rate Dashboard ─────────────────────────────────────────────────
+
+export const fundingDashboardTool: ToolDefinition = {
+  name: 'funding_dashboard',
+  description: 'Display funding rate data for markets',
+  parameters: z.object({
+    market: z.string().optional(),
+  }),
+  execute: async (params, context): Promise<ToolResult> => {
+    try {
+      const marketFilter = params.market ? String(params.market).toUpperCase() : undefined;
+      const markets = await context.flashClient.getMarketData(marketFilter);
+
+      if (markets.length === 0) {
+        return { success: false, message: theme.negative(`\n  Market ${marketFilter ?? 'data'} not found.\n`) };
+      }
+
+      const targetMarkets = marketFilter
+        ? markets.filter(m => m.symbol.toUpperCase() === marketFilter)
+        : markets.filter(m => Number.isFinite(m.fundingRate));
+
+      if (targetMarkets.length === 0) {
+        return { success: false, message: theme.negative(`\n  Market ${marketFilter} not found.\n`) };
+      }
+
+      const lines: string[] = [];
+
+      if (marketFilter && targetMarkets.length === 1) {
+        // Single-market detailed view
+        const mkt = targetMarkets[0];
+        const rate = mkt.fundingRate;
+        const rateDisplay = Number.isFinite(rate)
+          ? (rate >= 0 ? theme.positive(formatPercent(rate)) : theme.negative(formatPercent(rate)))
+          : theme.dim('N/A');
+
+        // Estimate hourly from current rate (rate is per-interval, approximate windows)
+        const hourlyEst = Number.isFinite(rate) ? rate : 0;
+        const rate4h = hourlyEst * 4;
+        const rate24h = hourlyEst * 24;
+
+        // OI-based funding direction context
+        const totalOi = mkt.openInterestLong + mkt.openInterestShort;
+        const longPct = totalOi > 0 ? (mkt.openInterestLong / totalOi) * 100 : 50;
+        const shortPct = totalOi > 0 ? (mkt.openInterestShort / totalOi) * 100 : 50;
+        const imbalance = longPct - shortPct;
+
+        lines.push(theme.titleBlock(`FUNDING DASHBOARD — ${mkt.symbol}`));
+        lines.push('');
+        lines.push(theme.pair('Current Price', formatPrice(mkt.price)));
+        lines.push(theme.pair('Current Funding', rateDisplay));
+        lines.push('');
+        lines.push(`  ${theme.section('Projected Accumulation')}`);
+        lines.push(theme.pair('1h', Number.isFinite(hourlyEst) ? formatPercent(hourlyEst) : 'N/A'));
+        lines.push(theme.pair('4h', Number.isFinite(rate4h) ? formatPercent(rate4h) : 'N/A'));
+        lines.push(theme.pair('24h', Number.isFinite(rate24h) ? formatPercent(rate24h) : 'N/A'));
+        lines.push('');
+        lines.push(`  ${theme.section('Open Interest Balance')}`);
+        lines.push(theme.pair('Long', `${formatUsd(mkt.openInterestLong)}  (${longPct.toFixed(0)}%)`));
+        lines.push(theme.pair('Short', `${formatUsd(mkt.openInterestShort)}  (${shortPct.toFixed(0)}%)`));
+
+        if (Math.abs(imbalance) > 5) {
+          const direction = imbalance > 0 ? 'long-heavy' : 'short-heavy';
+          const color = imbalance > 0 ? theme.positive : theme.negative;
+          lines.push(theme.pair('Imbalance', color(`${Math.abs(imbalance).toFixed(1)}% ${direction}`)));
+        } else {
+          lines.push(theme.pair('Imbalance', theme.dim('balanced')));
+        }
+
+        lines.push('');
+        lines.push(theme.dim('  Positive funding: longs pay shorts. Negative: shorts pay longs.'));
+        lines.push('');
+      } else {
+        // Multi-market overview
+        lines.push(theme.titleBlock('FUNDING RATES'));
+        lines.push('');
+
+        const sorted = [...targetMarkets].sort((a, b) => Math.abs(b.fundingRate) - Math.abs(a.fundingRate));
+
+        const headers = ['Market', 'Funding Rate', 'Long OI', 'Short OI', 'L/S Ratio'];
+        const rows = sorted.map(m => {
+          const rate = m.fundingRate;
+          const rateStr = Number.isFinite(rate)
+            ? (rate >= 0 ? theme.positive(formatPercent(rate)) : theme.negative(formatPercent(rate)))
+            : theme.dim('N/A');
+          const totalOi = m.openInterestLong + m.openInterestShort;
+          const ratio = totalOi > 0
+            ? `${((m.openInterestLong / totalOi) * 100).toFixed(0)}/${((m.openInterestShort / totalOi) * 100).toFixed(0)}`
+            : 'N/A';
+          return [
+            chalk.bold(m.symbol),
+            rateStr,
+            formatUsd(m.openInterestLong),
+            formatUsd(m.openInterestShort),
+            ratio,
+          ];
+        });
+
+        lines.push(formatTable(headers, rows));
+        lines.push('');
+        lines.push(theme.dim('  Positive: longs pay shorts. Negative: shorts pay longs.'));
+        lines.push('');
+      }
+
+      return { success: true, message: lines.join('\n') };
+    } catch (error: unknown) {
+      return { success: false, message: theme.dim(`\n  Funding data unavailable: ${getErrorMessage(error)}\n`) };
+    }
+  },
+};
+
+// ─── Liquidity Depth Viewer ─────────────────────────────────────────────────
+
+export const liquidityDepthTool: ToolDefinition = {
+  name: 'liquidity_depth',
+  description: 'Show liquidity distribution around the current price for a market',
+  parameters: z.object({
+    market: z.string().optional(),
+  }),
+  execute: async (params, context): Promise<ToolResult> => {
+    try {
+      const marketFilter = params.market ? String(params.market).toUpperCase() : undefined;
+      const [markets, oiData] = await Promise.all([
+        context.flashClient.getMarketData(marketFilter),
+        context.dataClient.getOpenInterest(),
+      ]);
+
+      if (markets.length === 0) {
+        return { success: false, message: theme.negative(`\n  Market ${marketFilter ?? 'data'} not found.\n`) };
+      }
+
+      const targetMarkets = marketFilter
+        ? markets.filter(m => m.symbol.toUpperCase() === marketFilter)
+        : markets.slice(0, 3);
+
+      if (targetMarkets.length === 0) {
+        return { success: false, message: theme.negative(`\n  Market ${marketFilter} not found.\n`) };
+      }
+
+      const lines: string[] = [];
+
+      for (const mkt of targetMarkets) {
+        const price = mkt.price;
+        if (!Number.isFinite(price) || price <= 0) continue;
+
+        const oi = oiData.markets.find(m => m.market.toUpperCase() === mkt.symbol.toUpperCase());
+        const totalOi = (oi?.longOi ?? mkt.openInterestLong) + (oi?.shortOi ?? mkt.openInterestShort);
+        const longOi = oi?.longOi ?? mkt.openInterestLong;
+        const shortOi = oi?.shortOi ?? mkt.openInterestShort;
+
+        // Build liquidity depth bands around price
+        // Estimate: liquidity concentrates around current price with exponential decay
+        const bands: { level: number; liquidity: number; side: string }[] = [];
+        const bandOffsets = [-5, -3, -2, -1, -0.5, 0, 0.5, 1, 2, 3, 5];
+
+        for (const pct of bandOffsets) {
+          const level = price * (1 + pct / 100);
+          if (!Number.isFinite(level)) continue;
+
+          // Liquidity estimate: decays with distance from current price
+          const distance = Math.abs(pct);
+          const decay = Math.exp(-distance * 0.3);
+          const baseLiquidity = totalOi * 0.15 * decay;
+
+          // Bid side (below price) gets more long OI weight, ask side gets more short OI weight
+          const sideWeight = pct < 0
+            ? (longOi / Math.max(totalOi, 1)) * 1.5
+            : (shortOi / Math.max(totalOi, 1)) * 1.5;
+          const liquidity = baseLiquidity * Math.max(sideWeight, 0.3);
+
+          if (liquidity > 0) {
+            bands.push({
+              level,
+              liquidity,
+              side: pct < 0 ? 'BID' : pct > 0 ? 'ASK' : 'MID',
+            });
+          }
+        }
+
+        lines.push(theme.titleBlock(`LIQUIDITY DEPTH — ${mkt.symbol}`));
+        lines.push('');
+        lines.push(theme.pair('Current Price', formatPrice(price)));
+        lines.push(theme.pair('Total OI', formatUsd(totalOi)));
+        lines.push('');
+
+        if (bands.length === 0) {
+          lines.push(theme.dim('  No depth data available.'));
+        } else {
+          const maxLiq = Math.max(...bands.map(b => b.liquidity));
+          const barWidth = 20;
+
+          const headers = ['Price Level', 'Est. Liquidity', 'Side', 'Depth'];
+          const rows = bands.map(b => {
+            const barLen = maxLiq > 0 ? Math.round((b.liquidity / maxLiq) * barWidth) : 0;
+            const bar = b.side === 'BID'
+              ? theme.positive('█'.repeat(barLen))
+              : b.side === 'ASK'
+                ? theme.negative('█'.repeat(barLen))
+                : theme.accent('█'.repeat(barLen));
+            const sideColor = b.side === 'BID'
+              ? theme.positive(b.side)
+              : b.side === 'ASK'
+                ? theme.negative(b.side)
+                : theme.accent(b.side);
+
+            return [
+              formatPrice(b.level),
+              formatUsd(b.liquidity),
+              sideColor,
+              bar,
+            ];
+          });
+
+          lines.push(formatTable(headers, rows));
+        }
+        lines.push('');
+      }
+
+      lines.push(theme.dim('  Estimates derived from open interest distribution.'));
+      lines.push('');
+
+      return { success: true, message: lines.join('\n') };
+    } catch (error: unknown) {
+      return { success: false, message: theme.dim(`\n  Depth data unavailable: ${getErrorMessage(error)}\n`) };
+    }
+  },
+};
+
+// ─── Protocol Health ────────────────────────────────────────────────────────
+
+export const protocolHealthTool: ToolDefinition = {
+  name: 'protocol_health',
+  description: 'Display overall Flash protocol health metrics',
+  parameters: z.object({}),
+  execute: async (_params, context): Promise<ToolResult> => {
+    try {
+      const [markets, oiData, overviewStats] = await Promise.all([
+        context.flashClient.getMarketData(),
+        context.dataClient.getOpenInterest(),
+        context.dataClient.getOverviewStats('30d'),
+      ]);
+
+      // Aggregate OI
+      let totalLongOi = 0;
+      let totalShortOi = 0;
+      for (const m of oiData.markets) {
+        totalLongOi += m.longOi;
+        totalShortOi += m.shortOi;
+      }
+      const totalOi = totalLongOi + totalShortOi;
+
+      // Active markets (those with price > 0 and OI > 0)
+      const activeMarkets = markets.filter(m =>
+        Number.isFinite(m.price) && m.price > 0 &&
+        (m.openInterestLong + m.openInterestShort > 0 || oiData.markets.some(oi => oi.market.toUpperCase() === m.symbol.toUpperCase()))
+      );
+
+      // RPC latency
+      let rpcLatency = 'N/A';
+      try {
+        const { getRpcManagerInstance } = await import('../network/rpc-manager.js');
+        const rpcMgr = getRpcManagerInstance();
+        if (rpcMgr) {
+          const lat = rpcMgr.activeLatencyMs;
+          rpcLatency = lat >= 0 ? `${lat}ms` : 'N/A';
+        }
+      } catch { /* non-critical */ }
+
+      // Block height
+      let blockHeight = 'N/A';
+      try {
+        const { getRpcManagerInstance } = await import('../network/rpc-manager.js');
+        const rpcMgr = getRpcManagerInstance();
+        if (rpcMgr) {
+          const slot = await rpcMgr.connection.getSlot('confirmed');
+          if (Number.isFinite(slot)) {
+            blockHeight = slot.toLocaleString();
+          }
+        }
+      } catch { /* non-critical */ }
+
+      // L/S ratio
+      const longPct = totalOi > 0 ? ((totalLongOi / totalOi) * 100).toFixed(0) : '50';
+      const shortPct = totalOi > 0 ? ((totalShortOi / totalOi) * 100).toFixed(0) : '50';
+
+      // Top markets by OI
+      const sortedOi = [...oiData.markets]
+        .map(m => ({ market: m.market, total: m.longOi + m.shortOi }))
+        .sort((a, b) => b.total - a.total)
+        .slice(0, 5);
+
+      const lines: string[] = [
+        theme.titleBlock('FLASH PROTOCOL HEALTH'),
+        '',
+        `  ${theme.section('Protocol Overview')}`,
+        theme.pair('Active Markets', activeMarkets.length.toString()),
+        theme.pair('Total Open Interest', formatUsd(totalOi)),
+        theme.pair('Long/Short Ratio', `${theme.positive(longPct + '%')} / ${theme.negative(shortPct + '%')}`),
+        '',
+      ];
+
+      // 30d stats
+      if (overviewStats) {
+        lines.push(`  ${theme.section('Activity (30d)')}`);
+        lines.push(theme.pair('Volume', formatUsd(overviewStats.volumeUsd)));
+        lines.push(theme.pair('Trades', overviewStats.trades.toLocaleString()));
+        lines.push(theme.pair('Unique Traders', overviewStats.uniqueTraders.toLocaleString()));
+        lines.push(theme.pair('Fees Collected', formatUsd(overviewStats.feesUsd)));
+        lines.push('');
+      }
+
+      // Top markets
+      if (sortedOi.length > 0) {
+        lines.push(`  ${theme.section('Top Markets by OI')}`);
+        for (const m of sortedOi) {
+          if (m.total <= 0) continue;
+          const pct = totalOi > 0 ? ((m.total / totalOi) * 100).toFixed(1) : '0';
+          lines.push(`    ${m.market.padEnd(10)} ${formatUsd(m.total).padEnd(14)} ${theme.dim(`(${pct}%)`)}`);
+        }
+        lines.push('');
+      }
+
+      // Infrastructure
+      lines.push(`  ${theme.section('Infrastructure')}`);
+      lines.push(theme.pair('RPC Latency', rpcLatency));
+      lines.push(theme.pair('Block Height', blockHeight));
+      lines.push('');
+
+      return { success: true, message: lines.join('\n') };
+    } catch (error: unknown) {
+      return { success: false, message: theme.dim(`\n  Protocol health data unavailable: ${getErrorMessage(error)}\n`) };
+    }
+  },
+};
+
 export const allFlashTools: ToolDefinition[] = [
   flashOpenPosition,
   flashClosePosition,
@@ -1797,6 +2278,10 @@ export const allFlashTools: ToolDefinition[] = [
   walletTokens,
   walletConnect,
   flashMarkets,
+  liquidationMapTool,
+  fundingDashboardTool,
+  liquidityDepthTool,
+  protocolHealthTool,
   inspectProtocol,
   inspectPool,
   inspectMarketTool,

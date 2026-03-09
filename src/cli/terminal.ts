@@ -107,6 +107,10 @@ const FAST_DISPATCH: Record<string, ParsedIntent> = {
   'portfolio exposure': { action: ActionType.PortfolioExposure },
   'portfolio rebalance': { action: ActionType.PortfolioRebalance },
   'capital':           { action: ActionType.PortfolioState },
+  'liquidations':      { action: ActionType.LiquidationMap },
+  'funding':           { action: ActionType.FundingDashboard },
+  'depth':             { action: ActionType.LiquidityDepth },
+  'protocol health':   { action: ActionType.ProtocolHealth },
   'inspect protocol':  { action: ActionType.InspectProtocol },
   'inspect':           { action: ActionType.InspectProtocol },
   'system status':     { action: ActionType.SystemStatus },
@@ -1467,6 +1471,19 @@ export class FlashTerminal {
       const prefix = lower.startsWith('dryrun ') ? 'dryrun ' : lower.startsWith('dry-run ') ? 'dry-run ' : 'dry run ';
       const innerCmd = input.slice(prefix.length).trim();
       intent = { action: ActionType.DryRun, innerCommand: innerCmd } as ParsedIntent;
+    } else if (lower.startsWith('liquidations ') || lower.startsWith('liquidation ')) {
+      const prefix = lower.startsWith('liquidations ') ? 'liquidations ' : 'liquidation ';
+      const rawMarket = input.slice(prefix.length).trim();
+      const market = resolveMarketAlias(rawMarket);
+      intent = { action: ActionType.LiquidationMap, market } as ParsedIntent;
+    } else if (lower.startsWith('funding ')) {
+      const rawMarket = input.slice('funding '.length).trim();
+      const market = resolveMarketAlias(rawMarket);
+      intent = { action: ActionType.FundingDashboard, market } as ParsedIntent;
+    } else if (lower.startsWith('depth ')) {
+      const rawMarket = input.slice('depth '.length).trim();
+      const market = resolveMarketAlias(rawMarket);
+      intent = { action: ActionType.LiquidityDepth, market } as ParsedIntent;
     } else if (lower.startsWith('inspect pool ')) {
       const poolInput = input.slice('inspect pool '.length).trim();
       const { POOL_NAMES } = await import('../config/index.js');

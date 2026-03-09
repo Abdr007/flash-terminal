@@ -31,6 +31,10 @@ const COMMANDS: string[] = [
   'leaderboard',
   'whale activity',
   'fees',
+  'liquidations',
+  'funding',
+  'depth',
+  'protocol health',
   // Portfolio & Risk
   'portfolio',
   'dashboard',
@@ -222,6 +226,17 @@ function matchMarketContext(lower: string, original: string): [string[], string]
   if (removeMatch) {
     const partial = removeMatch[1].toUpperCase();
     const prefix = original.slice(0, original.length - removeMatch[1].length);
+    const matches = ALL_MARKETS.filter(m => m.startsWith(partial));
+    if (matches.length > 0) {
+      return [matches.map(m => prefix + m), original];
+    }
+  }
+
+  // "liquidations s", "funding s", "depth s" → suggest market
+  const observabilityMatch = lower.match(/^(liquidations?|funding|depth)\s+(\S*)$/);
+  if (observabilityMatch) {
+    const partial = observabilityMatch[2].toUpperCase();
+    const prefix = original.slice(0, original.length - observabilityMatch[2].length);
     const matches = ALL_MARKETS.filter(m => m.startsWith(partial));
     if (matches.length > 0) {
       return [matches.map(m => prefix + m), original];

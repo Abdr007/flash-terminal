@@ -224,6 +224,19 @@ export class ToolEngine {
       case ActionType.PortfolioRebalance:
         return { toolName: 'portfolio_rebalance', params: {} };
 
+      // Market Observability
+      case ActionType.LiquidationMap:
+        return { toolName: 'liquidation_map', params: { market: intent.market } };
+
+      case ActionType.FundingDashboard:
+        return { toolName: 'funding_dashboard', params: { market: intent.market } };
+
+      case ActionType.LiquidityDepth:
+        return { toolName: 'liquidity_depth', params: { market: intent.market } };
+
+      case ActionType.ProtocolHealth:
+        return { toolName: 'protocol_health', params: {} };
+
       // Protocol Inspector
       case ActionType.InspectProtocol:
         return { toolName: 'inspect_protocol', params: {} };
@@ -284,6 +297,10 @@ export class ToolEngine {
       `    ${cmd('leaderboard')}               Top traders by PnL or volume`,
       `    ${cmd('whale activity')}             Recent large positions`,
       `    ${cmd('fees')}                      Protocol fee data`,
+      `    ${cmd('liquidations <asset>')}       Liquidation clusters by price`,
+      `    ${cmd('funding <asset>')}            Funding rate dashboard`,
+      `    ${cmd('depth <asset>')}              Liquidity depth around price`,
+      `    ${cmd('protocol health')}            Protocol health overview`,
       '',
       // ── 3. Portfolio & Risk ─────────────────────────────────────
       `  ${sec('Portfolio & Risk')}`,
