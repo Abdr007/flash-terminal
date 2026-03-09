@@ -1,15 +1,39 @@
-# Flash Terminal
+<p align="center">
+  <img src="docs-site/public/logo.svg" width="80" height="80" alt="Flash Terminal" />
+</p>
 
-A professional command-line trading terminal for the [Flash Trade](https://www.flash.trade/) perpetual futures protocol on Solana.
+<h1 align="center">Flash Terminal</h1>
 
-Flash Terminal provides deterministic trade execution, protocol inspection, market observability, and portfolio risk management — directly from the terminal using live on-chain data.
+<p align="center">
+  <strong>Deterministic Protocol Trading Terminal</strong>
+</p>
+
+<p align="center">
+  A professional CLI trading workstation for the <a href="https://www.flash.trade/">Flash Trade</a> perpetual futures protocol on Solana.
+</p>
+
+<p align="center">
+  <a href="https://flash-terminal-docs.vercel.app">Documentation</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="https://flash-terminal-docs.vercel.app/guide/getting-started">Getting Started</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="https://flash-terminal-docs.vercel.app/reference/trading-commands">Command Reference</a>
+</p>
 
 ---
 
 ## Overview
 
+Flash Terminal provides deterministic trade execution, protocol inspection, market observability, and portfolio risk management — directly from the terminal using live on-chain data.
+
 ```
-flash
+$ flash
+
+  FLASH TERMINAL
+  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Select Mode
+    1) LIVE TRADING
+    2) SIMULATION
+
+> 2
+
 flash [sim] > open 5x long SOL $500
 flash [sim] > positions
 flash [sim] > liquidations SOL
@@ -17,86 +41,88 @@ flash [sim] > inspect protocol
 flash [sim] > exit
 ```
 
-Flash Terminal operates as a deterministic trading workstation. Trade commands are parsed with structured regex patterns — no ambiguity, no inference on critical paths. Natural language is supported only for read-only queries.
-
 ---
 
-## Key Features
+## Features
 
-### Deterministic Trade Execution
+<table>
+<tr>
+<td width="50%">
 
-Every trade command maps to exactly one action. The execution pipeline enforces confirmation, simulation, and signing guards before any transaction reaches the blockchain.
+### Deterministic Execution
+Trade commands are parsed with structured regex patterns. Every command maps to exactly one action. No inference on critical paths.
 
 ```
-open 2x long SOL $10        # structured regex parse
-close SOL long               # deterministic dispatch
-add $200 to SOL long         # no AI on trade paths
+open 5x long SOL $500
+close SOL long
+add $200 to BTC short
 ```
+
+</td>
+<td width="50%">
 
 ### Trade Risk Preview
+Full position summary before signing — entry price, liquidation distance, risk classification, exposure impact, estimated fees.
 
-Full position summary displayed before signing: entry price, liquidation distance, risk classification, portfolio exposure impact, and estimated fees.
+```
+Est. Entry:   $148.52
+Est. Liq:     $81.69
+Distance:     45.0%
+Risk:         MEDIUM
+```
+
+</td>
+</tr>
+<tr>
+<td width="50%">
 
 ### Protocol Inspection
-
-Query Flash Trade protocol state directly: pools, markets, open interest, utilization, whale positions.
+Query Flash Trade protocol state directly — pools, markets, open interest, utilization, whale positions.
 
 ```
-inspect protocol             # protocol overview
-inspect pool Crypto.1        # pool configuration
-inspect market SOL           # market deep dive
+inspect protocol
+inspect pool Crypto.1
+inspect market SOL
 ```
+
+</td>
+<td width="50%">
 
 ### Market Observability
-
-Live market data commands powered by on-chain state, Pyth oracles, and protocol analytics.
+Liquidation clusters, funding rates, liquidity depth, protocol health — all from live on-chain data.
 
 ```
-liquidations SOL             # liquidation clusters by price zone
-funding SOL                  # funding rate with projected accumulation
-depth SOL                    # liquidity depth around current price
-protocol health              # protocol-wide health metrics
+liquidations SOL
+funding SOL
+depth SOL
+protocol health
 ```
 
-### RPC Failover Infrastructure
+</td>
+</tr>
+<tr>
+<td width="50%">
 
-Automatic endpoint switching on failure, slot lag detection, background health monitoring, and connection pinning with 60-second cooldown.
+### RPC Failover
+Automatic endpoint switching on failure, slot lag detection, background health monitoring, connection pinning with 60s cooldown.
+
+```
+RPC: Helius (340ms) | Sync: OK
+```
+
+</td>
+<td width="50%">
 
 ### Simulation Mode
-
-Paper trade with real oracle prices. Simulate transactions on-chain without signing. Validate strategies before risking capital.
+Paper trade with real oracle prices. Simulate transactions on-chain without signing.
 
 ```
 dryrun open 5x long SOL $100
 ```
 
----
-
-## Architecture
-
-```
-User Input
-    |
-    +-- FAST_DISPATCH (single-token commands — instant)
-    +-- Regex Parser (structured commands — deterministic)
-    +-- LLM Engine (natural language — read-only fallback)
-            |
-      ParsedIntent
-            |
-      ExecutionMiddleware (logging -> wallet -> readOnly guard)
-            |
-      ToolEngine.dispatch()
-            |
-            +-- flash-tools (trading, wallet, market data)
-            +-- agent-tools (analysis, scanner, dashboard)
-            +-- plugin tools (dynamically loaded)
-            |
-      IFlashClient
-            +-- FlashClient (live: Flash SDK + Solana transactions)
-            +-- SimulatedFlashClient (paper trading, in-memory)
-```
-
-All tools interact through the `IFlashClient` interface. They never know which mode is active.
+</td>
+</tr>
+</table>
 
 ---
 
@@ -107,32 +133,61 @@ All tools interact through the `IFlashClient` interface. They never know which m
 | **Trading** | `open`, `close`, `add`, `remove`, `positions`, `markets`, `trade history` |
 | **Market Data** | `scan`, `analyze`, `volume`, `open interest`, `leaderboard`, `whale activity`, `fees` |
 | **Observability** | `liquidations`, `funding`, `depth`, `protocol health` |
-| **Portfolio & Risk** | `portfolio`, `dashboard`, `risk report`, `exposure`, `rebalance` |
+| **Portfolio** | `portfolio`, `dashboard`, `risk report`, `exposure`, `rebalance` |
 | **Protocol** | `inspect protocol`, `inspect pool`, `inspect market` |
 | **Wallet** | `wallet`, `wallet tokens`, `wallet balance`, `wallet list`, `wallet import`, `wallet use`, `wallet connect`, `wallet disconnect` |
 | **Utilities** | `dryrun`, `monitor`, `watch`, `system status`, `rpc status`, `rpc test`, `tx inspect`, `doctor`, `degen` |
 
-Full reference: [COMMANDS.md](COMMANDS.md)
+Full reference: **[COMMANDS.md](COMMANDS.md)** | **[Documentation](https://flash-terminal-docs.vercel.app/reference/trading-commands)**
+
+---
+
+## Architecture
+
+```
+User Input
+    │
+    ├── FAST_DISPATCH ─── single-token commands (instant)
+    ├── Regex Parser ──── structured commands (deterministic)
+    └── LLM Engine ────── natural language (read-only fallback)
+            │
+        ParsedIntent
+            │
+        ExecutionMiddleware
+            │  logging → wallet check → readOnly guard
+            │
+        ToolEngine.dispatch()
+            │
+            ├── flash-tools ─── trading, wallet, market data
+            ├── agent-tools ─── analysis, scanner, dashboard
+            └── plugin-tools ── dynamically loaded
+                    │
+              IFlashClient
+                    ├── FlashClient ──────── live (Flash SDK + Solana)
+                    └── SimulatedFlashClient ─ paper trading (in-memory)
+```
 
 ---
 
 ## Security
 
-- **Signing confirmation gate** — full position summary before every trade
-- **Configurable trade limits** — per-trade collateral, position size, leverage caps
-- **Rate limiter** — trades per minute, minimum delay between trades
-- **Signing audit log** — all trade attempts logged (never includes key material)
-- **Wallet path validation** — restricted to home directory, symlink resolution, size limits
-- **RPC URL validation** — HTTPS enforced, credential embedding rejected, SSRF protection
-- **API key scrubbing** — sensitive patterns removed from all log output
-- **Program ID whitelist** — only approved Solana programs can be targeted
-- **Instruction freeze** — transaction instructions frozen after validation, before signing
+| Layer | Protection |
+|-------|------------|
+| **Signing Gate** | Full position summary + explicit confirmation before every trade |
+| **Trade Limits** | Configurable caps on collateral, position size, and leverage |
+| **Rate Limiter** | Max trades per minute + minimum delay between trades |
+| **Audit Log** | Every trade attempt logged to disk (never includes key material) |
+| **Wallet Security** | `0600` file permissions, path validation, symlink resolution |
+| **RPC Validation** | HTTPS enforced, credential rejection, SSRF protection |
+| **Program Whitelist** | Only approved Solana programs can be targeted |
+| **Instruction Freeze** | Transaction instructions frozen after validation, before signing |
+| **Key Scrubbing** | API keys masked in all log output |
 
-See [SECURITY.md](SECURITY.md) for the full security model.
+Full security model: **[SECURITY.md](SECURITY.md)**
 
 ---
 
-## Installation
+## Quick Start
 
 ```bash
 git clone https://github.com/Abdr007/flash-terminal.git
@@ -141,34 +196,23 @@ npm install
 npm run build
 ```
 
-### Configuration
+**Configure:**
 
 ```bash
 cp .env.example .env
+# Set RPC_URL (required)
+# Set ANTHROPIC_API_KEY or GROQ_API_KEY (optional — enables NLP)
 ```
 
-Required:
-- `RPC_URL` — Solana mainnet RPC endpoint (HTTPS)
-
-Optional:
-- `ANTHROPIC_API_KEY` — enables natural language parsing
-- `GROQ_API_KEY` — alternative LLM provider
-- `SIMULATION_MODE` — defaults to `true`
-
-### Run
+**Run:**
 
 ```bash
-flash                        # interactive terminal
-flash markets                # list markets (non-interactive)
-flash doctor                 # run diagnostics
+flash                    # interactive terminal
+flash markets            # list markets (non-interactive)
+flash doctor             # run diagnostics
 ```
 
----
-
-## Requirements
-
-- Node.js >= 20
-- Solana RPC endpoint (mainnet)
+**Requirements:** Node.js >= 20 &nbsp;|&nbsp; Solana RPC endpoint (mainnet)
 
 ---
 
@@ -176,22 +220,31 @@ flash doctor                 # run diagnostics
 
 | Source | Data |
 |--------|------|
-| Flash SDK | Position state, pool config, instruction building |
-| Pyth Network | Real-time oracle prices |
-| Solana RPC | Transaction submission and confirmation |
-| fstats API | Volume, open interest, leaderboards, whale activity |
-| CoinGecko | Market prices with 24h change |
+| **Flash SDK** | Position state, pool config, instruction building |
+| **Pyth Network** | Real-time oracle prices |
+| **Solana RPC** | Transaction submission and confirmation |
+| **fstats API** | Volume, open interest, leaderboards, whale activity |
+| **CoinGecko** | Market prices with 24h change |
 
-All data is live. No hardcoded prices, no synthetic signals. If a data source is unreachable, affected features degrade gracefully rather than producing incorrect results.
+All data is live. No hardcoded prices, no synthetic signals. Sources that are unreachable degrade gracefully.
+
+---
+
+## Documentation
+
+Full documentation available at **[flash-terminal-docs.vercel.app](https://flash-terminal-docs.vercel.app)**
+
+| Section | Content |
+|---------|---------|
+| **[Guide](https://flash-terminal-docs.vercel.app/guide/introduction)** | Introduction, architecture, trading, risk preview, simulation, analytics, infrastructure, security |
+| **[Reference](https://flash-terminal-docs.vercel.app/reference/trading-commands)** | Complete command reference for all 50+ commands |
 
 ---
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md).
-
----
+See **[CONTRIBUTING.md](CONTRIBUTING.md)** for development setup, code style, and pull request guidelines.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT — see **[LICENSE](LICENSE)**
