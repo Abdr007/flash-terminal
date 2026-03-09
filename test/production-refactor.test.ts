@@ -8,6 +8,7 @@ import assert from 'assert';
 import { resolveMarket } from '../src/utils/market-resolver.js';
 import { localParse } from '../src/ai/interpreter.js';
 import { ActionType } from '../src/types/index.js';
+import { humanizeSdkError } from '../src/utils/format.js';
 import { allAgentTools } from '../src/agent/agent-tools.js';
 import { ToolEngine } from '../src/tools/engine.js';
 
@@ -208,6 +209,35 @@ test('Agent tool names are correct', () => {
   for (const name of expected) {
     assert.ok(actual.includes(name), `Missing tool: ${name}`);
   }
+});
+
+// ─── SDK Error Humanization ─────────────────────────────────────────────────
+
+test('humanizeSdkError converts raw token amounts to USD', () => {
+  const raw = 'Insufficient Funds need more 103334904 tokens';
+  const result = humanizeSdkError(raw);
+  assert.ok(result.includes('$103.33'), `Expected "$103.33" in: ${result}`);
+  assert.ok(result.includes('USDC'), `Expected "USDC" in: ${result}`);
+  assert.ok(!result.includes('103334904'), `Should not contain raw amount: ${result}`);
+});
+
+test('humanizeSdkError includes collateral context when provided', () => {
+  const raw = 'Insufficient Funds need more 103334904 tokens';
+  const result = humanizeSdkError(raw, 500, 125);
+  assert.ok(result.includes('$500'), `Expected collateral in: ${result}`);
+  assert.ok(result.includes('125x'), `Expected leverage in: ${result}`);
+});
+
+test('humanizeSdkError passes through non-matching errors unchanged', () => {
+  const raw = 'Market SOL not found';
+  const result = humanizeSdkError(raw);
+  assert.strictEqual(result, raw);
+});
+
+test('humanizeSdkError handles small amounts correctly', () => {
+  const raw = 'Insufficient Funds need more 5000000 tokens';
+  const result = humanizeSdkError(raw);
+  assert.ok(result.includes('$5.00'), `Expected "$5.00" in: ${result}`);
 });
 
 // ─── Summary ────────────────────────────────────────────────────────────────

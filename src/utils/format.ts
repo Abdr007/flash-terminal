@@ -103,3 +103,39 @@ export function shortAddress(address: string): string {
   if (address.length <= 10) return address;
   return `${address.slice(0, 4)}...${address.slice(-4)}`;
 }
+
+/**
+ * Convert raw Flash SDK error messages into human-readable text.
+ * The SDK often returns raw native token amounts (e.g. "need more 103334904 tokens"
+ * which is 103.33 USDC at 6 decimals). This function detects common patterns and
+ * converts them to USD values.
+ */
+export function humanizeSdkError(msg: string, collateral?: number, leverage?: number): string {
+  // Pattern: "Insufficient Funds need more NNNN tokens"
+  const insufficientMatch = msg.match(/[Ii]nsufficient\s+[Ff]unds.*?need\s+more\s+(\d+)\s+tokens?/);
+  if (insufficientMatch) {
+    const rawAmount = parseInt(insufficientMatch[1], 10);
+    if (Number.isFinite(rawAmount) && rawAmount > 0) {
+      // USDC uses 6 decimals
+      const usdAmount = rawAmount / 1_000_000;
+      const parts: string[] = [`Insufficient funds — need ${formatUsd(usdAmount)} more USDC`];
+      if (collateral && leverage) {
+        const totalRequired = collateral + (collateral * leverage * 8) / 10_000;
+        parts.push(`(${formatUsd(collateral)} collateral + ~${formatUsd(totalRequired - collateral)} fees at ${leverage}x)`);
+      }
+      return parts.join(' ');
+    }
+  }
+
+  // Pattern: generic "need more NNNN" without "tokens" suffix
+  const needMoreMatch = msg.match(/need\s+more\s+(\d{6,})/);
+  if (needMoreMatch) {
+    const rawAmount = parseInt(needMoreMatch[1], 10);
+    if (Number.isFinite(rawAmount) && rawAmount > 0) {
+      const usdAmount = rawAmount / 1_000_000;
+      return msg.replace(needMoreMatch[0], `need ${formatUsd(usdAmount)} more`);
+    }
+  }
+
+  return msg;
+}

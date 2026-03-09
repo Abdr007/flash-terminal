@@ -20,6 +20,7 @@ import {
   colorSide,
   formatTable,
   shortAddress,
+  humanizeSdkError,
 } from '../utils/format.js';
 import { getErrorMessage } from '../utils/retry.js';
 import { getSigningGuard, SigningAuditEntry } from '../security/signing-guard.js';
@@ -407,7 +408,7 @@ export const flashOpenPosition: ToolDefinition = {
               result: 'failed',
               reason: getErrorMessage(error),
             });
-            return { success: false, message: `  Failed to open position: ${getErrorMessage(error)}` };
+            return { success: false, message: `  Failed to open position: ${humanizeSdkError(getErrorMessage(error), collateral, leverage)}` };
           }
         },
       },

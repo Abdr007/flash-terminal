@@ -15,7 +15,7 @@ import { shortAddress } from '../utils/format.js';
 import { getErrorMessage } from '../utils/retry.js';
 import { initLogger, getLogger } from '../utils/logger.js';
 import { setAiApiKey, getInspector, getRegimeDetector } from '../agent/agent-tools.js';
-import { formatUsd, formatPrice, colorPercent } from '../utils/format.js';
+import { formatUsd, formatPrice, colorPercent, humanizeSdkError } from '../utils/format.js';
 import { MarketRegime } from '../regime/regime-types.js';
 import { initSigningGuard } from '../security/signing-guard.js';
 import { RpcManager, buildRpcEndpoints, initRpcManager } from '../network/rpc-manager.js';
@@ -2103,7 +2103,9 @@ export class FlashTerminal {
       this.renderDryRunPreview(preview);
     } catch (error: unknown) {
       process.stdout.write('                                   \r');
-      console.log(chalk.red(`  Dry run failed: ${getErrorMessage(error)}`));
+      const errMsg = getErrorMessage(error);
+      const humanized = humanizeSdkError(errMsg, collateral, leverage);
+      console.log(chalk.red(`  Dry run failed: ${humanized}`));
     }
   }
 
