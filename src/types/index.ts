@@ -674,6 +674,23 @@ export interface ToolContext {
   walletAddress: string;
   walletName: string;
   walletManager?: WalletManager;
+  /** In-memory log of trades executed during this session (live + sim). */
+  sessionTrades?: SessionTrade[];
+}
+
+/** A trade executed during the current terminal session. */
+export interface SessionTrade {
+  action: 'open' | 'close' | 'add_collateral' | 'remove_collateral';
+  market: string;
+  side: string;
+  leverage?: number;
+  collateral?: number;
+  sizeUsd?: number;
+  entryPrice?: number;
+  exitPrice?: number;
+  pnl?: number;
+  txSignature?: string;
+  timestamp: number;
 }
 
 export interface ToolDefinition<TParams = Record<string, unknown>> {
@@ -749,38 +766,20 @@ export interface SimulatedTrade {
 
 // ─── Validation ──────────────────────────────────────────────────────────────
 
-// Per-market leverage limits — sourced from Flash Trade SDK PoolConfig.json
-const LEVERAGE_LIMITS: Record<string, { min: number; max: number }> = {
-  SOL:      { min: 1.1, max: 500 },  // degen max (tool layer enforces normal vs degen)
-  BTC:      { min: 1.1, max: 500 },
-  ETH:      { min: 1.1, max: 500 },
-  ZEC:      { min: 1.1, max: 10 },
-  BNB:      { min: 1.1, max: 50 },
-  XAU:      { min: 1.1, max: 100 },
-  XAG:      { min: 1.1, max: 100 },
-  CRUDEOIL: { min: 1.1, max: 50 },
-  EUR:      { min: 1.1, max: 500 },
-  GBP:      { min: 1.1, max: 500 },
-  USDJPY:   { min: 1.1, max: 500 },
-  USDCNH:   { min: 1.1, max: 500 },
-  JTO:      { min: 1.1, max: 50 },
-  JUP:      { min: 1.1, max: 50 },
-  PYTH:     { min: 1.1, max: 50 },
-  RAY:      { min: 1.1, max: 50 },
-  HYPE:     { min: 1.1, max: 20 },
-  MET:      { min: 1.1, max: 10 },
-  KMNO:     { min: 1.1, max: 50 },
-  PUMP:     { min: 1.1, max: 25 },
-  BONK:     { min: 1.1, max: 25 },
-  PENGU:    { min: 1.1, max: 25 },
-  WIF:      { min: 1.1, max: 25 },
-  FARTCOIN: { min: 1.1, max: 25 },
-  ORE:      { min: 1.1, max: 5 },
-  DEFAULT:  { min: 1.1, max: 100 },
-};
+// Per-market leverage limits — delegates to config which reads from Flash SDK.
+// The tool layer enforces normal vs degen mode; this uses degenMaxLev as absolute ceiling.
+// Injected at startup by config module to avoid circular import.
+
+let _leverageFn: ((market: string, degen?: boolean) => number) | null = null;
+
+/** Called by config module at load time to inject SDK-based leverage lookup. */
+export function injectLeverageFn(fn: (market: string, degen?: boolean) => number): void {
+  _leverageFn = fn;
+}
 
 export function getLeverageLimits(market: string): { min: number; max: number } {
-  return LEVERAGE_LIMITS[market.toUpperCase()] ?? LEVERAGE_LIMITS['DEFAULT'];
+  const max = _leverageFn ? _leverageFn(market, true) : 100;
+  return { min: 1.1, max: max || 100 };
 }
 
 export interface TradeValidation {

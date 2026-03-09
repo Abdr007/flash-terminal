@@ -37,7 +37,7 @@ import {
   getLeverageLimits,
 } from '../types/index.js';
 import { PythHttpClient, getPythProgramKeyForCluster, PriceData } from '@pythnetwork/client';
-import { getPoolForMarket, POOL_NAMES } from '../config/index.js';
+import { getPoolForMarket, isTradeablePool, POOL_NAMES } from '../config/index.js';
 import { getLogger } from '../utils/logger.js';
 import { getErrorMessage, withRetry } from '../utils/retry.js';
 import type { WalletManager } from '../wallet/walletManager.js';
@@ -448,6 +448,10 @@ export class FlashClient implements IFlashClient {
   private getPoolConfigForMarket(market: string): PoolConfig {
     const poolName = getPoolForMarket(market);
     if (!poolName) throw new Error(`Unknown market: ${market}`);
+    // Check if pool is tradeable (SDK supports it)
+    if (!isTradeablePool(poolName)) {
+      throw new Error(`${market} (${poolName}) is not yet available for trading. The pool exists in the protocol config but the SDK doesn't support it yet. Check for flash-sdk updates.`);
+    }
     if (poolName !== this.poolConfig.poolName) {
       const pc = PoolConfig.fromIdsByName(poolName, this.config.network);
       // Register this pool's program IDs in the instance whitelist

@@ -4,6 +4,7 @@ import { ParsedIntent, ParsedIntentSchema, ActionType, TradeSide } from '../type
 import { getAllMarkets } from '../config/index.js';
 import { getLogger } from '../utils/logger.js';
 import { getErrorMessage } from '../utils/retry.js';
+import { resolveMarket, normalizeAssetText } from '../utils/market-resolver.js';
 
 const SYSTEM_PROMPT = `You are the Flash Terminal intent parser. You convert natural language trading commands into structured JSON actions.
 
@@ -164,13 +165,9 @@ const ASSET_ALIASES: Record<string, string> = {
   pump: 'PUMP', pumpfun: 'PUMP',
 };
 
-/** Normalize asset aliases: "solana" → "SOL" */
+/** Normalize asset aliases: "solana" → "SOL", "crude oil" → "crudeoil" */
 function normalizeAssetAliases(text: string): string {
-  let result = text;
-  for (const [alias, symbol] of Object.entries(ASSET_ALIASES)) {
-    result = result.replace(new RegExp(`\\b${alias}\\b`, 'gi'), symbol.toLowerCase());
-  }
-  return result;
+  return normalizeAssetText(text);
 }
 
 /**
@@ -273,11 +270,11 @@ export function localParse(input: string): ParsedIntent | null {
   if (/^(all markets)$/.test(lower)) {
     return { action: ActionType.GetMarketData };
   }
-  const priceMatch = lower.match(/^(?:price of\s+)?([a-z]+)\s*(?:price)?$/);
+  const priceMatch = lower.match(/^(?:price of\s+)?([a-z\s]+?)\s*(?:price)?$/);
   if (priceMatch) {
-    const sym = priceMatch[1].toUpperCase();
-    if (getAllMarkets().includes(sym)) {
-      return { action: ActionType.GetMarketData, market: sym };
+    const resolved = resolveMarket(priceMatch[1]);
+    if (getAllMarkets().includes(resolved)) {
+      return { action: ActionType.GetMarketData, market: resolved };
     }
   }
 
@@ -290,7 +287,7 @@ export function localParse(input: string): ParsedIntent | null {
     if (side) {
       return {
         action: ActionType.OpenPosition,
-        market: openMatch[3].toUpperCase(),
+        market: resolveMarket(openMatch[3]),
         side,
         collateral: parseFloat(openMatch[4]),
         leverage: parseFloat(openMatch[1]),
@@ -307,7 +304,7 @@ export function localParse(input: string): ParsedIntent | null {
     if (side) {
       return {
         action: ActionType.OpenPosition,
-        market: openMatch2[2].toUpperCase(),
+        market: resolveMarket(openMatch2[2]),
         side,
         collateral: parseFloat(openMatch2[3]),
         leverage: parseFloat(openMatch2[4]),
@@ -324,7 +321,7 @@ export function localParse(input: string): ParsedIntent | null {
     if (side) {
       return {
         action: ActionType.ClosePosition,
-        market: closeMatch[1].toUpperCase(),
+        market: resolveMarket(closeMatch[1]),
         side,
       };
     }
@@ -335,26 +332,27 @@ export function localParse(input: string): ParsedIntent | null {
     /^(?:close|exit|sell)\s+(?:my\s+)?([a-z]+)(?:\s+position)?$/
   );
   if (closeNoSideMatch) {
-    const sym = closeNoSideMatch[1].toUpperCase();
-    if (getAllMarkets().includes(sym)) {
+    const resolved = resolveMarket(closeNoSideMatch[1]);
+    if (getAllMarkets().includes(resolved)) {
       return {
         action: ActionType.ClosePosition,
-        market: sym,
+        market: resolved,
         // side omitted — terminal will auto-detect from open positions
       } as ParsedIntent;
     }
   }
 
   // Add collateral: "add $200 to SOL long", "add collateral of $50 to SOL long", "add $200 to SOL"
+  // Also: "add 5 dollar collateral on crude oil long" (after normalization: "add 5 dollar collateral on crudeoil long")
   const addCollMatch = lower.match(
-    /^add\s+(?:collateral\s+(?:of\s+)?)?\$?(\d+(?:\.\d+)?)\s+(?:collateral\s+)?(?:to\s+)?(?:my\s+)?([a-z]+)\s+(long|short)$/
+    /^add\s+(?:collateral\s+(?:of\s+)?)?\$?(\d+(?:\.\d+)?)\s+(?:dollars?\s+)?(?:collateral\s+)?(?:to\s+|on\s+)?(?:my\s+)?([a-z]+)\s+(long|short)$/
   );
   if (addCollMatch) {
     const side = parseSide(addCollMatch[3]);
     if (side) {
       return {
         action: ActionType.AddCollateral,
-        market: addCollMatch[2].toUpperCase(),
+        market: resolveMarket(addCollMatch[2]),
         side,
         amount: parseFloat(addCollMatch[1]),
       };
@@ -362,15 +360,16 @@ export function localParse(input: string): ParsedIntent | null {
   }
 
   // Add collateral without side: "add $200 to SOL" — side will be auto-detected
+  // Also: "add 5 dollar collateral on crude oil" (after normalization: "add 5 dollar collateral on crudeoil")
   const addCollNoSideMatch = lower.match(
-    /^add\s+(?:collateral\s+(?:of\s+)?)?\$?(\d+(?:\.\d+)?)\s+(?:collateral\s+)?(?:to\s+)?(?:my\s+)?([a-z]+)$/
+    /^add\s+(?:collateral\s+(?:of\s+)?)?\$?(\d+(?:\.\d+)?)\s+(?:dollars?\s+)?(?:collateral\s+)?(?:to\s+|on\s+)?(?:my\s+)?([a-z]+)$/
   );
   if (addCollNoSideMatch) {
-    const sym = addCollNoSideMatch[2].toUpperCase();
-    if (getAllMarkets().includes(sym)) {
+    const resolved = resolveMarket(addCollNoSideMatch[2]);
+    if (getAllMarkets().includes(resolved)) {
       return {
         action: ActionType.AddCollateral,
-        market: sym,
+        market: resolved,
         amount: parseFloat(addCollNoSideMatch[1]),
       } as ParsedIntent;
     }
@@ -378,14 +377,14 @@ export function localParse(input: string): ParsedIntent | null {
 
   // Remove collateral: "remove $100 from ETH long", "remove $100 from ETH"
   const rmCollMatch = lower.match(
-    /^remove\s+\$?(\d+(?:\.\d+)?)\s+(?:collateral\s+)?(?:from\s+)?(?:my\s+)?([a-z]+)\s+(long|short)$/
+    /^remove\s+\$?(\d+(?:\.\d+)?)\s+(?:dollars?\s+)?(?:collateral\s+)?(?:from\s+|on\s+)?(?:my\s+)?([a-z]+)\s+(long|short)$/
   );
   if (rmCollMatch) {
     const side = parseSide(rmCollMatch[3]);
     if (side) {
       return {
         action: ActionType.RemoveCollateral,
-        market: rmCollMatch[2].toUpperCase(),
+        market: resolveMarket(rmCollMatch[2]),
         side,
         amount: parseFloat(rmCollMatch[1]),
       };
@@ -394,14 +393,14 @@ export function localParse(input: string): ParsedIntent | null {
 
   // Remove collateral without side: "remove $100 from SOL" — side will be auto-detected
   const rmCollNoSideMatch = lower.match(
-    /^remove\s+\$?(\d+(?:\.\d+)?)\s+(?:collateral\s+)?(?:from\s+)?(?:my\s+)?([a-z]+)$/
+    /^remove\s+\$?(\d+(?:\.\d+)?)\s+(?:dollars?\s+)?(?:collateral\s+)?(?:from\s+|on\s+)?(?:my\s+)?([a-z]+)$/
   );
   if (rmCollNoSideMatch) {
-    const sym = rmCollNoSideMatch[2].toUpperCase();
-    if (getAllMarkets().includes(sym)) {
+    const resolved = resolveMarket(rmCollNoSideMatch[2]);
+    if (getAllMarkets().includes(resolved)) {
       return {
         action: ActionType.RemoveCollateral,
-        market: sym,
+        market: resolved,
         amount: parseFloat(rmCollNoSideMatch[1]),
       } as ParsedIntent;
     }
@@ -409,10 +408,12 @@ export function localParse(input: string): ParsedIntent | null {
 
   // ─── AI Agent Commands ──────────────────────────────────────────────────
 
-  // Analyze: "analyze SOL", "analyze BTC"
-  const analyzeMatch = lower.match(/^analyze\s+([a-z]+)$/);
+  // Analyze: "analyze SOL", "analyze BTC", "analyze crude oil" (→ "analyze crudeoil" after normalization)
+  // Also match "analyse" (British spelling)
+  const analyzeMatch = lower.match(/^analy[sz]e\s+(.+)$/);
   if (analyzeMatch) {
-    return { action: ActionType.Analyze, market: analyzeMatch[1].toUpperCase() };
+    const market = resolveMarket(analyzeMatch[1]);
+    return { action: ActionType.Analyze, market };
   }
 
   // Risk report: "risk report", "risk"
@@ -426,36 +427,39 @@ export function localParse(input: string): ParsedIntent | null {
   }
 
   // Whale activity: "whale activity", "whales", "whale activity SOL"
-  const whaleMatch = lower.match(/^(?:whale\s+activity|whales?)(?:\s+([a-z]+))?$/);
+  const whaleMatch = lower.match(/^(?:whale\s+activity|whales?)(?:\s+(.+))?$/);
   if (whaleMatch) {
     return {
       action: ActionType.WhaleActivity,
-      ...(whaleMatch[1] ? { market: whaleMatch[1].toUpperCase() } : {}),
+      ...(whaleMatch[1] ? { market: resolveMarket(whaleMatch[1]) } : {}),
     };
   }
 
-  // Liquidation map: "liquidations SOL", "liquidation BTC"
-  const liqMatch = lower.match(/^liquidations?\s+([a-z]+)$/);
+  // Liquidation map: "liquidations SOL", "liquidation BTC", "liquidations crude oil"
+  const liqMatch = lower.match(/^liquidations?\s+(.+)$/);
   if (liqMatch) {
-    return { action: ActionType.LiquidationMap, market: liqMatch[1].toUpperCase() };
+    const market = resolveMarket(liqMatch[1]);
+    return { action: ActionType.LiquidationMap, market };
   }
   if (/^liquidations?$/.test(lower)) {
     return { action: ActionType.LiquidationMap };
   }
 
-  // Funding: "funding SOL", "funding"
-  const fundingMatch = lower.match(/^funding\s+([a-z]+)$/);
+  // Funding: "funding SOL", "funding", "funding crude oil"
+  const fundingMatch = lower.match(/^funding\s+(.+)$/);
   if (fundingMatch) {
-    return { action: ActionType.FundingDashboard, market: fundingMatch[1].toUpperCase() };
+    const market = resolveMarket(fundingMatch[1]);
+    return { action: ActionType.FundingDashboard, market };
   }
   if (/^funding$/.test(lower)) {
     return { action: ActionType.FundingDashboard };
   }
 
-  // Depth: "depth SOL", "depth"
-  const depthMatch = lower.match(/^depth\s+([a-z]+)$/);
+  // Depth: "depth SOL", "depth", "depth crude oil"
+  const depthMatch = lower.match(/^depth\s+(.+)$/);
   if (depthMatch) {
-    return { action: ActionType.LiquidityDepth, market: depthMatch[1].toUpperCase() };
+    const market = resolveMarket(depthMatch[1]);
+    return { action: ActionType.LiquidityDepth, market };
   }
   if (/^depth$/.test(lower)) {
     return { action: ActionType.LiquidityDepth };

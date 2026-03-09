@@ -372,6 +372,15 @@ export const flashOpenPosition: ToolDefinition = {
             // Estimate fee: 0.08% of position size (Flash Trade standard fee)
             const estimatedFee = sizeUsd * 0.0008;
 
+            // Log session trade
+            if (context.sessionTrades) {
+              context.sessionTrades.push({
+                action: 'open', market, side, leverage, collateral,
+                sizeUsd: result.sizeUsd, entryPrice: result.entryPrice,
+                txSignature: result.txSignature, timestamp: Date.now(),
+              });
+            }
+
             return {
               success: true,
               message: [
@@ -496,6 +505,15 @@ export const flashClosePosition: ToolDefinition = {
               result: 'confirmed',
             });
 
+            // Log session trade
+            if (context.sessionTrades) {
+              context.sessionTrades.push({
+                action: 'close', market, side,
+                exitPrice: result.exitPrice, pnl: result.pnl,
+                txSignature: result.txSignature, timestamp: Date.now(),
+              });
+            }
+
             const pnlStr = result.pnl !== undefined ? `  PnL: ${colorPnl(result.pnl)}\n` : '';
             const txLink = context.simulationMode
               ? result.txSignature
@@ -617,6 +635,14 @@ export const flashAddCollateral: ToolDefinition = {
               collateral: amount, walletAddress: walletAddr,
               result: 'confirmed',
             });
+            // Log session trade
+            if (context.sessionTrades) {
+              context.sessionTrades.push({
+                action: 'add_collateral', market, side, collateral: amount,
+                txSignature: result.txSignature, timestamp: Date.now(),
+              });
+            }
+
             const txDisplay = context.simulationMode
               ? result.txSignature
               : `https://solscan.io/tx/${result.txSignature}`;
@@ -733,6 +759,15 @@ export const flashRemoveCollateral: ToolDefinition = {
               collateral: amount, walletAddress: walletAddr,
               result: 'confirmed',
             });
+
+            // Log session trade
+            if (context.sessionTrades) {
+              context.sessionTrades.push({
+                action: 'remove_collateral', market, side, collateral: amount,
+                txSignature: result.txSignature, timestamp: Date.now(),
+              });
+            }
+
             const txDisplay = context.simulationMode
               ? result.txSignature
               : `https://solscan.io/tx/${result.txSignature}`;
@@ -1518,14 +1553,16 @@ export const flashMarkets: ToolDefinition = {
   description: 'List all Flash Trade markets with pool mapping',
   parameters: z.object({}),
   execute: async (_params, _context): Promise<ToolResult> => {
-    const { POOL_MARKETS } = await import('../config/index.js');
+    const { POOL_MARKETS, isTradeablePool } = await import('../config/index.js');
     const lines = [
       theme.titleBlock('FLASH TRADE MARKETS'),
       '',
     ];
     for (const [pool, markets] of Object.entries(POOL_MARKETS)) {
+      const tradeable = isTradeablePool(pool);
       for (const market of markets) {
-        lines.push(`  ${market.padEnd(12)} ${theme.dim('→')} ${theme.accent(pool)}`);
+        const tag = tradeable ? '' : theme.dim(' (coming soon)');
+        lines.push(`  ${market.padEnd(12)} ${theme.dim('→')} ${theme.accent(pool)}${tag}`);
       }
     }
     lines.push('');
@@ -1540,8 +1577,8 @@ export const walletConnect: ToolDefinition = {
     path: z.string(),
   }),
   execute: async (params, context): Promise<ToolResult> => {
-    const { path } = params as { path: string };
-    if (!path) {
+    const { path: inputPath } = params as { path: string };
+    if (!inputPath) {
       return {
         success: false,
         message: [
@@ -1553,12 +1590,34 @@ export const walletConnect: ToolDefinition = {
         ].join('\n'),
       };
     }
+
+    // If input looks like a wallet name (no path separators, no extension),
+    // check if it matches a stored wallet and suggest "wallet use" instead.
+    const looksLikeName = !inputPath.includes('/') && !inputPath.includes('\\') && !inputPath.includes('.');
+    if (looksLikeName) {
+      const { WalletStore } = await import('../wallet/wallet-store.js');
+      const store = new WalletStore();
+      const wallets = store.listWallets().map(n => n.toLowerCase());
+      if (wallets.includes(inputPath.toLowerCase())) {
+        return {
+          success: false,
+          message: [
+            '',
+            chalk.yellow(`  "${inputPath}" is a saved wallet name, not a file path.`),
+            '',
+            `  ${chalk.dim('Use:')}  ${chalk.cyan(`wallet use ${inputPath}`)}`,
+            '',
+          ].join('\n'),
+        };
+      }
+    }
+
     const wm = context.walletManager;
     if (!wm) {
       return { success: false, message: chalk.red('  Wallet manager not available') };
     }
     try {
-      const { address } = wm.loadFromFile(path);
+      const { address } = wm.loadFromFile(inputPath);
       context.walletAddress = address;
       context.walletName = 'wallet';
       updateLastWallet('wallet');
@@ -1709,7 +1768,54 @@ const tradeHistoryTool: ToolDefinition = {
   description: 'Show recent trade history',
   async execute(_params: Record<string, unknown>, context: ToolContext): Promise<ToolResult> {
     const client = context.flashClient;
-    if (!client.getTradeHistory) {
+
+    // In simulation mode, use the SimulatedFlashClient's full history
+    if (client.getTradeHistory) {
+      const trades = client.getTradeHistory();
+      if (trades.length === 0) {
+        return {
+          success: true,
+          message: [
+            '',
+            chalk.dim('  No trades recorded yet.'),
+            chalk.dim('  Execute a trade and it will appear here.'),
+            '',
+          ].join('\n'),
+        };
+      }
+
+      const recent = trades.slice(-20).reverse();
+      const lines: string[] = [
+        theme.titleBlock('TRADE HISTORY'),
+        '',
+        theme.dim('  Time       Action  Market  Side    Size        Entry       PnL'),
+        `  ${theme.separator(72)}`,
+      ];
+
+      for (const t of recent) {
+        const time = new Date(t.timestamp).toLocaleTimeString('en-US', { hour12: false });
+        const action = t.action === 'open' ? theme.command('OPEN ') : theme.warning('CLOSE');
+        const market = t.market.padEnd(6);
+        const side = t.side === 'long' ? theme.long('LONG ') : theme.short('SHORT');
+        const size = formatUsd(t.sizeUsd).padStart(10);
+        const entry = formatPrice(t.price).padStart(10);
+        const pnl = t.pnl !== undefined
+          ? (t.pnl >= 0 ? theme.positive(`+${formatUsd(t.pnl)}`) : theme.negative(formatUsd(t.pnl)))
+          : theme.dim('  —');
+
+        lines.push(`  ${time}  ${action}   ${market}  ${side}  ${size}  ${entry}  ${pnl}`);
+      }
+
+      lines.push('');
+      lines.push(theme.dim(`  Showing ${recent.length} of ${trades.length} total trades`));
+      lines.push('');
+
+      return { success: true, message: lines.join('\n') };
+    }
+
+    // Live mode: show session trades (trades executed in this terminal session)
+    const sessionTrades = context.sessionTrades ?? [];
+    if (sessionTrades.length === 0) {
       return {
         success: true,
         message: [
@@ -1717,57 +1823,46 @@ const tradeHistoryTool: ToolDefinition = {
           theme.section('  Trade History'),
           theme.dim('  ─'.repeat(30)),
           '',
-          theme.text('  Live trade history is tracked on-chain.'),
-          theme.text('  View your transactions on a Solana explorer:'),
+          theme.dim('  No trades executed in this session.'),
           '',
+          theme.dim('  For full history, view on a Solana explorer:'),
           theme.dim('    • Solscan — https://solscan.io'),
           theme.dim('    • Solana FM — https://solana.fm'),
           '',
-          theme.dim('  Use your wallet address to look up past trades.'),
-          '',
         ].join('\n'),
       };
     }
 
-    const trades = client.getTradeHistory();
-    if (trades.length === 0) {
-      return {
-        success: true,
-        message: [
-          '',
-          chalk.dim('  No trades recorded yet.'),
-          chalk.dim('  Execute a trade and it will appear here.'),
-          '',
-        ].join('\n'),
-      };
-    }
-
-    // Show most recent 20 trades
-    const recent = trades.slice(-20).reverse();
-
+    const recent = sessionTrades.slice(-20).reverse();
     const lines: string[] = [
-      theme.titleBlock('TRADE HISTORY'),
+      theme.titleBlock('SESSION TRADE HISTORY'),
       '',
-      theme.dim('  Time       Action  Market  Side    Size        Entry       PnL'),
-      `  ${theme.separator(72)}`,
+      theme.dim('  Time       Action       Market    Side    Collateral  PnL'),
+      `  ${theme.separator(68)}`,
     ];
 
     for (const t of recent) {
       const time = new Date(t.timestamp).toLocaleTimeString('en-US', { hour12: false });
-      const action = t.action === 'open' ? theme.command('OPEN ') : theme.warning('CLOSE');
-      const market = t.market.padEnd(6);
-      const side = t.side === 'long' ? theme.long('LONG ') : theme.short('SHORT');
-      const size = formatUsd(t.sizeUsd).padStart(10);
-      const entry = formatPrice(t.price).padStart(10);
+      const actionLabels: Record<string, string> = {
+        open: 'OPEN',
+        close: 'CLOSE',
+        add_collateral: 'ADD COLL',
+        remove_collateral: 'RM COLL',
+      };
+      const actionStr = theme.command((actionLabels[t.action] ?? t.action).padEnd(10));
+      const market = (t.market ?? '').padEnd(9);
+      const side = (t.side ?? '').toUpperCase() === 'LONG' ? theme.long('LONG ') : theme.short('SHORT');
+      const coll = t.collateral !== undefined ? formatUsd(t.collateral).padStart(10) : '         —';
       const pnl = t.pnl !== undefined
         ? (t.pnl >= 0 ? theme.positive(`+${formatUsd(t.pnl)}`) : theme.negative(formatUsd(t.pnl)))
         : theme.dim('  —');
 
-      lines.push(`  ${time}  ${action}   ${market}  ${side}  ${size}  ${entry}  ${pnl}`);
+      lines.push(`  ${time}  ${actionStr} ${market} ${side}  ${coll}  ${pnl}`);
     }
 
     lines.push('');
-    lines.push(theme.dim(`  Showing ${recent.length} of ${trades.length} total trades`));
+    lines.push(theme.dim(`  ${recent.length} trade(s) this session`));
+    lines.push(theme.dim('  Full history: https://solscan.io'));
     lines.push('');
 
     return { success: true, message: lines.join('\n') };

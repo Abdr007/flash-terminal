@@ -27,28 +27,11 @@ import { runDoctor } from '../tools/doctor.js';
 import { startWatch } from './watch.js';
 import { theme } from './theme.js';
 import { completer, getSuggestions } from './completer.js';
+import { resolveMarket } from '../utils/market-resolver.js';
 
-/** Resolve common market name aliases to canonical Flash Trade symbols */
-const MARKET_ALIASES: Record<string, string> = {
-  JITO: 'JTO', RAYDIUM: 'RAY', KAMINO: 'KMNO',
-  METAPLEX: 'MET', SOLANA: 'SOL', BITCOIN: 'BTC',
-  ETHEREUM: 'ETH', ETHER: 'ETH', GOLD: 'XAU',
-  SILVER: 'XAG', CRUDE: 'CRUDEOIL', OIL: 'CRUDEOIL',
-  'CRUDE OIL': 'CRUDEOIL',
-  PENGUIN: 'PENGU', ZCASH: 'ZEC', EURO: 'EUR',
-  POUND: 'GBP', STERLING: 'GBP', YEN: 'USDJPY',
-  YUAN: 'USDCNH', HYPERLIQUID: 'HYPE', PUMPFUN: 'PUMP',
-};
-
+/** Alias for backward compat — delegates to centralized resolver */
 function resolveMarketAlias(input: string): string {
-  const trimmed = input.trim();
-  const upper = trimmed.toUpperCase();
-  // Try exact match first (handles multi-word like "CRUDE OIL")
-  if (MARKET_ALIASES[upper]) return MARKET_ALIASES[upper];
-  // Try with spaces removed (e.g. "crude oil" → "CRUDEOIL")
-  const collapsed = upper.replace(/\s+/g, '');
-  if (MARKET_ALIASES[collapsed]) return MARKET_ALIASES[collapsed];
-  return collapsed;
+  return resolveMarket(input);
 }
 
 /**
@@ -331,6 +314,7 @@ export class FlashTerminal {
       walletAddress: walletInfo?.address ?? this.flashClient.walletAddress ?? 'unknown',
       walletName: walletInfo?.name ?? '',
       walletManager: this.walletManager,
+      sessionTrades: [],
     };
 
     setAiApiKey(this.config.anthropicApiKey, this.config.groqApiKey);
@@ -1412,7 +1396,7 @@ export class FlashTerminal {
     const lower = input.toLowerCase();
 
     // ─── Doctor Diagnostic Intercept ───────────────────────────────
-    if (lower === 'doctor' || lower === 'flash doctor') {
+    if (lower === 'doctor') {
       const output = await runDoctor(
         this.flashClient,
         this.rpcManager,
@@ -1446,9 +1430,26 @@ export class FlashTerminal {
         this.context.degenMode = !this.context.degenMode;
       }
       if (this.context.degenMode) {
+        // Show per-market leverage from protocol config
+        const { hasDegenMode: hasDegen, getMaxLeverage: getMaxLev } = await import('../config/index.js');
+        const { getAllMarkets: getAll } = await import('../config/index.js');
+        // Degen-extended markets (SOL/BTC/ETH: 100x → 500x)
+        const degenMarkets = getAll().filter(m => hasDegen(m));
+        const degenInfo = degenMarkets.map(m => `${m} ${getMaxLev(m, true)}x`).join(', ');
+        // High-leverage markets that already have ≥200x as standard (forex pairs)
+        const highLevMarkets = getAll().filter(m => !hasDegen(m) && getMaxLev(m, false) >= 200);
+        const highLevInfo = highLevMarkets.map(m => `${m} ${getMaxLev(m, false)}x`).join(', ');
         console.log('');
         console.log(chalk.red.bold('  ⚡ DEGEN MODE ENABLED'));
-        console.log(chalk.yellow('  Max leverage unlocked: SOL/BTC/ETH up to 500x (min 125x)'));
+        if (degenInfo) {
+          console.log(chalk.yellow(`  Degen markets: ${degenInfo}`));
+        }
+        if (highLevInfo) {
+          console.log(chalk.yellow(`  High leverage: ${highLevInfo}`));
+        }
+        if (!degenInfo && !highLevInfo) {
+          console.log(chalk.yellow('  No markets have extended leverage beyond standard limits.'));
+        }
         console.log(chalk.dim('  Type "degen off" to disable'));
         console.log('');
       } else {
@@ -1471,6 +1472,11 @@ export class FlashTerminal {
       const prefix = lower.startsWith('dryrun ') ? 'dryrun ' : lower.startsWith('dry-run ') ? 'dry-run ' : 'dry run ';
       const innerCmd = input.slice(prefix.length).trim();
       intent = { action: ActionType.DryRun, innerCommand: innerCmd } as ParsedIntent;
+    } else if (lower.startsWith('analyze ') || lower.startsWith('analyse ')) {
+      const prefix = lower.startsWith('analyze ') ? 'analyze ' : 'analyse ';
+      const rawMarket = input.slice(prefix.length).trim();
+      const market = resolveMarketAlias(rawMarket);
+      intent = { action: ActionType.Analyze, market } as ParsedIntent;
     } else if (lower.startsWith('liquidations ') || lower.startsWith('liquidation ')) {
       const prefix = lower.startsWith('liquidations ') ? 'liquidations ' : 'liquidation ';
       const rawMarket = input.slice(prefix.length).trim();
@@ -1484,6 +1490,23 @@ export class FlashTerminal {
       const rawMarket = input.slice('depth '.length).trim();
       const market = resolveMarketAlias(rawMarket);
       intent = { action: ActionType.LiquidityDepth, market } as ParsedIntent;
+    } else if (lower.startsWith('monitor ') || lower.startsWith('market monitor ')) {
+      // "monitor oil", "monitor crude oil", "market monitor sol" → single-market monitor
+      const prefix = lower.startsWith('market monitor ') ? 'market monitor ' : 'monitor ';
+      const rawMarket = input.slice(prefix.length).trim();
+      if (rawMarket) {
+        const market = resolveMarketAlias(rawMarket);
+        const { getPoolForMarket } = await import('../config/index.js');
+        if (!getPoolForMarket(market)) {
+          console.log(chalk.red(`  Unknown market: ${rawMarket}`));
+          console.log(chalk.dim(`  Try: monitor sol, monitor crude oil, monitor btc`));
+          return;
+        }
+        await this.handleMarketMonitor(market);
+        return;
+      }
+      // No market specified — show all markets
+      intent = { action: ActionType.MarketMonitor } as ParsedIntent;
     } else if (lower.startsWith('inspect pool ')) {
       const poolInput = input.slice('inspect pool '.length).trim();
       const { POOL_NAMES } = await import('../config/index.js');
@@ -1872,13 +1895,16 @@ export class FlashTerminal {
    * Handle market monitor — live-updating market table.
    * Refreshes every 5 seconds. Press any key to exit.
    */
-  private async handleMarketMonitor(): Promise<void> {
+  private async handleMarketMonitor(filterMarket?: string): Promise<void> {
     const { PriceService } = await import('../data/prices.js');
     const priceSvc = new PriceService();
     const { POOL_MARKETS } = await import('../config/index.js');
 
-    // Collect all unique market symbols
-    const allSymbols = [...new Set(Object.values(POOL_MARKETS).flat().map(s => s.toUpperCase()))];
+    // Collect all unique market symbols, optionally filter to a single market
+    let allSymbols = [...new Set(Object.values(POOL_MARKETS).flat().map(s => s.toUpperCase()))];
+    if (filterMarket) {
+      allSymbols = allSymbols.filter(s => s === filterMarket.toUpperCase());
+    }
 
     let running = true;
 
@@ -1911,7 +1937,8 @@ export class FlashTerminal {
       process.stdout.write('\x1B[H\x1B[J');
       const now = new Date().toLocaleTimeString();
       console.log('');
-      console.log(`  ${theme.accentBold('MARKET MONITOR')}`);
+      const title = filterMarket ? `MARKET MONITOR — ${filterMarket.toUpperCase()}` : 'MARKET MONITOR';
+      console.log(`  ${theme.accentBold(title)}`);
       console.log(theme.dim(`  ${now}  |  Refresh 5s  |  Press any key to exit`));
       console.log(`  ${theme.separator(68)}`);
       console.log('');
@@ -2003,6 +2030,26 @@ export class FlashTerminal {
     const fastIntent = FAST_DISPATCH[lower];
 
     if (fastIntent) return fastIntent;
+
+    // Analytics commands with market argument — ensure alias resolution
+    if (lower.startsWith('analyze ') || lower.startsWith('analyse ')) {
+      const prefix = lower.startsWith('analyze ') ? 'analyze ' : 'analyse ';
+      const market = resolveMarketAlias(input.slice(prefix.length).trim());
+      return { action: ActionType.Analyze, market } as ParsedIntent;
+    }
+    if (lower.startsWith('liquidations ') || lower.startsWith('liquidation ')) {
+      const prefix = lower.startsWith('liquidations ') ? 'liquidations ' : 'liquidation ';
+      const market = resolveMarketAlias(input.slice(prefix.length).trim());
+      return { action: ActionType.LiquidationMap, market } as ParsedIntent;
+    }
+    if (lower.startsWith('funding ')) {
+      const market = resolveMarketAlias(input.slice('funding '.length).trim());
+      return { action: ActionType.FundingDashboard, market } as ParsedIntent;
+    }
+    if (lower.startsWith('depth ')) {
+      const market = resolveMarketAlias(input.slice('depth '.length).trim());
+      return { action: ActionType.LiquidityDepth, market } as ParsedIntent;
+    }
 
     if (lower.startsWith('inspect pool ')) {
       const pool = input.slice('inspect pool '.length).trim();

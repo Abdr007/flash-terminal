@@ -1,9 +1,10 @@
 import dotenv from 'dotenv';
-import { FlashConfig, VALID_NETWORKS, Network } from '../types/index.js';
+import { FlashConfig, VALID_NETWORKS, Network, injectLeverageFn } from '../types/index.js';
 import { homedir } from 'os';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { existsSync } from 'fs';
+import { existsSync, readFileSync } from 'fs';
+import { createRequire } from 'module';
 
 // Load .env from multiple locations (first match wins):
 // 1. Current working directory (local dev)
@@ -130,27 +131,81 @@ export const FLASH_REWARD_PROGRAM_ID = 'FARNT7LL119pmy9vSkN9q1ApZESPaKHuuX5Acz1o
 // fstats.io API
 export const FSTATS_BASE_URL = 'https://fstats.io/api/v1';
 
-// Available pools
-export const POOL_NAMES = [
-  'Crypto.1',
-  'Virtual.1',
-  'Governance.1',
-  'Community.1',
-  'Community.2',
-  'Trump.1',
-  'Ore.1',
-] as const;
+// ─── Pool & Market Discovery (loaded from Flash SDK PoolConfig) ───────────────
+// Reads pools and markets directly from the SDK's PoolConfig.json.
+// New pools/markets added by Flash Trade are picked up on `npm update flash-sdk`.
 
-// Market symbols per pool
-export const POOL_MARKETS: Record<string, string[]> = {
-  'Crypto.1': ['SOL', 'BTC', 'ETH', 'ZEC', 'BNB'],
-  'Virtual.1': ['XAG', 'XAU', 'CRUDEOIL', 'EUR', 'GBP', 'USDJPY', 'USDCNH'],
-  'Governance.1': ['JTO', 'JUP', 'PYTH', 'RAY', 'HYPE', 'MET', 'KMNO'],
-  'Community.1': ['PUMP', 'BONK', 'PENGU'],
-  'Community.2': ['WIF'],
-  'Trump.1': ['FARTCOIN'],
-  'Ore.1': ['ORE'],
-};
+const SKIP_TOKENS = new Set(['USDC', 'USDT', 'WSOL', 'XAUT', 'JITOSOL']);
+const SKIP_POOL_PREFIXES = ['devnet.', 'Remora.'];
+
+interface SdkPoolData {
+  pools: Array<{
+    poolName: string;
+    tokens: Array<{ symbol: string; mintKey: string }>;
+    markets: Array<{ targetMint: string; maxLev: number; degenMinLev: number; degenMaxLev: number }>;
+  }>;
+}
+
+function discoverPoolsFromSdk(): { names: string[]; markets: Record<string, string[]> } {
+  try {
+    const require = createRequire(import.meta.url);
+    const configPath = require.resolve('flash-sdk/dist/PoolConfig.json');
+    const raw = JSON.parse(readFileSync(configPath, 'utf8')) as SdkPoolData;
+
+    const names: string[] = [];
+    const markets: Record<string, string[]> = {};
+
+    for (const pool of raw.pools) {
+      if (SKIP_POOL_PREFIXES.some(p => pool.poolName.startsWith(p))) continue;
+      const syms = (pool.tokens || [])
+        .map(t => t.symbol.toUpperCase())
+        .filter(s => !SKIP_TOKENS.has(s));
+      if (syms.length === 0) continue;
+      names.push(pool.poolName);
+      markets[pool.poolName] = syms;
+    }
+
+    if (names.length > 0) return { names, markets };
+  } catch {
+    // SDK file unreadable — fall through to hardcoded fallback
+  }
+
+  // Hardcoded fallback (last known good state)
+  return {
+    names: ['Crypto.1', 'Virtual.1', 'Governance.1', 'Community.1', 'Community.2', 'Trump.1', 'Ore.1', 'Ondo.1'],
+    markets: {
+      'Crypto.1': ['SOL', 'BTC', 'ETH', 'ZEC', 'BNB'],
+      'Virtual.1': ['XAG', 'XAU', 'CRUDEOIL', 'EUR', 'GBP', 'USDJPY', 'USDCNH'],
+      'Governance.1': ['JTO', 'JUP', 'PYTH', 'RAY', 'HYPE', 'MET', 'KMNO'],
+      'Community.1': ['PUMP', 'BONK', 'PENGU'],
+      'Community.2': ['WIF'],
+      'Trump.1': ['FARTCOIN'],
+      'Ore.1': ['ORE'],
+      'Ondo.1': ['SPY', 'NVDA', 'TSLA', 'AAPL', 'AMD', 'AMZN', 'PLTR'],
+    },
+  };
+}
+
+const _poolData = discoverPoolsFromSdk();
+
+// Validate which pools are actually tradeable (PoolConfig.fromIdsByName works)
+const _tradeablePools = new Set<string>();
+for (const name of _poolData.names) {
+  try {
+    PoolConfig.fromIdsByName(name, 'mainnet-beta');
+    _tradeablePools.add(name);
+  } catch {
+    // Pool exists in JSON but SDK can't load it yet — mark as view-only
+  }
+}
+
+export const POOL_NAMES: string[] = _poolData.names;
+export const POOL_MARKETS: Record<string, string[]> = _poolData.markets;
+
+/** Check if a pool is tradeable (SDK can load it). View-only pools show in markets list but can't trade. */
+export function isTradeablePool(poolName: string): boolean {
+  return _tradeablePools.has(poolName);
+}
 
 export function getPoolForMarket(symbol: string): string | null {
   const upper = symbol.toUpperCase();
@@ -166,8 +221,11 @@ export function getAllMarkets(): string[] {
   return Object.values(POOL_MARKETS).flat().map((m) => m.toUpperCase());
 }
 
-// ─── Per-Market Leverage Limits (from Flash SDK PoolConfig.json) ─────────────
-// maxLev = normal mode max, degenMaxLev = degen mode max, degenMinLev = min lev to enter degen
+// ─── Per-Market Leverage Limits (loaded dynamically from Flash SDK PoolConfig) ─
+// Reads leverage directly from the SDK so limits stay in sync with protocol updates.
+// Just run `npm update flash-sdk` to pick up new leverage changes — no code edits needed.
+
+import { PoolConfig } from 'flash-sdk';
 
 interface MarketLeverage {
   maxLev: number;
@@ -175,50 +233,108 @@ interface MarketLeverage {
   degenMinLev: number;
 }
 
-const MARKET_LEVERAGE: Record<string, MarketLeverage> = {
-  SOL:      { maxLev: 100, degenMaxLev: 500, degenMinLev: 125 },
-  BTC:      { maxLev: 100, degenMaxLev: 500, degenMinLev: 125 },
-  ETH:      { maxLev: 100, degenMaxLev: 500, degenMinLev: 125 },
-  ZEC:      { maxLev: 10,  degenMaxLev: 10,  degenMinLev: 10 },
-  BNB:      { maxLev: 50,  degenMaxLev: 50,  degenMinLev: 50 },
-  XAU:      { maxLev: 100, degenMaxLev: 100, degenMinLev: 1 },
-  XAG:      { maxLev: 100, degenMaxLev: 100, degenMinLev: 1 },
-  CRUDEOIL: { maxLev: 50,  degenMaxLev: 50,  degenMinLev: 1 },
-  EUR:      { maxLev: 500, degenMaxLev: 500, degenMinLev: 1 },
-  GBP:      { maxLev: 500, degenMaxLev: 500, degenMinLev: 1 },
-  USDJPY:   { maxLev: 500, degenMaxLev: 500, degenMinLev: 1 },
-  USDCNH:   { maxLev: 500, degenMaxLev: 500, degenMinLev: 1 },
-  JTO:      { maxLev: 50,  degenMaxLev: 50,  degenMinLev: 1 },
-  JUP:      { maxLev: 50,  degenMaxLev: 50,  degenMinLev: 1 },
-  PYTH:     { maxLev: 50,  degenMaxLev: 50,  degenMinLev: 1 },
-  RAY:      { maxLev: 50,  degenMaxLev: 50,  degenMinLev: 1 },
-  HYPE:     { maxLev: 20,  degenMaxLev: 20,  degenMinLev: 1 },
-  MET:      { maxLev: 10,  degenMaxLev: 10,  degenMinLev: 1 },
-  KMNO:     { maxLev: 50,  degenMaxLev: 50,  degenMinLev: 1 },
-  PUMP:     { maxLev: 25,  degenMaxLev: 25,  degenMinLev: 1 },
-  BONK:     { maxLev: 25,  degenMaxLev: 25,  degenMinLev: 1 },
-  PENGU:    { maxLev: 25,  degenMaxLev: 25,  degenMinLev: 1 },
-  WIF:      { maxLev: 25,  degenMaxLev: 25,  degenMinLev: 1 },
-  FARTCOIN: { maxLev: 25,  degenMaxLev: 25,  degenMinLev: 1 },
-  ORE:      { maxLev: 5,   degenMaxLev: 5,   degenMinLev: 1 },
-};
+/** Lazily-built cache of per-market leverage from SDK PoolConfig. */
+let _sdkLeverageCache: Record<string, MarketLeverage> | null = null;
+
+function loadSdkLeverage(): Record<string, MarketLeverage> {
+  if (_sdkLeverageCache) return _sdkLeverageCache;
+
+  const cache: Record<string, MarketLeverage> = {};
+
+  // Read directly from SDK's PoolConfig.json — covers ALL pools including those
+  // not yet registered in PoolConfig.fromIdsByName (e.g. newly added pools)
+  try {
+    const require = createRequire(import.meta.url);
+    const configPath = require.resolve('flash-sdk/dist/PoolConfig.json');
+    const raw = JSON.parse(readFileSync(configPath, 'utf8')) as SdkPoolData;
+
+    for (const pool of raw.pools) {
+      if (SKIP_POOL_PREFIXES.some(p => pool.poolName.startsWith(p))) continue;
+      for (const m of pool.markets) {
+        const token = (pool.tokens || []).find(t => t.mintKey === m.targetMint);
+        if (!token) continue;
+        const sym = token.symbol.toUpperCase();
+        if (SKIP_TOKENS.has(sym)) continue;
+        const existing = cache[sym];
+        if (existing) {
+          existing.maxLev = Math.max(existing.maxLev, m.maxLev);
+          existing.degenMaxLev = Math.max(existing.degenMaxLev, m.degenMaxLev);
+          existing.degenMinLev = Math.min(existing.degenMinLev, m.degenMinLev);
+        } else {
+          cache[sym] = {
+            maxLev: m.maxLev,
+            degenMaxLev: m.degenMaxLev,
+            degenMinLev: m.degenMinLev,
+          };
+        }
+      }
+    }
+  } catch {
+    // JSON read failed — fall back to PoolConfig.fromIdsByName for registered pools
+    for (const poolName of POOL_NAMES) {
+      try {
+        const pc = PoolConfig.fromIdsByName(poolName, 'mainnet-beta');
+        const markets = pc.markets as unknown as Array<{
+          targetMint: { toBase58(): string };
+          maxLev: number; degenMinLev: number; degenMaxLev: number;
+        }>;
+        const tokens = pc.tokens as unknown as Array<{
+          symbol: string; mintKey: { toBase58(): string };
+        }>;
+        for (const m of markets) {
+          const targetMintStr = m.targetMint.toBase58();
+          const token = tokens.find(t => t.mintKey.toBase58() === targetMintStr);
+          if (!token) continue;
+          const sym = token.symbol.toUpperCase();
+          if (SKIP_TOKENS.has(sym)) continue;
+          const existing = cache[sym];
+          if (existing) {
+            existing.maxLev = Math.max(existing.maxLev, m.maxLev);
+            existing.degenMaxLev = Math.max(existing.degenMaxLev, m.degenMaxLev);
+            existing.degenMinLev = Math.min(existing.degenMinLev, m.degenMinLev);
+          } else {
+            cache[sym] = { maxLev: m.maxLev, degenMaxLev: m.degenMaxLev, degenMinLev: m.degenMinLev };
+          }
+        }
+      } catch {
+        // Pool not available — skip
+      }
+    }
+  }
+
+  _sdkLeverageCache = cache;
+  return cache;
+}
+
+/** Force refresh leverage cache (e.g. after SDK update). */
+export function refreshLeverageCache(): void {
+  _sdkLeverageCache = null;
+}
 
 /** Get the max allowed leverage for a market. Returns degenMaxLev if degen mode is on. */
 export function getMaxLeverage(market: string, degenMode = false): number {
   const upper = market.toUpperCase();
-  const lev = MARKET_LEVERAGE[upper];
-  if (!lev) return 100; // safe default
+  const lev = loadSdkLeverage()[upper];
+  if (!lev) return 100; // safe default for unknown markets
   return degenMode ? lev.degenMaxLev : lev.maxLev;
 }
 
 /** Get the minimum leverage to enter degen mode for a market (125x for SOL/BTC/ETH). */
 export function getDegenMinLeverage(market: string): number {
-  const lev = MARKET_LEVERAGE[market.toUpperCase()];
+  const lev = loadSdkLeverage()[market.toUpperCase()];
   return lev?.degenMinLev ?? 1;
 }
 
 /** Check if a market supports degen mode (degenMaxLev > maxLev). */
 export function hasDegenMode(market: string): boolean {
-  const lev = MARKET_LEVERAGE[market.toUpperCase()];
+  const lev = loadSdkLeverage()[market.toUpperCase()];
   return lev ? lev.degenMaxLev > lev.maxLev : false;
 }
+
+/** Get all leverage data for display purposes. */
+export function getAllLeverage(): Record<string, MarketLeverage> {
+  return { ...loadSdkLeverage() };
+}
+
+// Inject SDK-based leverage into types module (avoids circular import)
+injectLeverageFn(getMaxLeverage);
