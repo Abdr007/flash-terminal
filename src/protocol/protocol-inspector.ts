@@ -56,7 +56,10 @@ export class ProtocolInspector {
       `  ${theme.section('Pools')}`,
     ];
 
+    const seenPools = new Set<string>();
     for (const pool of snap.pools) {
+      if (seenPools.has(pool)) continue; // Skip duplicate pool entries
+      seenPools.add(pool);
       const markets = snap.markets[pool];
       lines.push(`    ${theme.accent(pool)} ${theme.dim('→')} ${markets ? markets.join(', ') : 'N/A'}`);
     }

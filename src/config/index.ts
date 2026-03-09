@@ -155,8 +155,11 @@ function discoverPoolsFromSdk(): { names: string[]; markets: Record<string, stri
     const names: string[] = [];
     const markets: Record<string, string[]> = {};
 
+    const seen = new Set<string>();
     for (const pool of raw.pools) {
       if (SKIP_POOL_PREFIXES.some(p => pool.poolName.startsWith(p))) continue;
+      if (seen.has(pool.poolName)) continue; // Deduplicate (SDK JSON has duplicates)
+      seen.add(pool.poolName);
       const syms = (pool.tokens || [])
         .map(t => t.symbol.toUpperCase())
         .filter(s => !SKIP_TOKENS.has(s));

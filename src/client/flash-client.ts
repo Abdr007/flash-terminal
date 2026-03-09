@@ -1361,19 +1361,29 @@ export class FlashClient implements IFlashClient {
   // ─── Queries ──────────────────────────────────────────────────────────────
 
   async getPositions(): Promise<Position[]> {
-    // Query ALL pools for user positions — not just the default pool.
+    // Query ALL tradeable pools in parallel — not just the default pool.
     // Users may have positions across Crypto.1, Governance.1, Virtual.1, etc.
-    const allPoolNames = POOL_NAMES;
-    const allPositions: Position[] = [];
+    const seen = new Set<string>();
+    const uniquePools = POOL_NAMES.filter(name => {
+      if (seen.has(name) || !isTradeablePool(name)) return false;
+      seen.add(name);
+      return true;
+    });
 
-    for (const poolName of allPoolNames) {
-      try {
-        await this.getPositionsForPool(poolName, allPositions);
-      } catch (error: unknown) {
-        getLogger().debug('CLIENT', `Pool ${poolName} position query failed: ${getErrorMessage(error)}`);
+    const results = await Promise.allSettled(
+      uniquePools.map(async (poolName) => {
+        const positions: Position[] = [];
+        await this.getPositionsForPool(poolName, positions);
+        return positions;
+      })
+    );
+
+    const allPositions: Position[] = [];
+    for (const result of results) {
+      if (result.status === 'fulfilled') {
+        allPositions.push(...result.value);
       }
     }
-
     return allPositions;
   }
 
@@ -1523,24 +1533,65 @@ export class FlashClient implements IFlashClient {
   }
 
   async getMarketData(market?: string): Promise<MarketData[]> {
-    const priceMap = await this.getPriceMap(this.poolConfig);
-    const tokens = this.poolConfig.tokens as Array<{ symbol: string }>;
+    // If a specific market is requested and it's not in the default pool, find its pool
+    const poolConfigs: PoolConfig[] = [];
+    if (market) {
+      const poolName = getPoolForMarket(market);
+      if (poolName && isTradeablePool(poolName)) {
+        poolConfigs.push(
+          poolName === this.poolConfig.poolName
+            ? this.poolConfig
+            : PoolConfig.fromIdsByName(poolName, this.config.network)
+        );
+      } else {
+        // Fallback to default pool
+        poolConfigs.push(this.poolConfig);
+      }
+    } else {
+      // No filter — query all tradeable pools in parallel
+      const seen = new Set<string>();
+      for (const name of POOL_NAMES) {
+        if (seen.has(name) || !isTradeablePool(name)) continue;
+        seen.add(name);
+        try {
+          poolConfigs.push(
+            name === this.poolConfig.poolName
+              ? this.poolConfig
+              : PoolConfig.fromIdsByName(name, this.config.network)
+          );
+        } catch { /* skip unloadable pools */ }
+      }
+    }
 
-    return tokens
-      .filter((t) => !market || t.symbol === market)
-      .filter((t) => priceMap.has(t.symbol))
-      .map((token) => {
-        const tp = priceMap.get(token.symbol)!;
-        return {
-          symbol: token.symbol,
-          price: tp.uiPrice,
-          priceChange24h: 0,
-          openInterestLong: 0,
-          openInterestShort: 0,
-          maxLeverage: 100,
-          fundingRate: 0,
-        };
-      });
+    const results: MarketData[] = [];
+    const seenSymbols = new Set<string>();
+
+    await Promise.all(poolConfigs.map(async (pc) => {
+      try {
+        const priceMap = await this.getPriceMap(pc);
+        const tokens = pc.tokens as Array<{ symbol: string }>;
+
+        for (const token of tokens) {
+          if (market && token.symbol !== market) continue;
+          if (seenSymbols.has(token.symbol)) continue;
+          if (!priceMap.has(token.symbol)) continue;
+
+          seenSymbols.add(token.symbol);
+          const tp = priceMap.get(token.symbol)!;
+          results.push({
+            symbol: token.symbol,
+            price: tp.uiPrice,
+            priceChange24h: 0,
+            openInterestLong: 0,
+            openInterestShort: 0,
+            maxLeverage: 100,
+            fundingRate: 0,
+          });
+        }
+      } catch { /* skip pools with price fetch failures */ }
+    }));
+
+    return results;
   }
 
   async getPortfolio(): Promise<Portfolio> {

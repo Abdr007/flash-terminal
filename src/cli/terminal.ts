@@ -421,7 +421,7 @@ export class FlashTerminal {
       }
 
       const lower = trimmed.toLowerCase();
-      if (lower === 'exit' || lower === 'quit') {
+      if (lower === 'exit' || lower === 'quit' || lower === 'q') {
         this.shutdown();
         return;
       }
@@ -1507,18 +1507,26 @@ export class FlashTerminal {
       }
       // No market specified — show all markets
       intent = { action: ActionType.MarketMonitor } as ParsedIntent;
-    } else if (lower.startsWith('inspect pool ')) {
-      const poolInput = input.slice('inspect pool '.length).trim();
+    } else if (lower === 'inspect pool' || lower.startsWith('inspect pool ')) {
+      const poolInput = lower === 'inspect pool' ? '' : input.slice('inspect pool '.length).trim();
       const { POOL_NAMES } = await import('../config/index.js');
+      if (!poolInput) {
+        // Deduplicate pool names for display
+        const uniqueNames = [...new Set(POOL_NAMES)];
+        console.log(chalk.yellow(`  Usage: inspect pool <name>`));
+        console.log(chalk.dim(`  Available pools: ${uniqueNames.join(', ')}`));
+        return;
+      }
       // Case-insensitive pool name matching
       const pool = POOL_NAMES.find((p: string) => p.toLowerCase() === poolInput.toLowerCase());
       if (!pool) {
+        const uniqueNames = [...new Set(POOL_NAMES)];
         console.log(chalk.red(`  Unknown pool: ${poolInput}`));
-        console.log(chalk.dim(`  Valid pools: ${POOL_NAMES.join(', ')}`));
+        console.log(chalk.dim(`  Valid pools: ${uniqueNames.join(', ')}`));
         return;
       }
       intent = { action: ActionType.InspectPool, pool } as ParsedIntent;
-    } else if (lower.startsWith('inspect market ') || (lower.startsWith('inspect ') && !lower.startsWith('inspect pool ') && !lower.startsWith('inspect protocol') && lower !== 'inspect')) {
+    } else if (lower.startsWith('inspect market ') || (lower.startsWith('inspect ') && !lower.startsWith('inspect pool') && !lower.startsWith('inspect protocol') && lower !== 'inspect')) {
       // Handle both "inspect market crude oil" and "inspect crude oil"
       const prefix = lower.startsWith('inspect market ') ? 'inspect market ' : 'inspect ';
       const rawMarket = input.slice(prefix.length).trim();
@@ -1739,17 +1747,18 @@ export class FlashTerminal {
           }
           console.log(execResult.message);
 
-          // Post-trade verification (live mode only)
+          // Post-trade verification (live mode only) — non-blocking
           if (!this.config.simulationMode && execResult.data?.market && execResult.data?.side) {
             const rec = getReconciler();
             if (rec) {
-              const verified = await rec.verifyTrade(
+              rec.verifyTrade(
                 execResult.data.market as string,
                 execResult.data.side as string,
-              );
-              if (!verified) {
-                console.log(chalk.yellow('  ⚠ Position not yet found on-chain. It may take a moment to settle.'));
-              }
+              ).then(verified => {
+                if (!verified) {
+                  console.log(chalk.yellow('  ⚠ Position not yet found on-chain. It may take a moment to settle.'));
+                }
+              }).catch(() => { /* non-critical background check */ });
             }
           }
         } catch (error: unknown) {
