@@ -35,6 +35,8 @@ export interface CommandEntry {
   helpFormat?: string;
   /** Alternative triggers that also dispatch to the same action */
   aliases?: string[];
+  /** Dispatch-only aliases — work for execution but excluded from autocomplete to avoid TAB clutter */
+  dispatchAliases?: string[];
   /** If true, command is hidden from help but available for dispatch/autocomplete */
   hidden?: boolean;
   /** If true, command takes arguments (shown in autocomplete but not prefix-matched for dispatch) */
@@ -239,7 +241,7 @@ export const COMMAND_REGISTRY: CommandEntry[] = [
     action: ActionType.InspectProtocol,
     category: 'Protocol Inspection',
     description: 'Flash Trade protocol overview',
-    aliases: ['inspect'],
+    dispatchAliases: ['inspect'],
   },
   {
     name: 'inspect pool',
@@ -385,14 +387,14 @@ export const COMMAND_REGISTRY: CommandEntry[] = [
     action: ActionType.ProtocolStatus,
     category: 'Utilities',
     description: 'Protocol connection overview',
-    aliases: ['protocol'],
+    dispatchAliases: ['protocol'],
   },
   {
     name: 'system status',
     action: ActionType.SystemStatus,
     category: 'Utilities',
     description: 'System health overview',
-    aliases: ['system'],
+    dispatchAliases: ['system'],
   },
   {
     name: 'rpc status',
@@ -463,6 +465,11 @@ export function buildFastDispatch(): Record<string, { action: ActionType }> {
     dispatch[entry.name] = { action: entry.action };
     if (entry.aliases) {
       for (const alias of entry.aliases) {
+        dispatch[alias] = { action: entry.action };
+      }
+    }
+    if (entry.dispatchAliases) {
+      for (const alias of entry.dispatchAliases) {
         dispatch[alias] = { action: entry.action };
       }
     }
