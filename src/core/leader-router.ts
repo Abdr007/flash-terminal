@@ -39,6 +39,9 @@ const SLOT_MAX_AGE_MS = 2_000;
 /** Timeout for leader schedule fetch (don't block on slow RPCs) */
 const SCHEDULE_FETCH_TIMEOUT_MS = 5_000;
 
+/** Solana epoch length in slots (mainnet) */
+const SLOTS_PER_EPOCH = 432_000;
+
 // ─── Types ───────────────────────────────────────────────────────────────────
 
 export interface LeaderInfo {
@@ -167,22 +170,25 @@ export class LeaderRouter {
 
     this.scheduleInflight = (async () => {
       try {
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), SCHEDULE_FETCH_TIMEOUT_MS);
+        // Timeout guard: abort the fetch if RPC hangs
+        let timer: ReturnType<typeof setTimeout> | null = null;
+        const timeoutPromise = new Promise<null>((resolve) => {
+          timer = setTimeout(() => resolve(null), SCHEDULE_FETCH_TIMEOUT_MS);
+        });
 
         try {
           // getLeaderSchedule returns a map of validator identity -> slot indices
-          // for the current epoch
-          const slot = this.currentSlot?.slot;
-          const schedule = await this.connection.getLeaderSchedule();
+          // relative to the epoch start. Race against timeout to prevent hanging.
+          const schedulePromise = this.connection.getLeaderSchedule();
+          const schedule = await Promise.race([schedulePromise, timeoutPromise]);
 
-          clearTimeout(timeout);
+          if (timer) clearTimeout(timer);
 
           if (!schedule) {
             return null;
           }
 
-          // Build reverse mapping: slot -> leader identity
+          // Build reverse mapping: relative slot index -> leader identity
           const slotToLeader = new Map<number, string>();
           for (const [validatorIdentity, slots] of Object.entries(schedule)) {
             for (const relativeSlot of slots) {
@@ -192,7 +198,7 @@ export class LeaderRouter {
 
           const cached: CachedSchedule = {
             slotToLeader,
-            startSlot: slot ?? 0,
+            startSlot: this.currentSlot?.slot ?? 0,
             fetchedAt: Date.now(),
           };
 
@@ -200,7 +206,7 @@ export class LeaderRouter {
           getLogger().debug('LEADER-ROUTER', `Leader schedule cached (${slotToLeader.size} slots)`);
           return cached;
         } finally {
-          clearTimeout(timeout);
+          if (timer) clearTimeout(timer);
         }
       } catch {
         getLogger().debug('LEADER-ROUTER', 'Leader schedule fetch failed — using stale cache');
@@ -245,10 +251,11 @@ export class LeaderRouter {
       };
     }
 
-    // Look up leaders using relative slot offsets from the schedule's start
-    // The schedule is indexed by relative slot within the epoch
-    const currentLeader = schedule.slotToLeader.get(currentSlot % schedule.slotToLeader.size) ?? null;
-    const nextLeader = schedule.slotToLeader.get((currentSlot + 1) % schedule.slotToLeader.size) ?? null;
+    // getLeaderSchedule() returns slot indices relative to the epoch start.
+    // Convert absolute slot to relative slot within epoch for lookup.
+    const relativeSlot = currentSlot % SLOTS_PER_EPOCH;
+    const currentLeader = schedule.slotToLeader.get(relativeSlot) ?? null;
+    const nextLeader = schedule.slotToLeader.get(relativeSlot + 1) ?? null;
 
     return {
       currentSlot,
@@ -269,12 +276,11 @@ export class LeaderRouter {
 
     if (!slotState || !schedule) return leaders;
 
-    const scheduleSize = schedule.slotToLeader.size;
-    if (scheduleSize === 0) return leaders;
+    if (schedule.slotToLeader.size === 0) return leaders;
 
+    const relativeSlot = slotState.slot % SLOTS_PER_EPOCH;
     for (let offset = 0; offset < LEADER_LOOKAHEAD_SLOTS; offset++) {
-      const slot = slotState.slot + offset;
-      const leader = schedule.slotToLeader.get(slot % scheduleSize);
+      const leader = schedule.slotToLeader.get(relativeSlot + offset);
       if (leader) leaders.add(leader);
     }
 

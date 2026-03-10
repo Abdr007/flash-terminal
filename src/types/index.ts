@@ -90,29 +90,29 @@ export enum ActionType {
 
 export const OpenPositionSchema = z.object({
   action: z.literal(ActionType.OpenPosition),
-  market: z.string(),
+  market: z.string().max(20),
   side: z.nativeEnum(TradeSide),
   collateral: z.number().positive().max(10_000_000),
   leverage: z.number().min(1).max(100), // protocol max 100x; per-market limits enforced at tool level
-  collateral_token: z.string().optional(),
+  collateral_token: z.string().max(20).optional(),
 });
 
 export const ClosePositionSchema = z.object({
   action: z.literal(ActionType.ClosePosition),
-  market: z.string(),
+  market: z.string().max(20),
   side: z.nativeEnum(TradeSide),
 });
 
 export const AddCollateralSchema = z.object({
   action: z.literal(ActionType.AddCollateral),
-  market: z.string(),
+  market: z.string().max(20),
   side: z.nativeEnum(TradeSide),
   amount: z.number().positive().max(10_000_000),
 });
 
 export const RemoveCollateralSchema = z.object({
   action: z.literal(ActionType.RemoveCollateral),
-  market: z.string(),
+  market: z.string().max(20),
   side: z.nativeEnum(TradeSide),
   amount: z.number().positive().max(10_000_000),
 });
@@ -123,7 +123,7 @@ export const GetPositionsSchema = z.object({
 
 export const GetMarketDataSchema = z.object({
   action: z.literal(ActionType.GetMarketData),
-  market: z.string().optional(),
+  market: z.string().max(20).optional(),
 });
 
 export const GetPortfolioSchema = z.object({
@@ -148,7 +148,7 @@ export const GetLeaderboardSchema = z.object({
 
 export const GetTraderProfileSchema = z.object({
   action: z.literal(ActionType.GetTraderProfile),
-  address: z.string(),
+  address: z.string().max(50),
 });
 
 export const GetFeesSchema = z.object({
@@ -162,13 +162,13 @@ export const HelpSchema = z.object({
 
 export const WalletConnectSchema = z.object({
   action: z.literal(ActionType.WalletConnect),
-  path: z.string(),
+  path: z.string().max(512),
 });
 
 export const WalletImportSchema = z.object({
   action: z.literal(ActionType.WalletImport),
-  name: z.string(),
-  path: z.string(),
+  name: z.string().max(64),
+  path: z.string().max(512),
 });
 
 export const WalletListSchema = z.object({
@@ -177,12 +177,12 @@ export const WalletListSchema = z.object({
 
 export const WalletUseSchema = z.object({
   action: z.literal(ActionType.WalletUse),
-  name: z.string(),
+  name: z.string().max(64),
 });
 
 export const WalletRemoveSchema = z.object({
   action: z.literal(ActionType.WalletRemove),
-  name: z.string(),
+  name: z.string().max(64),
 });
 
 export const WalletDisconnectSchema = z.object({
@@ -212,7 +212,7 @@ export const FlashMarketsSchema = z.object({
 // AI Agent Schemas
 export const AnalyzeSchema = z.object({
   action: z.literal(ActionType.Analyze),
-  market: z.string(),
+  market: z.string().max(20),
 });
 
 export const RiskReportSchema = z.object({
@@ -225,7 +225,7 @@ export const DashboardSchema = z.object({
 
 export const WhaleActivitySchema = z.object({
   action: z.literal(ActionType.WhaleActivity),
-  market: z.string().optional(),
+  market: z.string().max(20).optional(),
 });
 
 // Market Scanner Schema
@@ -248,17 +248,17 @@ export const PortfolioRebalanceSchema = z.object({
 
 export const LiquidationMapSchema = z.object({
   action: z.literal(ActionType.LiquidationMap),
-  market: z.string().optional(),
+  market: z.string().max(20).optional(),
 });
 
 export const FundingDashboardSchema = z.object({
   action: z.literal(ActionType.FundingDashboard),
-  market: z.string().optional(),
+  market: z.string().max(20).optional(),
 });
 
 export const LiquidityDepthSchema = z.object({
   action: z.literal(ActionType.LiquidityDepth),
-  market: z.string().optional(),
+  market: z.string().max(20).optional(),
 });
 
 export const ProtocolHealthSchema = z.object({
@@ -271,12 +271,12 @@ export const InspectProtocolSchema = z.object({
 
 export const InspectPoolSchema = z.object({
   action: z.literal(ActionType.InspectPool),
-  pool: z.string().optional(),
+  pool: z.string().max(20).optional(),
 });
 
 export const InspectMarketSchema = z.object({
   action: z.literal(ActionType.InspectMarket),
-  market: z.string().optional(),
+  market: z.string().max(20).optional(),
 });
 
 export const SystemStatusSchema = z.object({
@@ -301,12 +301,12 @@ export const RpcTestSchema = z.object({
 
 export const TxInspectSchema = z.object({
   action: z.literal(ActionType.TxInspect),
-  signature: z.string().optional(),
+  signature: z.string().max(100).optional(),
 });
 
 export const TxDebugSchema = z.object({
   action: z.literal(ActionType.TxDebug),
-  signature: z.string().optional(),
+  signature: z.string().max(100).optional(),
   showState: z.boolean().optional(),
 });
 
@@ -324,7 +324,7 @@ export const ProtocolStatusSchema = z.object({
 
 export const DryRunSchema = z.object({
   action: z.literal(ActionType.DryRun),
-  innerCommand: z.string(),
+  innerCommand: z.string().max(1000),
 });
 
 export const ParsedIntentSchema = z.discriminatedUnion('action', [

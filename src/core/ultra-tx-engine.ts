@@ -879,47 +879,63 @@ export class UltraTxEngine {
           return this.submitTransaction(instructions, additionalSigners);
         }
 
-        const pipelineStart = Date.now();
-
-        // Direct broadcast — no simulation needed (was already validated when building)
-        let signature: string;
-        let broadcastCount: number;
-
-        if (this.config.multiBroadcast && this.broadcastConnections.length > 1) {
-          const result = await this.broadcastToAll(txBytes);
-          signature = result.signature;
-          broadcastCount = result.broadcastCount;
-        } else {
-          signature = await this.primaryConnection.sendRawTransaction(txBytes, {
-            skipPreflight: true,
-            maxRetries: 0,
-          });
-          broadcastCount = 1;
+        // Concurrency guard — same as submitTransaction
+        if (this.submitInProgress) {
+          throw new Error('Another transaction is already in progress. Wait for it to complete.');
         }
+        this.submitInProgress = true;
 
-        const confirmResult = await this.waitForConfirmation(
-          signature, txBytes, this.primaryConnection, CONFIRM_TIMEOUT_MS
-        );
+        try {
+          const pipelineStart = Date.now();
 
-        const totalLatencyMs = Date.now() - pipelineStart;
+          // Record slot at broadcast time for inclusion tracking
+          const router = getLeaderRouter();
+          const submittedAtSlot = router?.getCurrentSlot() ?? 0;
 
-        const metrics = this.buildMetrics({
-          blockhashLatencyMs: 0, buildTimeMs: 0,
-          confirmLatencyMs: totalLatencyMs,
-          totalLatencyMs,
-          broadcastCount, rebroadcastCount: confirmResult.rebroadcastCount,
-          confirmedViaWs: confirmResult.confirmedViaWs,
-          priorityFee, successAttempt: 1,
-          leaderRouted: false, submittedAtSlot: 0,
-        });
+          // Direct broadcast — no simulation needed (was already validated when building)
+          let signature: string;
+          let broadcastCount: number;
+          let leaderRouted = false;
 
-        return {
-          signature,
-          confirmationTimeMs: totalLatencyMs,
-          attempts: 1,
-          broadcastEndpoints: broadcastCount,
-          metrics,
-        };
+          if (this.config.multiBroadcast && this.broadcastConnections.length > 1) {
+            const result = await this.broadcastToAll(txBytes);
+            signature = result.signature;
+            broadcastCount = result.broadcastCount;
+            leaderRouted = result.leaderRouted;
+          } else {
+            signature = await this.primaryConnection.sendRawTransaction(txBytes, {
+              skipPreflight: true,
+              maxRetries: 0,
+            });
+            broadcastCount = 1;
+          }
+
+          const confirmResult = await this.waitForConfirmation(
+            signature, txBytes, this.primaryConnection, CONFIRM_TIMEOUT_MS
+          );
+
+          const totalLatencyMs = Date.now() - pipelineStart;
+
+          const metrics = this.buildMetrics({
+            blockhashLatencyMs: 0, buildTimeMs: 0,
+            confirmLatencyMs: totalLatencyMs,
+            totalLatencyMs,
+            broadcastCount, rebroadcastCount: confirmResult.rebroadcastCount,
+            confirmedViaWs: confirmResult.confirmedViaWs,
+            priorityFee, successAttempt: 1,
+            leaderRouted, submittedAtSlot,
+          });
+
+          return {
+            signature,
+            confirmationTimeMs: totalLatencyMs,
+            attempts: 1,
+            broadcastEndpoints: broadcastCount,
+            metrics,
+          };
+        } finally {
+          this.submitInProgress = false;
+        }
       },
     };
   }

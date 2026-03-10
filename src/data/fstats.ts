@@ -254,6 +254,9 @@ export class FStatsClient implements IDataClient {
     days = 30,
     limit = 10
   ): Promise<LeaderboardEntry[]> {
+    // Clamp parameters to prevent abuse via unbounded query params
+    days = Math.max(1, Math.min(days, 365));
+    limit = Math.max(1, Math.min(limit, 100));
     const raw = await safeFetchJson<unknown>(
       `/leaderboards/${encodeURIComponent(metric)}?days=${encodeURIComponent(String(days))}&limit=${encodeURIComponent(String(limit))}`
     );
