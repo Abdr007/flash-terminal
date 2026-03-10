@@ -1039,6 +1039,8 @@ export class UltraTxEngine {
    */
   updateConnection(connection: Connection): void {
     this.primaryConnection = connection;
+    // Invalidate cached blockhash — new RPC may have different view of slot height
+    this.cachedBlockhash = null;
     this.refreshBroadcastConnections();
     getLeaderRouter()?.updateConnection(connection);
   }

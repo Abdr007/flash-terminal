@@ -145,8 +145,8 @@ export const GetOpenInterestSchema = z.object({
 export const GetLeaderboardSchema = z.object({
   action: z.literal(ActionType.GetLeaderboard),
   metric: z.enum(['pnl', 'volume']).optional(),
-  period: z.number().optional(),
-  limit: z.number().optional(),
+  period: z.number().min(1).max(365).optional(),
+  limit: z.number().min(1).max(100).optional(),
 });
 
 export const GetTraderProfileSchema = z.object({
@@ -156,7 +156,7 @@ export const GetTraderProfileSchema = z.object({
 
 export const GetFeesSchema = z.object({
   action: z.literal(ActionType.GetFees),
-  period: z.number().optional(),
+  period: z.number().min(1).max(365).optional(),
 });
 
 export const HelpSchema = z.object({

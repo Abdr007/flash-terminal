@@ -52,7 +52,8 @@ export class Logger {
       // Validate log file path — must be under home directory to prevent arbitrary writes
       const resolvedPath = resolve(this.logFilePath);
       const home = homedir();
-      if (!resolvedPath.startsWith(home)) {
+      const homePrefix = home.endsWith('/') ? home : home + '/';
+      if (resolvedPath !== home && !resolvedPath.startsWith(homePrefix)) {
         this.logFilePath = null; // Reject paths outside home directory
       }
     }

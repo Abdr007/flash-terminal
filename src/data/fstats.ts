@@ -185,11 +185,13 @@ export class FStatsClient implements IDataClient {
   }
 
   async getRecentActivity(limit = 20): Promise<RawOpenPosition[]> {
+    limit = Math.max(1, Math.min(limit, 100));
     const raw = await safeFetchJson<unknown>(`/overview/activity?limit=${encodeURIComponent(String(limit))}`);
     return safeArray<RawOpenPosition>(raw);
   }
 
   async getVolume(days = 30, pool?: string): Promise<VolumeData> {
+    days = Math.max(1, Math.min(days, 365));
     const poolParam = pool ? `&pool=${encodeURIComponent(pool)}` : '';
     const raw = await safeFetchJson<unknown>(`/volume/daily?days=${encodeURIComponent(String(days))}${poolParam}`);
     const daily = safeArray<RawDailyVolume>(raw);
@@ -231,6 +233,7 @@ export class FStatsClient implements IDataClient {
   }
 
   async getFees(days = 30): Promise<FeeData> {
+    days = Math.max(1, Math.min(days, 365));
     const raw = await safeFetchJson<unknown>(`/fees/daily?days=${encodeURIComponent(String(days))}`);
     const daily = safeArray<RawDailyFee>(raw);
     const dailyFees = daily.map((d) => ({
