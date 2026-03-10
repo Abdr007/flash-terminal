@@ -1559,6 +1559,21 @@ export class FlashTerminal {
         return;
       }
       intent = { action: ActionType.InspectPool, pool } as ParsedIntent;
+    } else if (lower.startsWith('protocol fees ') || lower.startsWith('protocol fee ')) {
+      const prefix = lower.startsWith('protocol fees ') ? 'protocol fees ' : 'protocol fee ';
+      const rawMarket = input.slice(prefix.length).trim();
+      if (!rawMarket) {
+        console.log(chalk.yellow('  Usage: protocol fees <market>  (e.g. protocol fees sol)'));
+        return;
+      }
+      const market = resolveMarketAlias(rawMarket);
+      const { getPoolForMarket } = await import('../config/index.js');
+      if (!getPoolForMarket(market)) {
+        console.log(chalk.red(`  Unknown market: ${rawMarket}`));
+        return;
+      }
+      await this.handleProtocolFees(market);
+      return;
     } else if (lower.startsWith('inspect market ') || (lower.startsWith('inspect ') && !lower.startsWith('inspect pool') && !lower.startsWith('inspect protocol') && lower !== 'inspect')) {
       // Handle both "inspect market crude oil" and "inspect crude oil"
       const prefix = lower.startsWith('inspect market ') ? 'inspect market ' : 'inspect ';
@@ -2427,6 +2442,124 @@ export class FlashTerminal {
    *   Fees/margin:        Flash SDK CustodyAccount (on-chain)
    *   Leverage limits:    Flash SDK PoolConfig MarketConfig
    */
+  /**
+   * Protocol fee verification — shows raw on-chain fee parameters from CustodyAccount.
+   * Data source: CustodyAccount.fees.openPosition / closePosition via Flash SDK.
+   */
+  private async handleProtocolFees(market: string): Promise<void> {
+    const upper = market.toUpperCase();
+    const RATE_POWER = 1_000_000_000;
+    const BPS_POWER = 10_000;
+
+    console.log('');
+    console.log(`  ${theme.accentBold(`FLASH PROTOCOL FEES — ${upper}`)}`);
+    console.log(`  ${theme.separator(50)}`);
+    console.log('');
+
+    // Attempt on-chain fetch
+    let rawOpen = 0;
+    let rawClose = 0;
+    let rawMaintenanceMargin = 0;
+    let rawMaxLeverage = 0;
+    let source = 'sdk-default';
+
+    if (!this.config.simulationMode) {
+      try {
+        const { PoolConfig, CustodyAccount } = await import('flash-sdk');
+        const { getPoolForMarket } = await import('../config/index.js');
+        const poolName = getPoolForMarket(upper);
+        if (poolName) {
+          const pc = PoolConfig.fromIdsByName(poolName, this.config.network);
+          const custodies = pc.custodies as Array<{ custodyAccount: any; symbol: string }>;
+          const custody = custodies.find(c => c.symbol.toUpperCase() === upper);
+          const perpClient = (this.flashClient as any).perpClient;
+
+          if (custody && perpClient?.program?.account?.custody) {
+            const custodyData = await perpClient.program.account.custody.fetch(custody.custodyAccount);
+            if (custodyData) {
+              const custodyAcct = CustodyAccount.from(custody.custodyAccount, custodyData);
+              rawOpen = parseFloat(custodyAcct.fees.openPosition.toString());
+              rawClose = parseFloat(custodyAcct.fees.closePosition.toString());
+              rawMaintenanceMargin = parseFloat((custodyAcct as any).pricing?.maintenanceMargin?.toString() ?? '0');
+              const rawMaxLev = (custodyAcct as any).pricing?.maxLeverage;
+              rawMaxLeverage = typeof rawMaxLev === 'object' && rawMaxLev?.toNumber
+                ? rawMaxLev.toNumber()
+                : typeof rawMaxLev === 'number' ? rawMaxLev : 0;
+              source = 'on-chain';
+
+              console.log(theme.pair('Source', chalk.green('CustodyAccount (on-chain)')));
+              console.log(theme.pair('Custody', chalk.dim(custody.custodyAccount.toString())));
+              console.log(theme.pair('Pool', chalk.dim(poolName)));
+              console.log('');
+
+              console.log(`  ${theme.section('Raw Values')}`);
+              console.log(theme.pair('openPosition', rawOpen.toString()));
+              console.log(theme.pair('closePosition', rawClose.toString()));
+              console.log(theme.pair('maintenanceMargin', rawMaintenanceMargin.toString()));
+              console.log(theme.pair('maxLeverage', rawMaxLeverage.toString()));
+              console.log(theme.pair('RATE_POWER', RATE_POWER.toString()));
+              console.log(theme.pair('BPS_POWER', BPS_POWER.toString()));
+              console.log('');
+
+              const openRate = rawOpen / RATE_POWER;
+              const closeRate = rawClose / RATE_POWER;
+              const maintenanceRate = rawMaintenanceMargin > 0 ? rawMaintenanceMargin / BPS_POWER : 0;
+              const maxLev = rawMaxLeverage > 0 ? rawMaxLeverage / BPS_POWER : 0;
+
+              console.log(`  ${theme.section('Converted Rates')}`);
+              console.log(theme.pair('openFeeRate', `${openRate} (${(openRate * 100).toFixed(4)}%)`));
+              console.log(theme.pair('closeFeeRate', `${closeRate} (${(closeRate * 100).toFixed(4)}%)`));
+              console.log(theme.pair('maintenanceMarginRate', `${maintenanceRate} (${(maintenanceRate * 100).toFixed(2)}%)`));
+              if (maxLev > 0) {
+                console.log(theme.pair('maxLeverage', `${maxLev}x`));
+              }
+              console.log('');
+
+              // Verify against getProtocolFeeRates
+              const { getProtocolFeeRates } = await import('../utils/protocol-fees.js');
+              const feeRates = await getProtocolFeeRates(upper, perpClient);
+              console.log(`  ${theme.section('getProtocolFeeRates() Output')}`);
+              console.log(theme.pair('openFeeRate', `${feeRates.openFeeRate} (${(feeRates.openFeeRate * 100).toFixed(4)}%)`));
+              console.log(theme.pair('closeFeeRate', `${feeRates.closeFeeRate} (${(feeRates.closeFeeRate * 100).toFixed(4)}%)`));
+              console.log(theme.pair('maintenanceMarginRate', `${feeRates.maintenanceMarginRate} (${(feeRates.maintenanceMarginRate * 100).toFixed(2)}%)`));
+              console.log(theme.pair('source', feeRates.source));
+              console.log('');
+
+              // Cross-check
+              const openMatch = Math.abs(openRate - feeRates.openFeeRate) < 1e-12;
+              const closeMatch = Math.abs(closeRate - feeRates.closeFeeRate) < 1e-12;
+              if (openMatch && closeMatch) {
+                console.log(chalk.green('  ✓ CustodyAccount and getProtocolFeeRates() match'));
+              } else {
+                console.log(chalk.red('  ✗ MISMATCH between CustodyAccount and getProtocolFeeRates()'));
+                if (!openMatch) console.log(chalk.red(`    open: ${openRate} vs ${feeRates.openFeeRate}`));
+                if (!closeMatch) console.log(chalk.red(`    close: ${closeRate} vs ${feeRates.closeFeeRate}`));
+              }
+              console.log('');
+              return;
+            }
+          }
+        }
+      } catch (e: unknown) {
+        console.log(chalk.yellow(`  Failed to fetch on-chain data: ${getErrorMessage(e)}`));
+        console.log('');
+      }
+    }
+
+    // Fallback: show defaults
+    const { getProtocolFeeRates } = await import('../utils/protocol-fees.js');
+    const feeRates = await getProtocolFeeRates(upper, null);
+    console.log(theme.pair('Source', chalk.yellow(feeRates.source)));
+    console.log('');
+    console.log(`  ${theme.section('Fee Rates (default fallback)')}`);
+    console.log(theme.pair('openFeeRate', `${feeRates.openFeeRate} (${(feeRates.openFeeRate * 100).toFixed(4)}%)`));
+    console.log(theme.pair('closeFeeRate', `${feeRates.closeFeeRate} (${(feeRates.closeFeeRate * 100).toFixed(4)}%)`));
+    console.log(theme.pair('maintenanceMarginRate', `${feeRates.maintenanceMarginRate} (${(feeRates.maintenanceMarginRate * 100).toFixed(2)}%)`));
+    console.log('');
+    console.log(chalk.yellow('  ⚠ Showing SDK defaults — connect in live mode for on-chain values'));
+    console.log('');
+  }
+
   private async handlePositionDebug(market: string): Promise<void> {
     const upper = market.toUpperCase();
 

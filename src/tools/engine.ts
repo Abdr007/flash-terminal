@@ -317,6 +317,7 @@ export class ToolEngine {
       `    ${cmd('inspect protocol')}          Flash Trade protocol overview`,
       `    ${cmd('inspect pool <name>')}       Inspect a specific pool`,
       `    ${cmd('inspect market <asset>')}    Deep market inspection`,
+      `    ${cmd('protocol fees <market>')}    On-chain fee rate verification`,
       '',
       // ── 5. Wallet ───────────────────────────────────────────────
       `  ${sec('Wallet')}`,
