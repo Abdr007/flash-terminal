@@ -440,7 +440,7 @@ export const flashOpenPosition: ToolDefinition = {
                 `  Size:              ${formatUsd(actualSize)}`,
                 `  Collateral:        ${formatUsd(actualCollateral)}`,
                 `  Liquidation Price: ${actualLiq && actualLiq > 0 ? chalk.yellow(formatPrice(actualLiq)) : chalk.dim('N/A')}`,
-                `  Est. Fee:          ${chalk.dim(formatUsd(executionFee))}`,
+                `  Est. Fee:          ${chalk.dim('$' + executionFee.toFixed(4))}`,
                 `  TX: ${chalk.dim(txLink)}`,
                 '',
               ].join('\n'),
