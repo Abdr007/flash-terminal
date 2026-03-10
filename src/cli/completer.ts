@@ -1,6 +1,7 @@
 import { POOL_MARKETS } from '../config/index.js';
 import { IFlashClient } from '../types/index.js';
 import { theme } from './theme.js';
+import { getAutocompleteCommands } from './command-registry.js';
 
 // ─── CLI Autocomplete & Suggestion Engine ────────────────────────────────────
 //
@@ -12,75 +13,9 @@ import { theme } from './theme.js';
 //   • Lightweight — runs synchronously in the readline completer callback
 //   • Safe — does not interfere with status bar, watch, or monitor modes
 
-// ─── Static Command List ─────────────────────────────────────────────────────
+// ─── Command List (derived from registry) ────────────────────────────────────
 
-const COMMANDS: string[] = [
-  // Trading
-  'open',
-  'close',
-  'add',
-  'remove',
-  'positions',
-  'position debug',
-  'markets',
-  'trade history',
-  // Market Data & Analytics
-  'scan',
-  'analyze',
-  'volume',
-  'open interest',
-  'leaderboard',
-  'whale activity',
-  'fees',
-  'liquidations',
-  'funding',
-  'depth',
-  'protocol health',
-  // Portfolio & Risk
-  'portfolio',
-  'dashboard',
-  'risk report',
-  'exposure',
-  'rebalance',
-  // Protocol Inspection
-  'inspect protocol',
-  'inspect pool',
-  'inspect market',
-  'inspect',
-  // Wallet
-  'wallet',
-  'wallet tokens',
-  'wallet balance',
-  'wallet list',
-  'wallet import',
-  'wallet use',
-  'wallet connect',
-  'wallet disconnect',
-  'wallet address',
-  'wallet status',
-  // Utilities
-  'dryrun',
-  'monitor',
-  'monitor protocol',
-  'monitor position',
-  'monitor liquidations',
-  'watch',
-  'protocol status',
-  'protocol verify',
-  'protocol fees',
-  'system status',
-  'rpc status',
-  'rpc test',
-  'tx inspect',
-  'tx debug',
-  'doctor',
-  'flash doctor',
-  'degen',
-  'degen on',
-  'degen off',
-  'help',
-  'exit',
-];
+const COMMANDS: string[] = getAutocompleteCommands();
 
 /** All market symbols from POOL_MARKETS (uppercase) */
 const ALL_MARKETS: string[] = [...new Set(Object.values(POOL_MARKETS).flat().map(s => s.toUpperCase()))];

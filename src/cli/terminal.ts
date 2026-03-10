@@ -28,6 +28,7 @@ import { runDoctor } from '../tools/doctor.js';
 import { startWatch } from './watch.js';
 import { theme } from './theme.js';
 import { completer, getSuggestions } from './completer.js';
+import { buildFastDispatch } from './command-registry.js';
 import { resolveMarket } from '../utils/market-resolver.js';
 import { computeSimulationLiquidationPrice, isDivergenceOk } from '../utils/protocol-liq.js';
 import type { MonitorType } from '../monitor/event-monitor.js';
@@ -54,65 +55,8 @@ const SLOW_COMMAND_MS = 3_000;
 const HISTORY_FILE = join(homedir(), '.flash', 'history');
 const MAX_HISTORY = 1000;
 
-/** Single-token fast dispatch — skips interpreter entirely */
-const FAST_DISPATCH: Record<string, ParsedIntent> = {
-  'help':        { action: ActionType.Help },
-  'commands':    { action: ActionType.Help },
-  '?':           { action: ActionType.Help },
-  'positions':   { action: ActionType.GetPositions },
-  'position':    { action: ActionType.GetPositions },
-  'portfolio':   { action: ActionType.GetPortfolio },
-  'balance':     { action: ActionType.GetPortfolio },
-  'account':     { action: ActionType.GetPortfolio },
-  'volume':      { action: ActionType.GetVolume },
-  'fees':        { action: ActionType.GetFees },
-  'fee':         { action: ActionType.GetFees },
-  'markets':     { action: ActionType.FlashMarkets },
-  'market':      { action: ActionType.FlashMarkets },
-  'leaderboard': { action: ActionType.GetLeaderboard },
-  'rankings':    { action: ActionType.GetLeaderboard },
-  'dashboard':   { action: ActionType.Dashboard },
-  'dash':        { action: ActionType.Dashboard },
-  'risk':        { action: ActionType.RiskReport },
-  // scan command removed — CLI must not suggest trades
-  'rebalance':   { action: ActionType.PortfolioRebalance },
-  'exposure':    { action: ActionType.PortfolioExposure },
-  'risk report':     { action: ActionType.RiskReport },
-  'whale activity':  { action: ActionType.WhaleActivity },
-  'wallet tokens':   { action: ActionType.WalletTokens },
-  'wallet':          { action: ActionType.WalletStatus },
-  'wallet list':     { action: ActionType.WalletList },
-  'wallet status':   { action: ActionType.WalletStatus },
-  'wallet address':  { action: ActionType.WalletAddress },
-  'wallet balance':  { action: ActionType.WalletBalance },
-  'wallet disconnect': { action: ActionType.WalletDisconnect },
-  'open interest':     { action: ActionType.GetOpenInterest },
-  'oi':                { action: ActionType.GetOpenInterest },
-  'whales':            { action: ActionType.WhaleActivity },
-  'portfolio state':   { action: ActionType.PortfolioState },
-  'portfolio exposure': { action: ActionType.PortfolioExposure },
-  'portfolio rebalance': { action: ActionType.PortfolioRebalance },
-  'capital':           { action: ActionType.PortfolioState },
-  'liquidations':      { action: ActionType.LiquidationMap },
-  'funding':           { action: ActionType.FundingDashboard },
-  'depth':             { action: ActionType.LiquidityDepth },
-  'protocol health':   { action: ActionType.ProtocolHealth },
-  'inspect protocol':  { action: ActionType.InspectProtocol },
-  'inspect':           { action: ActionType.InspectProtocol },
-  'system status':     { action: ActionType.SystemStatus },
-  'system':            { action: ActionType.SystemStatus },
-  'rpc status':        { action: ActionType.RpcStatus },
-  'rpc test':          { action: ActionType.RpcTest },
-  'trade history':     { action: ActionType.TradeHistory },
-  'trades':            { action: ActionType.TradeHistory },
-  'journal':           { action: ActionType.TradeHistory },
-  'history':           { action: ActionType.TradeHistory },
-  'market monitor':    { action: ActionType.MarketMonitor },
-  'monitor':           { action: ActionType.MarketMonitor },
-  'watch':             { action: ActionType.MarketMonitor },
-  'protocol status':   { action: ActionType.ProtocolStatus },
-  'protocol':          { action: ActionType.ProtocolStatus },
-};
+/** Single-token fast dispatch — derived from command registry */
+const FAST_DISPATCH = buildFastDispatch() as Record<string, ParsedIntent>;
 
 /** Timeout wrapper for command execution */
 function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {

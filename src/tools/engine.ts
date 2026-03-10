@@ -11,6 +11,7 @@ import { allAgentTools } from '../agent/agent-tools.js';
 import { runMiddleware } from '../core/execution-middleware.js';
 import chalk from 'chalk';
 import { theme } from '../cli/theme.js';
+import { getCommandsByCategory } from '../cli/command-registry.js';
 
 /**
  * ToolEngine maps parsed intents to tool invocations.
@@ -275,89 +276,34 @@ export class ToolEngine {
     const dim = theme.dim;
     const sec = theme.section;
 
+    const COL_WIDTH = 32; // fixed-width command column for alignment
+
     const lines = [
       '',
       `  ${theme.accentBold('FLASH TERMINAL')}  ${dim('— Command Reference')}`,
       `  ${theme.separator(52)}`,
       '',
-      // ── 1. Trading ──────────────────────────────────────────────
-      `  ${sec('Trading')}`,
-      `    ${cmd('open 5x long SOL $500')}     Open a leveraged position`,
-      `    ${cmd('close SOL long')}            Close a position`,
-      `    ${cmd('add $200 to SOL long')}      Add collateral to position`,
-      `    ${cmd('remove $100 from ETH long')} Remove collateral`,
-      `    ${cmd('positions')}                 View open positions`,
-      `    ${cmd('position debug <asset>')}    Protocol-level position debug`,
-      `    ${cmd('markets')}                   List available markets`,
-      `    ${cmd('trade history')}              View recent trades`,
-      '',
-      // ── 2. Market Data & Analytics ──────────────────────────────
-      `  ${sec('Market Data & Analytics')}`,
-      `    ${cmd('analyze <asset>')}            Deep market analysis`,
-      `    ${cmd('volume')}                    Protocol trading volume`,
-      `    ${cmd('open interest')}              OI breakdown by market`,
-      `    ${cmd('leaderboard')}               Top traders by PnL or volume`,
-      `    ${cmd('whale activity')}             Recent large positions`,
-      `    ${cmd('fees')}                      Protocol fee data`,
-      `    ${cmd('liquidations <asset>')}       Liquidation risk data`,
-      `    ${cmd('funding <asset>')}            OI imbalance & fee dashboard`,
-      `    ${cmd('depth <asset>')}              Liquidity depth around price`,
-      `    ${cmd('protocol health')}            Protocol health overview`,
-      '',
-      // ── 3. Portfolio & Risk ─────────────────────────────────────
-      `  ${sec('Portfolio & Risk')}`,
-      `    ${cmd('portfolio')}                 Portfolio overview`,
-      `    ${cmd('dashboard')}                 Full system dashboard`,
-      `    ${cmd('risk report')}                Position risk assessment`,
-      `    ${cmd('exposure')}                  Portfolio exposure breakdown`,
-      `    ${cmd('rebalance')}                 Portfolio rebalance analysis`,
-      '',
-      // ── 4. Protocol Inspection ──────────────────────────────────
-      `  ${sec('Protocol Inspection')}`,
-      `    ${cmd('inspect protocol')}          Flash Trade protocol overview`,
-      `    ${cmd('inspect pool <name>')}       Inspect a specific pool`,
-      `    ${cmd('inspect market <asset>')}    Deep market inspection`,
-      `    ${cmd('protocol fees <market>')}    On-chain fee rate verification`,
-      `    ${cmd('protocol verify')}           Full protocol alignment audit`,
-      '',
-      // ── 5. Wallet ───────────────────────────────────────────────
-      `  ${sec('Wallet')}`,
-      `    ${cmd('wallet')}                    Wallet status`,
-      `    ${cmd('wallet tokens')}             View all token balances`,
-      `    ${cmd('wallet balance')}            Show SOL balance`,
-      `    ${cmd('wallet list')}               List saved wallets`,
-      `    ${cmd('wallet import')}             Import & store a wallet`,
-      `    ${cmd('wallet use <name>')}         Switch to a saved wallet`,
-      `    ${cmd('wallet connect <path>')}     Connect wallet file`,
-      `    ${cmd('wallet disconnect')}         Disconnect active wallet`,
-      '',
-      // ── 6. Utilities ────────────────────────────────────────────
-      `  ${sec('Utilities')}`,
-      `    ${cmd('dryrun <command>')}          Preview trade without executing`,
-      `    ${cmd('monitor')}                   Live market table`,
-      `    ${cmd('monitor <market>')}          Event-driven market monitor`,
-      `    ${cmd('monitor position <mkt>')}    Track position PnL & risk`,
-      `    ${cmd('monitor liquidations <mkt>')} Liquidation cluster alerts`,
-      `    ${cmd('monitor protocol')}          Protocol health monitor`,
-      `    ${cmd('watch <command>')}           Auto-refresh any command`,
-      `    ${cmd('protocol status')}            Protocol connection overview`,
-      `    ${cmd('system status')}             System health overview`,
-      `    ${cmd('rpc status')}                Active RPC endpoint info`,
-      `    ${cmd('rpc test')}                  Test all RPC endpoints`,
-      `    ${cmd('tx inspect <sig>')}          Inspect a transaction`,
-      `    ${cmd('tx debug <sig>')}            Debug transaction with protocol context`,
-      `    ${cmd('tx debug <sig> --state')}    Debug + show protocol state`,
-      `    ${cmd('doctor')}                    Run terminal diagnostic`,
-      `    ${cmd('degen')}                     Toggle degen mode`,
-      '',
-      `  ${theme.separator(52)}`,
-      `  ${cmd('help')}                        Show this reference`,
-      `  ${cmd('exit')}                        Close the terminal`,
-      '',
-      `  ${dim('Natural language is also supported.')}`,
-      `  ${dim('Example: "what\'s the price of SOL?" or "show me BTC analysis"')}`,
-      '',
     ];
+
+    const categories = getCommandsByCategory();
+    for (const [category, entries] of categories) {
+      if (entries.length === 0) continue;
+      lines.push(`  ${sec(category)}`);
+      for (const entry of entries) {
+        const label = entry.helpFormat || entry.name;
+        const padded = label.padEnd(COL_WIDTH);
+        lines.push(`    ${cmd(padded)}${entry.description}`);
+      }
+      lines.push('');
+    }
+
+    lines.push(`  ${theme.separator(52)}`);
+    lines.push(`  ${cmd('help'.padEnd(COL_WIDTH))}Show this reference`);
+    lines.push(`  ${cmd('exit'.padEnd(COL_WIDTH))}Close the terminal`);
+    lines.push('');
+    lines.push(`  ${dim('Natural language is also supported.')}`);
+    lines.push(`  ${dim('Example: "what\'s the price of SOL?" or "show me BTC analysis"')}`);
+    lines.push('');
 
     return { success: true, message: lines.join('\n') };
   }
