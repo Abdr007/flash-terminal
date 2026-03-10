@@ -133,9 +133,16 @@ export class EventMonitor {
         if (key === 'q' || key === 'Q' || key === '\x03') { // q or Ctrl+C
           stdin.removeListener('data', onKey);
           this.stop();
-          if (stdin.isTTY) stdin.setRawMode(wasRaw ?? false);
-          resolve();
-          onExit();
+
+          // Drain remaining stdin bytes before restoring readline
+          const drain = () => { /* discard */ };
+          stdin.on('data', drain);
+          setTimeout(() => {
+            stdin.removeListener('data', drain);
+            if (stdin.isTTY) stdin.setRawMode(wasRaw ?? false);
+            resolve();
+            onExit();
+          }, 50);
         }
       };
 
@@ -205,9 +212,16 @@ export class EventMonitor {
       return;
     }
 
-    const oiEntry = oiData.markets.find(m => m.market.toUpperCase().includes(sym));
-    const longOi = oiEntry?.longOi ?? 0;
-    const shortOi = oiEntry?.shortOi ?? 0;
+    // Aggregate OI across all pool entries matching this symbol
+    // fstats may return multiple entries per symbol (one per pool), e.g. "SOL-PERP"
+    let longOi = 0;
+    let shortOi = 0;
+    for (const m of oiData.markets) {
+      if (m.market.toUpperCase().includes(sym)) {
+        longOi += m.longOi ?? 0;
+        shortOi += m.shortOi ?? 0;
+      }
+    }
     const totalOi = longOi + shortOi;
 
     // Get funding rate from client
@@ -260,10 +274,11 @@ export class EventMonitor {
       }
 
       // ── Open Interest Delta ──
-      if (prev.totalOi > 0) {
+      // Reject >50% swings in a single tick — indicates stale/partial API data, not real activity
+      if (prev.totalOi > 0 && current.totalOi > 0) {
         const oiDelta = current.totalOi - prev.totalOi;
         const oiPctChange = (oiDelta / prev.totalOi) * 100;
-        if (Math.abs(oiPctChange) >= OI_CHANGE_THRESHOLD_PCT || Math.abs(oiDelta) >= OI_CHANGE_THRESHOLD_USD) {
+        if (Math.abs(oiPctChange) < 50 && (Math.abs(oiPctChange) >= OI_CHANGE_THRESHOLD_PCT || Math.abs(oiDelta) >= OI_CHANGE_THRESHOLD_USD)) {
           const dir = oiDelta > 0 ? '+' : '';
           const severity = Math.abs(oiPctChange) >= 20 ? 'warning' : 'info';
           events.push({

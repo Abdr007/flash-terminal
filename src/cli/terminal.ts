@@ -16,7 +16,7 @@ import { shortAddress } from '../utils/format.js';
 import { getErrorMessage } from '../utils/retry.js';
 import { initLogger, getLogger } from '../utils/logger.js';
 import { setAiApiKey, getInspector, getRegimeDetector } from '../agent/agent-tools.js';
-import { formatUsd, formatPrice, colorPercent, colorPnl, humanizeSdkError } from '../utils/format.js';
+import { formatUsd, formatPrice, formatPercent, colorPercent, colorPnl, humanizeSdkError } from '../utils/format.js';
 import { MarketRegime } from '../regime/regime-types.js';
 import { initSigningGuard } from '../security/signing-guard.js';
 import { RpcManager, buildRpcEndpoints, initRpcManager } from '../network/rpc-manager.js';
@@ -1977,6 +1977,17 @@ export class FlashTerminal {
     }
     process.stdin.resume();
 
+    // Drain any buffered stdin (e.g. the Enter key from the command)
+    // to prevent stale bytes from triggering the exit handler
+    await new Promise<void>(resolve => {
+      const drain = () => { /* discard */ };
+      process.stdin.on('data', drain);
+      setTimeout(() => {
+        process.stdin.removeListener('data', drain);
+        resolve();
+      }, 50);
+    });
+
     // ─── In-memory state for event detection ───────────────────────
     const prevPrices = new Map<string, number>();
     const prevOi = new Map<string, number>();
@@ -2064,6 +2075,10 @@ export class FlashTerminal {
 
       // Measure RPC latency + get slot (lightweight — reuses cached values)
       if (this.rpcManager) {
+        // If slot is unknown, trigger a health check to populate slot data
+        if (this.rpcManager.activeSlot < 0) {
+          await this.rpcManager.checkHealth(this.rpcManager.activeEndpoint).catch(() => {});
+        }
         telemetry.rpcLatencyMs = this.rpcManager.activeLatencyMs;
         telemetry.slot = this.rpcManager.activeSlot;
         telemetry.slotLag = this.rpcManager.activeSlotLag;
@@ -2084,9 +2099,15 @@ export class FlashTerminal {
       for (const sym of allSymbols) {
         const tp = priceMap.get(sym);
         if (!tp) continue;
-        const oiEntry = oi.markets.find(m => m.market.toUpperCase().includes(sym));
-        const longOi = oiEntry?.longOi ?? 0;
-        const shortOi = oiEntry?.shortOi ?? 0;
+        // Aggregate OI across all pool entries for this symbol
+        let longOi = 0;
+        let shortOi = 0;
+        for (const oiEntry of oi.markets) {
+          if (oiEntry.market.toUpperCase().includes(sym)) {
+            longOi += oiEntry.longOi ?? 0;
+            shortOi += oiEntry.shortOi ?? 0;
+          }
+        }
         const totalOi = longOi + shortOi;
 
         if (!filterMarket && totalOi <= 0) continue;
@@ -2199,30 +2220,27 @@ export class FlashTerminal {
       return `  ${chalk.bold(sym.padEnd(6))} ${theme.dim(windowLabel.padEnd(4))} ${parts.join(theme.dim(' | '))}`;
     };
 
-    /** Build frame as array of lines (for diff-based rendering) */
+    /** Build frame — fits within terminal height, no scrolling */
     const buildFrame = (rows: MarketRow[]): string[] => {
+      const termHeight = process.stdout.rows || 24;
       const now = new Date().toLocaleTimeString();
 
       // ── Telemetry status bar with health coloring ──
-      // RPC: green <150ms, yellow 150-400ms, red >400ms
       const rpcMs = telemetry.rpcLatencyMs;
       const rpcStr = rpcMs < 0 ? theme.dim('RPC N/A')
         : rpcMs < 150 ? chalk.green(`RPC ${rpcMs}ms`)
         : rpcMs < 400 ? chalk.yellow(`RPC ${rpcMs}ms`)
         : chalk.red(`RPC ${rpcMs}ms`);
 
-      // Oracle: green <1000ms, red+warning >1000ms
       const oMs = telemetry.oracleLatencyMs;
       const oracleStr = oMs < 0 ? theme.dim('Oracle N/A')
         : oMs <= 1000 ? chalk.green(`Oracle ${oMs}ms`)
         : chalk.red(`Oracle ${oMs}ms ⚠`);
 
-      // Slot: show freeze warning if slot unchanged for >=2 cycles
       const slotStr = telemetry.slot < 0 ? theme.dim('Slot N/A')
         : slotFreezeCount >= 2 ? chalk.red(`Slot ${telemetry.slot} ⚠`)
         : chalk.green(`Slot ${telemetry.slot}`);
 
-      // Slot lag: green=0, yellow=1-5, red=>5
       const lag = telemetry.slotLag;
       const lagStr = lag < 0 ? theme.dim('Lag N/A')
         : lag === 0 ? chalk.green('Lag 0')
@@ -2234,18 +2252,12 @@ export class FlashTerminal {
 
       const telemetryLine = `  ${rpcStr}  ${theme.dim('|')}  ${oracleStr}  ${theme.dim('|')}  ${slotStr}  ${theme.dim('|')}  ${lagStr}  ${theme.dim('|')}  ${renderStr}  ${theme.dim('|')}  ${refreshStr}`;
 
-      const lines: string[] = [
-        '',
-        `  ${theme.accentBold('FLASH TERMINAL')} ${theme.dim('—')} ${theme.accentBold('MARKET MONITOR')}`,
-        '',
-        telemetryLine,
-        theme.dim(`  ${now}  |  Press ${chalk.bold('q')} to exit`),
-        '',
-        `  ${theme.separator(72)}`,
-        '',
-      ];
+      // Chrome: title(1) + telemetry(1) + time(1) + separator(1) + header(1) + separator(1) + footer separator(1) + source(1) = 8 fixed lines
+      const CHROME_LINES = 8;
+      const maxMarketRows = Math.max(5, termHeight - CHROME_LINES);
+      const visibleRows = rows.slice(0, maxMarketRows);
+      const truncated = rows.length > maxMarketRows;
 
-      // Table header
       const hdr = [
         theme.tableHeader('  Asset'.padEnd(14)),
         theme.tableHeader('Price'.padStart(14)),
@@ -2253,12 +2265,18 @@ export class FlashTerminal {
         theme.tableHeader('Open Interest'.padStart(16)),
         theme.tableHeader('Long / Short'.padStart(14)),
       ].join('');
-      lines.push(hdr);
-      lines.push(`  ${theme.separator(72)}`);
-      lines.push('');
+
+      const lines: string[] = [
+        `  ${theme.accentBold('FLASH TERMINAL')} ${theme.dim('—')} ${theme.accentBold('MARKET MONITOR')}`,
+        telemetryLine,
+        theme.dim(`  ${now}  |  Press ${chalk.bold('q')} to exit`),
+        `  ${theme.separator(72)}`,
+        hdr,
+        `  ${theme.separator(72)}`,
+      ];
 
       // Data rows
-      for (const r of rows) {
+      for (const r of visibleRows) {
         const sym = chalk.bold(('  ' + r.symbol).padEnd(14));
         const priceStr = formatPrice(r.price).padStart(14);
         const coloredPrice = r.priceDirection === 'up'
@@ -2266,58 +2284,30 @@ export class FlashTerminal {
           : r.priceDirection === 'down'
             ? chalk.red(priceStr)
             : priceStr;
-        const change = colorPercent(r.change).padStart(12);
+        const changeRaw = formatPercent(r.change).padStart(12);
+        const change = r.change > 0 ? theme.positive(changeRaw) : r.change < 0 ? theme.negative(changeRaw) : theme.dim(changeRaw);
         const oiStr = formatUsd(r.totalOi).padStart(16);
         const ratio = `${r.longPct} / ${r.shortPct}`.padStart(14);
         const ratioColored = r.longPct > 60 ? theme.positive(ratio) : r.shortPct > 60 ? theme.negative(ratio) : theme.dim(ratio);
         lines.push(`${sym}${coloredPrice}${change}${oiStr}${ratioColored}`);
       }
 
-      if (rows.length === 0) {
+      if (visibleRows.length === 0) {
         lines.push(theme.dim('  No active markets found.'));
       }
-
-      lines.push('');
-
-      // Momentum panel
-      const momentumLines: string[] = [];
-      for (const r of rows) {
-        const mLine = format1mMomentum(r.symbol);
-        if (mLine) momentumLines.push(mLine);
-      }
-      if (momentumLines.length > 0) {
-        lines.push(`  ${theme.section('Momentum')}`);
-        lines.push(`  ${theme.separator(72)}`);
-        lines.push('');
-        for (const line of momentumLines) {
-          lines.push(line);
-        }
-        lines.push('');
+      if (truncated) {
+        lines.push(theme.dim(`  ... +${rows.length - maxMarketRows} more (resize terminal to see all)`));
       }
 
-      // Events panel
-      if (recentEvents.length > 0) {
-        lines.push(`  ${theme.section('Market Events')}`);
-        lines.push(`  ${theme.separator(72)}`);
-        lines.push('');
-        for (const evt of recentEvents) {
-          const colorFn = evt.color === 'green' ? chalk.green
-            : evt.color === 'red' ? chalk.red
-            : chalk.yellow;
-          const ageSec = Math.round((Date.now() - evt.timestamp) / 1000);
-          const ageLabel = ageSec < 5 ? '' : theme.dim(` ${ageSec}s ago`);
-          lines.push(`  ${colorFn('●')} ${evt.message}${ageLabel}`);
-        }
-        lines.push('');
-      }
-
+      // Footer
       lines.push(`  ${theme.separator(72)}`);
       lines.push(theme.dim(`  Source: Pyth Hermes (oracle) | fstats (open interest)`));
-      lines.push('');
+
       return lines;
     };
 
-    // ─── STEP 2: Clear screen and show loading ────────────────────
+    // ─── STEP 2: Enter alternate screen and show loading ──────────
+    renderer.enterAltScreen();
     renderer.clear();
     const loadingFrame = [
       '',
@@ -2333,8 +2323,8 @@ export class FlashTerminal {
     try {
       initialRows = await fetchData();
     } catch {
+      renderer.leaveAltScreen();
       console.log(chalk.red('  Failed to fetch market data.'));
-      // Restore input state before returning
       if (process.stdin.isTTY) {
         process.stdin.setRawMode(wasRaw ?? false);
       }
@@ -2382,22 +2372,26 @@ export class FlashTerminal {
         running = false;
         clearInterval(interval);
 
-        // Restore terminal state
-        if (process.stdin.isTTY) {
-          process.stdin.setRawMode(wasRaw ?? false);
-        }
-
-        // Drain buffered stdin
-        process.stdin.pause();
-        process.stdin.resume();
-
-        // Clear screen and restore CLI
-        renderer.clear();
+        // Leave alternate screen — restores original terminal content
+        renderer.leaveAltScreen();
         renderer.reset();
 
-        // Resume readline AFTER cleanup
-        this.rl.resume();
-        resolve();
+        // Drain any remaining stdin bytes before restoring readline
+        // This prevents the 'q' keystroke from leaking into the CLI prompt
+        const drainHandler = () => { /* discard */ };
+        process.stdin.on('data', drainHandler);
+        setTimeout(() => {
+          process.stdin.removeListener('data', drainHandler);
+
+          // Restore terminal state
+          if (process.stdin.isTTY) {
+            process.stdin.setRawMode(wasRaw ?? false);
+          }
+
+          // Resume readline AFTER cleanup
+          this.rl.resume();
+          resolve();
+        }, 50);
       };
 
       process.stdin.on('data', onKey);
