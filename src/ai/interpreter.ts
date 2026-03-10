@@ -475,7 +475,7 @@ export function localParse(input: string): ParsedIntent | null {
   }
 
   // Market Monitor
-  if (/^(?:market\s+monitor|monitor|watch|watch\s+markets?)$/.test(lower)) {
+  if (/^(?:market\s+monitor|monitor)$/.test(lower)) {
     return { action: ActionType.MarketMonitor };
   }
 

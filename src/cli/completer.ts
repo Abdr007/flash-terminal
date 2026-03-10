@@ -52,21 +52,7 @@ const USAGE_EXAMPLES: Record<string, string[]> = {
     'dryrun open 5x long SOL $500',
     'dryrun close ETH short',
   ],
-  'monitor': [
-    'monitor SOL',
-    'monitor BTC',
-    'monitor ETH',
-    'monitor protocol',
-    'monitor position SOL',
-    'monitor position BTC',
-    'monitor liquidations SOL',
-    'monitor liquidations BTC',
-  ],
-  'watch': [
-    'watch positions',
-    'watch portfolio',
-    'watch open interest',
-  ],
+  'monitor': [],
   'inspect pool': [
     ...POOL_NAMES.map(p => `inspect pool ${p}`),
   ],

@@ -291,6 +291,7 @@ export class SimulatedFlashClient implements IFlashClient {
       collateralUsd: position.collateralUsd,
       leverage: position.leverage,
       price,
+      entryPrice: position.entryPrice,
       pnl,
       timestamp: Date.now(),
     });

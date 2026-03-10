@@ -25,13 +25,12 @@ import { initReconciler, getReconciler } from '../core/state-reconciliation.js';
 import { loadPlugins, shutdownPlugins } from '../plugins/plugin-loader.js';
 import { StatusBar } from './status-bar.js';
 import { runDoctor } from '../tools/doctor.js';
-import { startWatch } from './watch.js';
+// watch.ts removed — monitor command replaces watch functionality
 import { theme } from './theme.js';
 import { completer, getSuggestions } from './completer.js';
 import { buildFastDispatch } from './command-registry.js';
 import { resolveMarket } from '../utils/market-resolver.js';
 import { computeSimulationLiquidationPrice, isDivergenceOk } from '../utils/protocol-liq.js';
-import type { MonitorType } from '../monitor/event-monitor.js';
 
 /** Alias for backward compat — delegates to centralized resolver */
 function resolveMarketAlias(input: string): string {
@@ -369,7 +368,7 @@ export class FlashTerminal {
       }
 
       const lower = trimmed.toLowerCase();
-      if (lower === 'exit' || lower === 'quit' || lower === 'q') {
+      if (lower === 'exit' || lower === 'quit') {
         this.shutdown();
         return;
       }
@@ -1334,19 +1333,6 @@ export class FlashTerminal {
       return;
     }
 
-    // ─── Watch Mode Intercept ────────────────────────────────────
-    if (lower.startsWith('watch ') && lower !== 'watch') {
-      const innerCmd = input.slice('watch '.length).trim();
-      if (innerCmd) {
-        await startWatch(innerCmd, {
-          engine: this.engine,
-          parseCommand: (cmd: string) => this.resolveIntent(cmd),
-          rl: this.rl,
-        });
-        return;
-      }
-    }
-
     // ─── Degen Mode Toggle ──────────────────────────────────────
     if (lower === 'degen' || lower === 'degen mode' || lower === 'degen on' || lower === 'degen off' || lower === 'degen toggle') {
       if (lower === 'degen off') {
@@ -1429,61 +1415,9 @@ export class FlashTerminal {
       const market = resolveMarketAlias(rawMarket);
       intent = { action: ActionType.LiquidityDepth, market } as ParsedIntent;
     } else if (lower.startsWith('monitor ') || lower.startsWith('market monitor ')) {
-      // Event-driven monitoring commands
-      const prefix = lower.startsWith('market monitor ') ? 'market monitor ' : 'monitor ';
-      const rest = input.slice(prefix.length).trim();
-      const restLower = rest.toLowerCase();
-
-      if (restLower === 'protocol') {
-        // "monitor protocol" → protocol health monitor
-        await this.handleEventMonitor('protocol');
-        return;
-      } else if (restLower.startsWith('position ') || restLower.startsWith('pos ')) {
-        // "monitor position sol" → position monitor
-        const rawMarket = restLower.startsWith('position ') ? rest.slice('position '.length).trim() : rest.slice('pos '.length).trim();
-        const market = resolveMarketAlias(rawMarket);
-        const { getPoolForMarket } = await import('../config/index.js');
-        if (!getPoolForMarket(market)) {
-          console.log(chalk.red(`  Unknown market: ${rawMarket}`));
-          console.log(chalk.dim(`  Try: monitor position sol, monitor position btc`));
-          return;
-        }
-        await this.handleEventMonitor('position', market);
-        return;
-      } else if (restLower.startsWith('liquidation') || restLower.startsWith('liq')) {
-        // "monitor liquidations sol" → liquidation monitor
-        const keyword = restLower.startsWith('liquidations ') ? 'liquidations ' :
-                        restLower.startsWith('liquidation ') ? 'liquidation ' :
-                        restLower.startsWith('liqs ') ? 'liqs ' :
-                        restLower.startsWith('liq ') ? 'liq ' : '';
-        const rawMarket = keyword ? rest.slice(keyword.length).trim() : '';
-        if (!rawMarket) {
-          console.log(chalk.yellow(`  Usage: monitor liquidations <market>`));
-          console.log(chalk.dim(`  Example: monitor liquidations sol`));
-          return;
-        }
-        const market = resolveMarketAlias(rawMarket);
-        const { getPoolForMarket } = await import('../config/index.js');
-        if (!getPoolForMarket(market)) {
-          console.log(chalk.red(`  Unknown market: ${rawMarket}`));
-          return;
-        }
-        await this.handleEventMonitor('liquidations', market);
-        return;
-      } else if (rest) {
-        // "monitor sol", "monitor crude oil" → market event monitor
-        const market = resolveMarketAlias(rest);
-        const { getPoolForMarket } = await import('../config/index.js');
-        if (!getPoolForMarket(market)) {
-          console.log(chalk.red(`  Unknown market: ${rest}`));
-          console.log(chalk.dim(`  Try: monitor sol, monitor btc, monitor protocol`));
-          return;
-        }
-        await this.handleEventMonitor('market', market);
-        return;
-      }
-      // No args — fall through to full market table monitor
-      intent = { action: ActionType.MarketMonitor } as ParsedIntent;
+      // Any monitor subcommand is no longer supported — only bare "monitor" works
+      console.log(theme.dim('\n  Unknown command.\n'));
+      return;
     } else if (lower === 'inspect pool' || lower.startsWith('inspect pool ')) {
       const poolInput = lower === 'inspect pool' ? '' : input.slice('inspect pool '.length).trim();
       const { POOL_NAMES } = await import('../config/index.js');
@@ -2344,17 +2278,34 @@ export class FlashTerminal {
         renderer.leaveAltScreen();
         renderer.reset();
 
-        // Drain any remaining stdin bytes before restoring readline
+        // Pause stdin FIRST to stop any further data events, then
+        // switch out of raw mode so the 'q' keypress is not echoed
+        // back into readline's buffer.
+        process.stdin.pause();
+        if (process.stdin.isTTY) {
+          process.stdin.setRawMode(wasRaw ?? false);
+        }
+
+        // Drain any remaining stdin bytes before restoring readline.
+        // Use a longer drain window to prevent the exit key from
+        // leaking into the CLI prompt.
         const drainHandler = () => { /* discard */ };
+        process.stdin.resume();
         process.stdin.on('data', drainHandler);
         setTimeout(() => {
           process.stdin.removeListener('data', drainHandler);
-          if (process.stdin.isTTY) {
-            process.stdin.setRawMode(wasRaw ?? false);
-          }
+          process.stdin.pause();
+
+          // Resume readline and clear any buffered partial line
           this.rl.resume();
+          // Write an empty line reset to discard any leaked characters
+          if (this.rl.terminal) {
+            (this.rl as unknown as { line: string }).line = '';
+            (this.rl as unknown as { cursor: number }).cursor = 0;
+            this.rl.prompt();
+          }
           resolve();
-        }, 50);
+        }, 100);
       };
 
       const onKey = (buf: Buffer) => {
@@ -2369,25 +2320,6 @@ export class FlashTerminal {
       process.stdin.on('data', onKey);
       process.stdin.on('error', onStdinError);
       process.stdin.on('end', onStdinEnd);
-    });
-  }
-
-  /**
-   * Handle event-driven monitoring — detects and reports meaningful state changes.
-   * Replaces repetitive polling with threshold-based event detection.
-   */
-  private async handleEventMonitor(type: MonitorType, market?: string): Promise<void> {
-    const { EventMonitor } = await import('../monitor/event-monitor.js');
-
-    const monitor = new EventMonitor(this.flashClient, type, market);
-
-    // Pause readline so keypress doesn't leak into CLI input
-    this.rl.pause();
-
-    await monitor.start(() => {
-      // onExit callback — resume readline
-      this.rl.resume();
-      console.log('');
     });
   }
 

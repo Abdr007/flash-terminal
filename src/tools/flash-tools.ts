@@ -827,18 +827,27 @@ export const flashGetPositions: ToolDefinition = {
     }
 
     const headers = ['Market', 'Side', 'Lev', 'Size', 'Collateral', 'Entry', 'Mark', 'PnL', 'Fees', 'Liq'];
-    const rows = positions.map((p: Position) => [
-      chalk.bold(p.market),
-      colorSide(p.side),
-      `${p.leverage.toFixed(1)}x`,
-      formatUsd(p.sizeUsd),
-      formatUsd(p.collateralUsd),
-      formatPrice(p.entryPrice),
-      formatPrice(p.markPrice),
-      `${colorPnl(p.unrealizedPnl)} ${theme.dim(`(${colorPercent(p.unrealizedPnlPercent)})`)}`,
-      p.totalFees > 0 ? formatUsd(p.totalFees) : theme.dim('—'),
-      formatPrice(p.liquidationPrice),
-    ]);
+    const rows = positions.map((p: Position) => {
+      const pnlSign = p.unrealizedPnl >= 0 ? '+' : '';
+      const liqDist = p.markPrice > 0 && p.liquidationPrice > 0
+        ? Math.abs((p.markPrice - p.liquidationPrice) / p.markPrice) * 100
+        : 0;
+      const liqStr = p.liquidationPrice > 0
+        ? `${formatPrice(p.liquidationPrice)} ${theme.dim(`(${liqDist.toFixed(1)}%)`)}`
+        : theme.dim('—');
+      return [
+        chalk.bold(p.market),
+        colorSide(p.side),
+        `${p.leverage.toFixed(1)}x`,
+        formatUsd(p.sizeUsd),
+        formatUsd(p.collateralUsd),
+        formatPrice(p.entryPrice),
+        formatPrice(p.markPrice),
+        `${pnlSign}${colorPnl(p.unrealizedPnl)} ${theme.dim(`(${colorPercent(p.unrealizedPnlPercent)})`)}`,
+        formatUsd(p.totalFees),
+        liqStr,
+      ];
+    });
 
     const totalPnl = positions.reduce((s: number, p: Position) => s + p.unrealizedPnl, 0);
     const totalExposure = positions.reduce((s: number, p: Position) => s + p.sizeUsd, 0);
@@ -1964,8 +1973,8 @@ const tradeHistoryTool: ToolDefinition = {
       const lines: string[] = [
         theme.titleBlock('TRADE HISTORY'),
         '',
-        theme.dim('  Time       Action  Market  Side    Size        Entry       PnL'),
-        `  ${theme.separator(72)}`,
+        theme.dim('  Time       Action  Market  Side    Entry       Exit        Collateral  PnL'),
+        `  ${theme.separator(82)}`,
       ];
 
       for (const t of recent) {
@@ -1973,13 +1982,19 @@ const tradeHistoryTool: ToolDefinition = {
         const action = t.action === 'open' ? theme.command('OPEN ') : theme.warning('CLOSE');
         const market = t.market.padEnd(6);
         const side = t.side === 'long' ? theme.long('LONG ') : theme.short('SHORT');
-        const size = formatUsd(t.sizeUsd).padStart(10);
-        const entry = formatPrice(t.price).padStart(10);
+        const isClose = t.action === 'close';
+        const entryStr = isClose
+          ? formatPrice(t.entryPrice ?? 0).padStart(10)
+          : formatPrice(t.price).padStart(10);
+        const exitStr = isClose
+          ? formatPrice(t.price).padStart(10)
+          : theme.dim('—').padStart(10);
+        const coll = formatUsd(t.collateralUsd).padStart(10);
         const pnl = t.pnl !== undefined
           ? (t.pnl >= 0 ? theme.positive(`+${formatUsd(t.pnl)}`) : theme.negative(formatUsd(t.pnl)))
           : theme.dim('  —');
 
-        lines.push(`  ${time}  ${action}   ${market}  ${side}  ${size}  ${entry}  ${pnl}`);
+        lines.push(`  ${time}  ${action}   ${market}  ${side}  ${entryStr}  ${exitStr}  ${coll}  ${pnl}`);
       }
 
       lines.push('');
@@ -2013,8 +2028,8 @@ const tradeHistoryTool: ToolDefinition = {
     const lines: string[] = [
       theme.titleBlock('SESSION TRADE HISTORY'),
       '',
-      theme.dim('  Time       Action       Market    Side    Collateral  PnL'),
-      `  ${theme.separator(68)}`,
+      theme.dim('  Time       Action       Market    Side    Entry       Exit        Collateral  PnL'),
+      `  ${theme.separator(88)}`,
     ];
 
     for (const t of recent) {
@@ -2028,12 +2043,14 @@ const tradeHistoryTool: ToolDefinition = {
       const actionStr = theme.command((actionLabels[t.action] ?? t.action).padEnd(10));
       const market = (t.market ?? '').padEnd(9);
       const side = (t.side ?? '').toUpperCase() === 'LONG' ? theme.long('LONG ') : theme.short('SHORT');
+      const entryStr = t.entryPrice !== undefined ? formatPrice(t.entryPrice).padStart(10) : theme.dim('—').padStart(10);
+      const exitStr = t.exitPrice !== undefined ? formatPrice(t.exitPrice).padStart(10) : theme.dim('—').padStart(10);
       const coll = t.collateral !== undefined ? formatUsd(t.collateral).padStart(10) : '         —';
       const pnl = t.pnl !== undefined
         ? (t.pnl >= 0 ? theme.positive(`+${formatUsd(t.pnl)}`) : theme.negative(formatUsd(t.pnl)))
         : theme.dim('  —');
 
-      lines.push(`  ${time}  ${actionStr} ${market} ${side}  ${coll}  ${pnl}`);
+      lines.push(`  ${time}  ${actionStr} ${market} ${side}  ${entryStr}  ${exitStr}  ${coll}  ${pnl}`);
     }
 
     lines.push('');
@@ -2343,80 +2360,24 @@ export const liquidityDepthTool: ToolDefinition = {
         if (!Number.isFinite(price) || price <= 0) continue;
 
         const oi = oiData.markets.find(m => m.market.toUpperCase() === mkt.symbol.toUpperCase());
-        const totalOi = (oi?.longOi ?? mkt.openInterestLong) + (oi?.shortOi ?? mkt.openInterestShort);
         const longOi = oi?.longOi ?? mkt.openInterestLong;
         const shortOi = oi?.shortOi ?? mkt.openInterestShort;
+        const totalOi = longOi + shortOi;
+        const longPct = totalOi > 0 ? (longOi / totalOi) * 100 : 50;
+        const shortPct = totalOi > 0 ? 100 - longPct : 50;
 
-        // Build liquidity depth bands around price
-        // Estimate: liquidity concentrates around current price with exponential decay
-        const bands: { level: number; liquidity: number; side: string }[] = [];
-        const bandOffsets = [-5, -3, -2, -1, -0.5, 0, 0.5, 1, 2, 3, 5];
-
-        for (const pct of bandOffsets) {
-          const level = price * (1 + pct / 100);
-          if (!Number.isFinite(level)) continue;
-
-          // Liquidity estimate: decays with distance from current price
-          const distance = Math.abs(pct);
-          const decay = Math.exp(-distance * 0.3);
-          const baseLiquidity = totalOi * 0.15 * decay;
-
-          // Bid side (below price) gets more long OI weight, ask side gets more short OI weight
-          const sideWeight = pct < 0
-            ? (longOi / Math.max(totalOi, 1)) * 1.5
-            : (shortOi / Math.max(totalOi, 1)) * 1.5;
-          const liquidity = baseLiquidity * Math.max(sideWeight, 0.3);
-
-          if (liquidity > 0) {
-            bands.push({
-              level,
-              liquidity,
-              side: pct < 0 ? 'BID' : pct > 0 ? 'ASK' : 'MID',
-            });
-          }
-        }
-
-        lines.push(theme.titleBlock(`LIQUIDITY DEPTH — ${mkt.symbol}`));
+        lines.push(theme.titleBlock(`LIQUIDITY OVERVIEW — ${mkt.symbol}`));
         lines.push('');
-        lines.push(theme.pair('Current Price', formatPrice(price)));
-        lines.push(theme.pair('Total OI', formatUsd(totalOi)));
+        lines.push(theme.pair('Price', formatPrice(price)));
+        lines.push(theme.pair('Open Interest', formatUsd(totalOi)));
+        lines.push(theme.pair('  Long OI', `${formatUsd(longOi)} (${longPct.toFixed(1)}%)`));
+        lines.push(theme.pair('  Short OI', `${formatUsd(shortOi)} (${shortPct.toFixed(1)}%)`));
+        lines.push(theme.pair('Long / Short Ratio', `${longPct.toFixed(0)} / ${shortPct.toFixed(0)}`));
         lines.push('');
-
-        if (bands.length === 0) {
-          lines.push(theme.dim('  No depth data available.'));
-        } else {
-          const maxLiq = Math.max(...bands.map(b => b.liquidity));
-          const barWidth = 20;
-
-          const headers = ['Price Level', 'Est. Liquidity', 'Side', 'Depth'];
-          const rows = bands.map(b => {
-            const barLen = maxLiq > 0 ? Math.round((b.liquidity / maxLiq) * barWidth) : 0;
-            const bar = b.side === 'BID'
-              ? theme.positive('█'.repeat(barLen))
-              : b.side === 'ASK'
-                ? theme.negative('█'.repeat(barLen))
-                : theme.accent('█'.repeat(barLen));
-            const sideColor = b.side === 'BID'
-              ? theme.positive(b.side)
-              : b.side === 'ASK'
-                ? theme.negative(b.side)
-                : theme.accent(b.side);
-
-            return [
-              formatPrice(b.level),
-              formatUsd(b.liquidity),
-              sideColor,
-              bar,
-            ];
-          });
-
-          lines.push(formatTable(headers, rows));
-        }
+        lines.push(theme.dim('  Orderbook depth unavailable for this perpetual market.'));
+        lines.push(theme.dim('  Flash Trade uses pool-based liquidity, not an orderbook.'));
         lines.push('');
       }
-
-      lines.push(theme.dim('  Estimates derived from open interest distribution.'));
-      lines.push('');
 
       return { success: true, message: lines.join('\n') };
     } catch (error: unknown) {

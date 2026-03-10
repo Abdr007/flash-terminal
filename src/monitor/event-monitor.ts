@@ -462,7 +462,7 @@ export class EventMonitor {
     if (marketPositions.length === 0) {
       if (this.cycleCount === 1) {
         events.push({ type: 'info', severity: 'info', message: `Monitoring liquidations for ${chalk.bold(sym)} at ${formatPrice(currentPrice)}` });
-        events.push({ type: 'info', severity: 'info', message: 'No open positions data available from fstats' });
+        events.push({ type: 'info', severity: 'info', message: 'No large liquidation clusters detected.' });
       }
       return;
     }

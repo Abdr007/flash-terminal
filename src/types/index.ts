@@ -782,6 +782,7 @@ export interface SimulatedTrade {
   collateralUsd: number;
   leverage: number;
   price: number;
+  entryPrice?: number;
   pnl?: number;
   timestamp: number;
 }
