@@ -213,12 +213,16 @@ export async function getProtocolFeeRates(
     } catch (err) {
       // Protocol parameter errors must not be silently swallowed
       if (err instanceof ProtocolParameterError) throw err;
-      // Other errors (network, missing custody) fall through to SDK default
+      // Network/custody errors — throw clear error instead of silent fallback
+      throw new ProtocolParameterError(
+        `Failed to fetch on-chain fee rates for ${upper}: ${err instanceof Error ? err.message : 'unknown error'}. ` +
+        `Ensure RPC is reachable and market is tradeable.`,
+      );
     }
   }
 
-  // SDK default: conservative values when on-chain fetch unavailable.
-  // Cache with short TTL to prevent RPC spam on persistent failure.
+  // No perpClient available (simulation mode) — use conservative defaults
+  // clearly marked as non-authoritative
   const defaultRates: ProtocolFeeRates = {
     openFeeRate: 0.0008,
     closeFeeRate: 0.0008,

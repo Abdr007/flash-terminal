@@ -367,6 +367,12 @@ export const COMMAND_REGISTRY: CommandEntry[] = [
     dispatchAliases: ['system'],
   },
   {
+    name: 'system audit',
+    action: ActionType.SystemAudit,
+    category: 'Utilities',
+    description: 'Verify protocol data integrity',
+  },
+  {
     name: 'rpc status',
     action: ActionType.RpcStatus,
     category: 'Utilities',

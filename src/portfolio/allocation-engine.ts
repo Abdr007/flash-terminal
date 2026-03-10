@@ -1,21 +1,23 @@
 import { Opportunity, Position, TradeSide } from '../types/index.js';
 import { checkCorrelation } from './correlation.js';
+import {
+  MAX_POSITION_ALLOCATION,
+  MAX_MARKET_EXPOSURE,
+  MAX_DIRECTIONAL_EXPOSURE,
+  MAX_CORRELATED_EXPOSURE,
+  MAX_POSITIONS,
+} from '../core/risk-config.js';
 
 /**
  * Portfolio allocation limits.
- * These enforce portfolio-level diversification on top of per-trade safety.
+ * All values sourced from core/risk-config.ts — single source of truth.
  */
 export const ALLOCATION_LIMITS = {
-  /** Max 20% of total capital in a single position */
-  MAX_POSITION_ALLOCATION: 0.20,
-  /** Max 30% of total capital exposed to a single market */
-  MAX_MARKET_EXPOSURE: 0.30,
-  /** Max 60% of total capital in one direction (long or short) */
-  MAX_DIRECTIONAL_EXPOSURE: 0.60,
-  /** Max 30% of total capital in correlated markets */
-  MAX_CORRELATED_EXPOSURE: 0.30,
-  /** Max 5 open positions */
-  MAX_POSITIONS: 5,
+  MAX_POSITION_ALLOCATION,
+  MAX_MARKET_EXPOSURE,
+  MAX_DIRECTIONAL_EXPOSURE,
+  MAX_CORRELATED_EXPOSURE,
+  MAX_POSITIONS,
 } as const;
 
 export interface AllocationResult {

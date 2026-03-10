@@ -248,6 +248,9 @@ export class ToolEngine {
       case ActionType.SystemStatus:
         return { toolName: 'system_status', params: {} };
 
+      case ActionType.SystemAudit:
+        return { toolName: 'system_audit', params: {} };
+
       case ActionType.RpcStatus:
         return { toolName: 'rpc_status', params: {} };
 

@@ -14,8 +14,9 @@
 
 import type { IDataClient } from '../types/index.js';
 import { POOL_MARKETS, isTradeablePool } from '../config/index.js';
+import { PROTOCOL_CACHE_TTL_MS } from '../core/risk-config.js';
 
-const CACHE_TTL_MS = 15_000;
+const CACHE_TTL_MS = PROTOCOL_CACHE_TTL_MS;
 
 export interface ProtocolStats {
   /** All markets registered across pools (includes coming soon) */

@@ -1,5 +1,9 @@
 import { Position, TradeSide } from '../types/index.js';
-import { ALLOCATION_LIMITS } from './allocation-engine.js';
+import {
+  REBALANCE_CONCENTRATION_TRIGGER,
+  REBALANCE_DIRECTIONAL_TRIGGER,
+  MAX_MARKET_EXPOSURE,
+} from '../core/risk-config.js';
 
 export interface RebalanceAction {
   type: 'reduce_collateral' | 'close_position' | 'info';
@@ -20,14 +24,14 @@ export interface RebalanceResult {
 /**
  * Analyze portfolio balance and suggest rebalancing actions.
  *
- * Rules:
- * - If long exposure > 70% of total → suggest reducing longs or adding shorts
- * - If short exposure > 70% of total → suggest reducing shorts or adding longs
- * - If any single market > 40% concentration → suggest reducing that position
- * - Weakest position (worst PnL%) identified for potential closure
+ * Uses sequential evaluation to prevent contradictory suggestions:
+ *   1. Detect directional imbalance
+ *   2. Simulate position closures (remove from working set)
+ *   3. Recompute exposure after simulated closures
+ *   4. Detect concentration on remaining positions
+ *   5. Generate minimal corrective actions
  *
  * This function is pure — it does NOT execute any trades.
- * Rebalance actions are informational suggestions only.
  */
 export function analyzeRebalance(
   positions: Position[],
@@ -43,9 +47,9 @@ export function analyzeRebalance(
     };
   }
 
+  // ── Step 1: Compute initial exposure ──
   let longExposure = 0;
   let shortExposure = 0;
-  const marketExposure = new Map<string, number>();
 
   for (const pos of positions) {
     if (!pos.market || !Number.isFinite(pos.sizeUsd)) continue;
@@ -54,8 +58,6 @@ export function analyzeRebalance(
     } else if (pos.side === TradeSide.Short) {
       shortExposure += pos.sizeUsd;
     }
-    const current = marketExposure.get(pos.market) ?? 0;
-    marketExposure.set(pos.market, current + pos.sizeUsd);
   }
 
   const totalExposure = longExposure + shortExposure;
@@ -65,12 +67,11 @@ export function analyzeRebalance(
   const actions: RebalanceAction[] = [];
   let balanced = true;
 
-  // 1. Directional imbalance check (> 70% in one direction)
-  const IMBALANCE_THRESHOLD = 70;
+  // ── Step 2: Directional imbalance → suggest weakest closure ──
+  const closedKeys = new Set<string>();
 
-  if (longPct > IMBALANCE_THRESHOLD) {
+  if (longPct > REBALANCE_DIRECTIONAL_TRIGGER) {
     balanced = false;
-    // Find weakest long position (worst PnL%)
     const longs = positions
       .filter((p) => p.side === TradeSide.Long)
       .sort((a, b) => a.unrealizedPnlPercent - b.unrealizedPnlPercent);
@@ -83,10 +84,11 @@ export function analyzeRebalance(
         side: TradeSide.Long,
         reason: `Long-heavy (${longPct.toFixed(0)}%): close weakest long ${weakest.market} (PnL: ${weakest.unrealizedPnlPercent.toFixed(1)}%)`,
       });
+      closedKeys.add(`${weakest.market}:${weakest.side}`);
     }
   }
 
-  if (shortPct > IMBALANCE_THRESHOLD) {
+  if (shortPct > REBALANCE_DIRECTIONAL_TRIGGER) {
     balanced = false;
     const shorts = positions
       .filter((p) => p.side === TradeSide.Short)
@@ -100,42 +102,50 @@ export function analyzeRebalance(
         side: TradeSide.Short,
         reason: `Short-heavy (${shortPct.toFixed(0)}%): close weakest short ${weakest.market} (PnL: ${weakest.unrealizedPnlPercent.toFixed(1)}%)`,
       });
+      closedKeys.add(`${weakest.market}:${weakest.side}`);
     }
   }
 
-  // 2. Concentration check (any market > 40% of total exposure)
-  // Skip if a close_position action already targets this market+side
-  const closedPositions = new Set(
-    actions.filter(a => a.type === 'close_position').map(a => `${a.market}:${a.side}`)
+  // ── Step 3: Recompute exposure AFTER simulated closures ──
+  const remainingPositions = positions.filter(
+    (p) => !closedKeys.has(`${p.market}:${p.side}`)
   );
 
-  const CONCENTRATION_THRESHOLD = 0.40;
-  for (const [market, exposure] of marketExposure.entries()) {
-    const pct = totalExposure > 0 ? exposure / totalExposure : 0;
-    if (pct > CONCENTRATION_THRESHOLD) {
+  const remainingExposure = new Map<string, number>();
+  let remainingTotal = 0;
+  for (const pos of remainingPositions) {
+    if (!pos.market || !Number.isFinite(pos.sizeUsd)) continue;
+    remainingTotal += pos.sizeUsd;
+    const current = remainingExposure.get(pos.market) ?? 0;
+    remainingExposure.set(pos.market, current + pos.sizeUsd);
+  }
+
+  // ── Step 4: Concentration check on remaining positions ──
+  for (const [market, exposure] of remainingExposure.entries()) {
+    const pct = remainingTotal > 0 ? exposure / remainingTotal : 0;
+    if (pct > REBALANCE_CONCENTRATION_TRIGGER) {
       balanced = false;
-      // Find the position in this market with the smallest PnL
-      const marketPositions = positions
+      const marketPositions = remainingPositions
         .filter((p) => p.market === market)
         .sort((a, b) => a.unrealizedPnlPercent - b.unrealizedPnlPercent);
 
       if (marketPositions.length > 0) {
         const target = marketPositions[0];
-        // Don't suggest reduce_collateral if we're already suggesting closing this position
-        if (closedPositions.has(`${target.market}:${target.side}`)) continue;
-        const reductionTarget = exposure - totalExposure * ALLOCATION_LIMITS.MAX_MARKET_EXPOSURE;
-        actions.push({
-          type: 'reduce_collateral',
-          market: target.market,
-          side: target.side,
-          amount: Math.round(Math.max(10, target.leverage > 0 ? reductionTarget / target.leverage : reductionTarget)),
-          reason: `${market} concentration ${(pct * 100).toFixed(0)}%: reduce by ~$${Math.round(reductionTarget)}`,
-        });
+        const reductionTarget = exposure - remainingTotal * MAX_MARKET_EXPOSURE;
+        if (reductionTarget > 0) {
+          actions.push({
+            type: 'reduce_collateral',
+            market: target.market,
+            side: target.side,
+            amount: Math.round(Math.max(10, target.leverage > 0 ? reductionTarget / target.leverage : reductionTarget)),
+            reason: `${market} concentration ${(pct * 100).toFixed(0)}%: reduce by ~$${Math.round(reductionTarget)}`,
+          });
+        }
       }
     }
   }
 
-  // 3. Directional bias label
+  // ── Step 5: Directional bias label ──
   let directionalBias: string;
   if (longPct > 60 && shortPct > 0) directionalBias = `${(longPct / shortPct).toFixed(1)}:1 Long`;
   else if (longPct > 60) directionalBias = 'Long Only';

@@ -22,6 +22,7 @@ import {
   colorSide,
   formatTable,
 } from '../utils/format.js';
+import { CONCENTRATION_WARNING_THRESHOLD } from '../core/risk-config.js';
 
 let inspectorInstance: SolanaInspector | null = null;
 let portfolioManagerInstance: PortfolioManager | null = null;
@@ -108,17 +109,9 @@ export const aiAnalyze: ToolDefinition = {
     const oi = openInterest.markets.find((m) => m.market.toUpperCase() === marketUpper);
     const totalOi = oi ? oi.longOi + oi.shortOi : 0;
 
-    // Volume for last day and growth trend
-    const lastDay = volume.dailyVolumes.length > 0
-      ? volume.dailyVolumes[volume.dailyVolumes.length - 1]
-      : null;
-
-    let volumeGrowth = 0;
-    if (volume.dailyVolumes.length >= 6) {
-      const recent3 = volume.dailyVolumes.slice(-3).reduce((s, d) => s + d.volumeUsd, 0) / 3;
-      const prev3 = volume.dailyVolumes.slice(-6, -3).reduce((s, d) => s + d.volumeUsd, 0) / 3;
-      volumeGrowth = prev3 > 0 ? (recent3 - prev3) / prev3 : 0;
-    }
+    // Per-market volume is not available from the fstats API.
+    // The volume endpoint returns protocol-wide aggregates only.
+    // We must NOT display protocol volume as market volume.
 
     const analysis: MarketAnalysis = {
       market: marketUpper,
@@ -126,12 +119,12 @@ export const aiAnalyze: ToolDefinition = {
       priceChange24h: market.priceChange24h,
       openInterestLong: market.openInterestLong,
       openInterestShort: market.openInterestShort,
-      volume24h: lastDay?.volumeUsd ?? 0,
+      volume24h: 0, // Not available per-market
       signals: [],
       summary: `${marketUpper} market overview`,
     };
 
-    // Regime detection
+    // Regime detection — pass volume for protocol-level trend only
     const rd = getRegimeDetector();
     const regimeState = rd.detectRegime(market, volume, openInterest);
 
@@ -153,25 +146,19 @@ export const aiAnalyze: ToolDefinition = {
     lines.push(`  ${formatPrice(market.price)}  ${colorPercent(market.priceChange24h)}`);
     lines.push('');
 
-    // Volume
+    // Volume — per-market volume is not available from fstats API
     lines.push(chalk.bold('  Volume'));
-    if (lastDay) {
-      const volumeGrowthStr = volumeGrowth > 0.1
-        ? 'Trading volume increasing.'
-        : volumeGrowth < -0.1
-          ? 'Trading volume declining.'
-          : 'Trading volume stable.';
-      lines.push(`  24h: ${formatUsd(lastDay.volumeUsd)}  ${chalk.dim(volumeGrowthStr)}`);
-    } else {
-      lines.push(chalk.dim('  Data unavailable.'));
-    }
+    lines.push(chalk.dim('  Per-market volume unavailable (protocol does not expose per-market data)'));
     lines.push('');
 
     // Open Interest
     lines.push(chalk.bold('  Open Interest'));
     if (oi && totalOi > 0) {
-      const longPct = ((oi.longOi / totalOi) * 100).toFixed(0);
-      const shortPct = ((oi.shortOi / totalOi) * 100).toFixed(0);
+      const rawLongPct = (oi.longOi / totalOi) * 100;
+      const rawShortPct = (oi.shortOi / totalOi) * 100;
+      // Use 1 decimal when < 1% to avoid rounding small values to 0%
+      const longPct = rawLongPct < 1 && rawLongPct > 0 ? rawLongPct.toFixed(1) : rawLongPct.toFixed(0);
+      const shortPct = rawShortPct < 1 && rawShortPct > 0 ? rawShortPct.toFixed(1) : rawShortPct.toFixed(0);
       lines.push(`  ${formatUsd(totalOi)} total (${longPct}% long / ${shortPct}% short)`);
     } else {
       lines.push(chalk.dim('  Data unavailable.'));
@@ -744,7 +731,7 @@ export const portfolioStateTool: ToolDefinition = {
       lines.push(chalk.bold('  By Market:'));
       for (const [market, exposure] of Object.entries(state.exposureByMarket)) {
         const pct = state.totalCapital > 0 ? (exposure / state.totalCapital) * 100 : 0;
-        const warn = pct > 30 ? chalk.yellow(' (concentrated)') : '';
+        const warn = pct > CONCENTRATION_WARNING_THRESHOLD * 100 ? chalk.yellow(' (concentrated)') : '';
         lines.push(`    ${market.padEnd(6)} ${formatUsd(exposure)} (${pct.toFixed(1)}%)${warn}`);
       }
     }
@@ -791,7 +778,7 @@ export const portfolioExposureTool: ToolDefinition = {
     if (exposure.concentrationRisk.length > 0) {
       lines.push(chalk.bold('  Concentration by Market:'));
       for (const c of exposure.concentrationRisk) {
-        const warn = c.percentage > 30 ? chalk.yellow(' ⚠') : '';
+        const warn = c.percentage > CONCENTRATION_WARNING_THRESHOLD * 100 ? chalk.yellow(' ⚠') : '';
         lines.push(`    ${c.market.padEnd(6)} ${c.percentage.toFixed(1)}%${warn}`);
       }
       lines.push('');

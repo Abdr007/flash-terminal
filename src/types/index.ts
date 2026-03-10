@@ -62,6 +62,7 @@ export enum ActionType {
 
   // System Diagnostics
   SystemStatus = 'system_status',
+  SystemAudit = 'system_audit',
   RpcStatus = 'rpc_status',
   RpcTest = 'rpc_test',
   TxInspect = 'tx_inspect',
@@ -279,6 +280,10 @@ export const SystemStatusSchema = z.object({
   action: z.literal(ActionType.SystemStatus),
 });
 
+export const SystemAuditSchema = z.object({
+  action: z.literal(ActionType.SystemAudit),
+});
+
 export const RpcStatusSchema = z.object({
   action: z.literal(ActionType.RpcStatus),
 });
@@ -356,6 +361,7 @@ export const ParsedIntentSchema = z.discriminatedUnion('action', [
   InspectPoolSchema,
   InspectMarketSchema,
   SystemStatusSchema,
+  SystemAuditSchema,
   RpcStatusSchema,
   RpcTestSchema,
   TxInspectSchema,
@@ -707,6 +713,8 @@ export interface SessionTrade {
   entryPrice?: number;
   exitPrice?: number;
   pnl?: number;
+  /** Fee paid at position open (stored for visibility after protocol settles fees) */
+  openFeePaid?: number;
   txSignature?: string;
   timestamp: number;
 }

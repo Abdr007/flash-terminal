@@ -25,7 +25,9 @@ import {
 } from '../utils/format.js';
 import { getErrorMessage } from '../utils/retry.js';
 import { getProtocolFeeRates, calcFeeUsd, ProtocolParameterError } from '../utils/protocol-fees.js';
+import { DATA_STALENESS_WARNING_SECONDS } from '../core/risk-config.js';
 import { computeSimulationLiquidationPrice } from '../utils/protocol-liq.js';
+import { filterValidPositions } from '../core/invariants.js';
 import { getSigningGuard, SigningAuditEntry } from '../security/signing-guard.js';
 import { updateLastWallet, clearLastWallet } from '../wallet/session.js';
 import chalk from 'chalk';
@@ -396,13 +398,34 @@ export const flashOpenPosition: ToolDefinition = {
             // Fee from protocol — use pre-trade estimate (actual fee captured in position.totalFees)
             const executionFee = sizeUsd * estimatedFeeRate;
 
-            // Log session trade
+            // Log session trade (store openFeePaid for fee visibility)
             if (context.sessionTrades) {
               context.sessionTrades.push({
                 action: 'open', market, side, leverage, collateral,
                 sizeUsd: result.sizeUsd, entryPrice: result.entryPrice,
+                openFeePaid: executionFee,
                 txSignature: result.txSignature, timestamp: Date.now(),
               });
+            }
+
+            // Re-read position from protocol for actual on-chain values
+            let actualSize = result.sizeUsd;
+            let actualCollateral = collateral;
+            let actualLiq = liqPrice;
+            if (!context.simulationMode) {
+              try {
+                const freshPositions = await context.flashClient.getPositions();
+                const pos = freshPositions.find(
+                  (p) => p.market === market && p.side === side
+                );
+                if (pos) {
+                  actualSize = pos.sizeUsd;
+                  actualCollateral = pos.collateralUsd;
+                  actualLiq = pos.liquidationPrice;
+                }
+              } catch {
+                // Non-critical: fall back to SDK response values
+              }
             }
 
             return {
@@ -412,8 +435,9 @@ export const flashOpenPosition: ToolDefinition = {
                 chalk.green('  Position Opened'),
                 chalk.dim('  ─────────────────'),
                 `  Entry Price:       ${formatPrice(result.entryPrice)}`,
-                `  Size:              ${formatUsd(result.sizeUsd)}`,
-                `  Liquidation Price: ${liqPrice && liqPrice > 0 ? chalk.yellow(formatPrice(liqPrice)) : chalk.dim('N/A')}`,
+                `  Size:              ${formatUsd(actualSize)}`,
+                `  Collateral:        ${formatUsd(actualCollateral)}`,
+                `  Liquidation Price: ${actualLiq && actualLiq > 0 ? chalk.yellow(formatPrice(actualLiq)) : chalk.dim('N/A')}`,
                 `  Est. Fee:          ${chalk.dim(formatUsd(executionFee))}`,
                 `  TX: ${chalk.dim(txLink)}`,
                 '',
@@ -822,9 +846,21 @@ export const flashGetPositions: ToolDefinition = {
   description: 'Get all open positions',
   parameters: z.object({}),
   execute: async (_params, context): Promise<ToolResult> => {
-    const positions = await context.flashClient.getPositions();
+    const rawPositions = await context.flashClient.getPositions();
+    const positions = filterValidPositions(rawPositions);
     if (positions.length === 0) {
       return { success: true, message: theme.dim('\n  No open positions.\n') };
+    }
+
+    // Build fee lookup from session trades for fee visibility
+    // (protocol settles open fees immediately, so on-chain unsettledFees may read 0)
+    const sessionFeeLookup = new Map<string, number>();
+    if (context.sessionTrades) {
+      for (const t of context.sessionTrades) {
+        if (t.action === 'open' && t.openFeePaid && t.openFeePaid > 0) {
+          sessionFeeLookup.set(`${t.market}:${t.side}`, t.openFeePaid);
+        }
+      }
     }
 
     const headers = ['Market', 'Side', 'Lev', 'Size', 'Collateral', 'Entry', 'Mark', 'PnL', 'Fees', 'Liq'];
@@ -836,6 +872,9 @@ export const flashGetPositions: ToolDefinition = {
       const liqStr = p.liquidationPrice > 0
         ? `${formatPrice(p.liquidationPrice)} ${theme.dim(`(${liqDist.toFixed(1)}%)`)}`
         : theme.dim('—');
+      // Total fees = on-chain unsettled fees + session-tracked open fee
+      const sessionFee = sessionFeeLookup.get(`${p.market}:${p.side}`) ?? 0;
+      const displayFees = p.totalFees > 0 ? p.totalFees : sessionFee;
       return [
         chalk.bold(p.market),
         colorSide(p.side),
@@ -845,7 +884,7 @@ export const flashGetPositions: ToolDefinition = {
         formatPrice(p.entryPrice),
         formatPrice(p.markPrice),
         `${pnlSign}${colorPnl(p.unrealizedPnl)} ${theme.dim(`(${colorPercent(p.unrealizedPnlPercent)})`)}`,
-        formatUsd(p.totalFees),
+        formatUsd(displayFees),
         liqStr,
       ];
     });
@@ -2422,14 +2461,18 @@ export const protocolHealthTool: ToolDefinition = {
       const top5 = stats.marketsByOI.filter(m => m.total > 0).slice(0, 5);
 
       const dataAge = pss.getDataAge();
-      const freshnessStr = dataAge >= 0 ? theme.dim(`  Data updated: ${dataAge}s ago`) : '';
+      const freshnessStr = dataAge >= 0
+        ? (dataAge > DATA_STALENESS_WARNING_SECONDS
+          ? chalk.yellow(`  ⚠ Data updated: ${dataAge}s ago — protocol data may be stale`)
+          : theme.dim(`  Data updated: ${dataAge}s ago`))
+        : '';
 
       const lines: string[] = [
         theme.titleBlock('FLASH PROTOCOL HEALTH'),
         '',
         `  ${theme.section('Protocol Overview')}`,
         theme.pair('Active Markets', stats.activeMarkets.toString()),
-        theme.pair('Total Open Interest', formatUsd(stats.totalOpenInterest)),
+        theme.pair('Open Interest', formatUsd(stats.totalOpenInterest)),
         theme.pair('Long/Short Ratio', `${theme.positive(stats.longPct + '%')} / ${theme.negative(stats.shortPct + '%')}`),
         '',
       ];
@@ -2466,6 +2509,152 @@ export const protocolHealthTool: ToolDefinition = {
     } catch (error: unknown) {
       return { success: false, message: theme.dim(`\n  Protocol health data unavailable: ${getErrorMessage(error)}\n`) };
     }
+  },
+};
+
+// ─── system_audit ────────────────────────────────────────────────────────────
+
+const systemAuditTool: ToolDefinition = {
+  name: 'system_audit',
+  description: 'Verify protocol data integrity across all subsystems',
+  parameters: z.object({}),
+  execute: async (_params, context): Promise<ToolResult> => {
+    const lines: string[] = [
+      theme.titleBlock('SYSTEM AUDIT'),
+      '',
+    ];
+
+    let passCount = 0;
+    let failCount = 0;
+
+    const pass = (msg: string) => { passCount++; lines.push(theme.positive(`  ✔ ${msg}`)); };
+    const fail = (msg: string) => { failCount++; lines.push(theme.negative(`  ✘ ${msg}`)); };
+
+    // 1. Fee engine vs on-chain custody
+    lines.push(`  ${theme.section('Fee Engine')}`);
+    const testMarkets = ['SOL', 'BTC', 'ETH'];
+    for (const market of testMarkets) {
+      try {
+        const rates = await getProtocolFeeRates(market, context.simulationMode ? null : (context.flashClient as any).perpClient ?? null);
+        if (rates.source === 'on-chain') {
+          pass(`${market}: on-chain (open=${(rates.openFeeRate * 100).toFixed(4)}%, close=${(rates.closeFeeRate * 100).toFixed(4)}%)`);
+        } else {
+          fail(`${market}: using sdk-default fallback (not on-chain)`);
+        }
+      } catch (e) {
+        fail(`${market}: ${getErrorMessage(e)}`);
+      }
+    }
+    lines.push('');
+
+    // 2. Protocol statistics consistency
+    lines.push(`  ${theme.section('Protocol Statistics')}`);
+    try {
+      const { getProtocolStatsService } = await import('../data/protocol-stats.js');
+      const pss = getProtocolStatsService(context.dataClient);
+      const stats = await pss.getStats();
+      if (stats.activeMarkets > 0) {
+        pass(`Active markets: ${stats.activeMarkets}`);
+      } else {
+        fail('No active markets detected');
+      }
+      if (stats.totalOpenInterest > 0) {
+        pass(`Total OI: ${formatUsd(stats.totalOpenInterest)}`);
+      } else {
+        fail('No open interest data');
+      }
+      const lsSum = stats.longPct + stats.shortPct;
+      if (lsSum >= 99 && lsSum <= 101) {
+        pass(`Long/Short split: ${stats.longPct}%/${stats.shortPct}% (sums to ${lsSum}%)`);
+      } else {
+        fail(`Long/Short split doesn't sum to 100: ${lsSum}%`);
+      }
+    } catch (e) {
+      fail(`Stats service: ${getErrorMessage(e)}`);
+    }
+    lines.push('');
+
+    // 3. Cache synchronization
+    lines.push(`  ${theme.section('Cache Sync')}`);
+    try {
+      const { getProtocolStatsService } = await import('../data/protocol-stats.js');
+      const pss = getProtocolStatsService(context.dataClient);
+      const dataAge = pss.getDataAge();
+      if (dataAge >= 0 && dataAge < 30) {
+        pass(`Protocol stats cache age: ${dataAge}s`);
+      } else if (dataAge >= 30) {
+        fail(`Protocol stats cache stale: ${dataAge}s`);
+      } else {
+        pass('Protocol stats not yet cached (will fetch on demand)');
+      }
+    } catch {
+      fail('Cache check failed');
+    }
+    lines.push('');
+
+    // 4. Position data integrity
+    lines.push(`  ${theme.section('Position Data')}`);
+    try {
+      const positions = await context.flashClient.getPositions();
+      if (positions.length === 0) {
+        pass('No open positions (nothing to validate)');
+      } else {
+        let posValid = true;
+        for (const p of positions) {
+          if (!Number.isFinite(p.entryPrice) || p.entryPrice <= 0) {
+            fail(`${p.market}: invalid entry price ${p.entryPrice}`);
+            posValid = false;
+          }
+          if (!Number.isFinite(p.sizeUsd) || p.sizeUsd <= 0) {
+            fail(`${p.market}: invalid size ${p.sizeUsd}`);
+            posValid = false;
+          }
+          if (!Number.isFinite(p.collateralUsd) || p.collateralUsd <= 0) {
+            fail(`${p.market}: invalid collateral ${p.collateralUsd}`);
+            posValid = false;
+          }
+          if (p.totalFees < 0) {
+            fail(`${p.market}: negative fees ${p.totalFees}`);
+            posValid = false;
+          }
+        }
+        if (posValid) {
+          pass(`All ${positions.length} position(s) pass integrity checks`);
+        }
+      }
+    } catch (e) {
+      fail(`Position fetch: ${getErrorMessage(e)}`);
+    }
+    lines.push('');
+
+    // 5. Custody parsing
+    lines.push(`  ${theme.section('Custody Accounts')}`);
+    try {
+      const { RATE_POWER, BPS_POWER } = await import('../utils/protocol-fees.js');
+      if (RATE_POWER === 1_000_000_000 && BPS_POWER === 10_000) {
+        pass('RATE_POWER=1e9, BPS_POWER=10000 — matches Flash SDK');
+      } else {
+        fail(`Constant mismatch: RATE_POWER=${RATE_POWER}, BPS_POWER=${BPS_POWER}`);
+      }
+    } catch {
+      fail('Could not verify custody constants');
+    }
+    lines.push('');
+
+    // Summary
+    lines.push(`  ${theme.separator(40)}`);
+    lines.push('');
+    lines.push(`  ${theme.dim('Pass:')} ${theme.positive(String(passCount))}  ${theme.dim('Fail:')} ${failCount > 0 ? theme.negative(String(failCount)) : theme.dim('0')}`);
+    lines.push('');
+
+    if (failCount === 0) {
+      lines.push(theme.positive('  All systems verified.'));
+    } else {
+      lines.push(theme.warning(`  ${failCount} check(s) failed. Review details above.`));
+    }
+    lines.push('');
+
+    return { success: failCount === 0, message: lines.join('\n') };
   },
 };
 
@@ -2507,4 +2696,5 @@ export const allFlashTools: ToolDefinition[] = [
   txInspectTool,
   txDebugTool,
   tradeHistoryTool,
+  systemAuditTool,
 ];

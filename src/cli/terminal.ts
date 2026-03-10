@@ -247,6 +247,26 @@ export class FlashTerminal {
       }
     }
 
+    // Sync open positions into session history so CLOSE events have matching OPEN records
+    const sessionTrades: import('../types/index.js').SessionTrade[] = [];
+    try {
+      const existingPositions = await this.flashClient.getPositions();
+      for (const pos of existingPositions) {
+        sessionTrades.push({
+          action: 'open',
+          market: pos.market,
+          side: pos.side,
+          leverage: pos.leverage,
+          sizeUsd: pos.sizeUsd,
+          entryPrice: pos.entryPrice,
+          openFeePaid: pos.openFee > 0 ? pos.openFee : undefined,
+          timestamp: pos.timestamp ? pos.timestamp * 1000 : Date.now(),
+        });
+      }
+    } catch {
+      // Non-critical: proceed with empty session history
+    }
+
     // Build tool context
     this.context = {
       flashClient: this.flashClient,
@@ -256,7 +276,7 @@ export class FlashTerminal {
       walletAddress: walletInfo?.address ?? this.flashClient.walletAddress ?? 'unknown',
       walletName: walletInfo?.name ?? '',
       walletManager: this.walletManager,
-      sessionTrades: [],
+      sessionTrades,
     };
 
     setAiApiKey(this.config.anthropicApiKey, this.config.groqApiKey);
