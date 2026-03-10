@@ -187,6 +187,10 @@ export class FlashTerminal {
       }
     }
 
+    // Pause readline during initialization — prevents stray Enter keypresses
+    // from being consumed and lost before the line handler is registered
+    this.rl.pause();
+
     // ─── Initialize RPC Manager ─────────────────────────────────────
     const rpcEndpoints = buildRpcEndpoints(this.config.rpcUrl, this.config.backupRpcUrls);
     this.rpcManager = initRpcManager(rpcEndpoints);
@@ -356,6 +360,9 @@ export class FlashTerminal {
     process.on('SIGTERM', () => this.shutdown());
 
     // ─── Start Line Handler ───────────────────────────────────────────
+    // Resume readline now that the line handler is about to be registered
+    this.rl.resume();
+
     this.rl.on('close', () => {
       this.shutdown();
     });
