@@ -53,14 +53,15 @@ function colorRisk(level: RiskLevel): string {
  * Compute pre-trade liquidation estimate using the same formula as
  * Flash SDK's getLiquidationPriceContractHelper().
  *
- * Uses protocol defaults: maintenanceMarginRate=1% (100 BPS), closeFee=0.08%.
- * Live mode will use actual SDK call post-trade for exact values.
+ * Uses protocol fee rates from CustodyAccount when available,
+ * falls back to SDK defaults when on-chain fetch is unavailable.
  */
-function estimateLiqPrice(entryPrice: number, leverage: number, side: TradeSide): number {
+async function estimateLiqPrice(entryPrice: number, leverage: number, side: TradeSide, market: string, perpClient: unknown | null): Promise<number> {
   if (!Number.isFinite(entryPrice) || !Number.isFinite(leverage) || entryPrice <= 0 || leverage <= 0) return 0;
+  const feeRates = await getProtocolFeeRates(market, perpClient);
   const sizeUsd = 1; // normalized
   const collateralUsd = sizeUsd / leverage;
-  return computeSimulationLiquidationPrice(entryPrice, sizeUsd, collateralUsd, side, 0.01, 0.0008);
+  return computeSimulationLiquidationPrice(entryPrice, sizeUsd, collateralUsd, side, feeRates.maintenanceMarginRate, feeRates.closeFeeRate);
 }
 
 /** Timeout helper — resolves to fallback if promise takes too long. */
@@ -99,7 +100,8 @@ async function _buildRiskPreview(
     if (!md || !Number.isFinite(md.price) || md.price <= 0) return lines;
 
     const entryEst = md.price;
-    const liqEst = estimateLiqPrice(entryEst, leverage, side);
+    const perpClient = context.simulationMode ? null : (context.flashClient as any).perpClient ?? null;
+    const liqEst = await estimateLiqPrice(entryEst, leverage, side, market, perpClient);
     if (liqEst <= 0) return lines;
     const distancePct = Math.abs(entryEst - liqEst) / entryEst * 100;
     const risk = classifyRisk(distancePct);

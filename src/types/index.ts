@@ -759,6 +759,10 @@ export interface SimulatedPosition {
   leverage: number;
   openFee: number;
   openedAt: number;
+  /** Maintenance margin rate from protocol (1/maxLeverage). Stored at open time. */
+  maintenanceMarginRate: number;
+  /** Close fee rate from protocol. Stored at open time. */
+  closeFeeRate: number;
 }
 
 export interface SimulationState {

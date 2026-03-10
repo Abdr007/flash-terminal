@@ -66,11 +66,11 @@ export function computeLiquidationPrice(
  *   liqPrice = entryPrice - priceMove (long) or entryPrice + priceMove (short)
  *
  * Protocol parameter sources:
- *   maintenanceMarginRate: custodyAcct.pricing.maintenanceMargin / BPS_POWER (default 1% = 1/100)
+ *   maintenanceMarginRate: 1 / (custodyAcct.pricing.maxLeverage / BPS_POWER) (default 1% = 1/100)
  *   closeFeeRate: custodyAcct.fees.closePosition / RATE_POWER (default 0.08%)
  *
- * @param maintenanceMarginRate - From custodyAcct.pricing.maintenanceMargin / BPS_POWER.
- *                                 Defaults to 0.01 (1%), equivalent to sizeUsd / 100 maxLeverage.
+ * @param maintenanceMarginRate - Derived as 1 / maxLeverage from custodyAcct.pricing.maxLeverage.
+ *                                 Defaults to 0.01 (1%), equivalent to maxLeverage=100.
  */
 export function computeSimulationLiquidationPrice(
   entryPrice: number,

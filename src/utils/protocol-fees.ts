@@ -1,14 +1,19 @@
 /**
  * Protocol Fee & Margin Utilities
  *
- * Provides fee rate and maintenance margin resolution from CustodyAccount via Flash SDK.
+ * Provides fee rate, maintenance margin, and max leverage resolution
+ * from CustodyAccount via Flash SDK.
+ *
  * All fee and margin calculations in the CLI (preview, simulation, execution)
  * must use this module for consistency.
  *
  * Data sources:
  *   Fees:              CustodyAccount.fees.openPosition / RATE_POWER
- *   MaintenanceMargin: CustodyAccount.pricing.maintenanceMargin / BPS_POWER
- * Fallback: Flash SDK constants (only if on-chain fetch fails)
+ *   Fees:              CustodyAccount.fees.closePosition / RATE_POWER
+ *   MaxLeverage:       CustodyAccount.pricing.maxLeverage / BPS_POWER
+ *   MaintenanceMargin: 1 / maxLeverage (derived from pricing config)
+ *
+ * Fallback: SDK defaults (only if on-chain fetch fails)
  *
  * Cache invalidation: slot-based — entries expire when Solana slot advances
  * beyond the slot at cache time + SLOT_STALE_THRESHOLD.
@@ -18,9 +23,10 @@ const RATE_POWER = 1_000_000_000; // Flash SDK RATE_DECIMALS = 9
 const BPS_POWER = 10_000;         // Flash SDK BPS_DECIMALS = 4
 
 export interface ProtocolFeeRates {
-  openFeeRate: number;            // e.g. 0.0008 = 0.08%
-  closeFeeRate: number;           // e.g. 0.0008 = 0.08%
-  maintenanceMarginRate: number;  // e.g. 0.01 = 1% (from custodyAcct.pricing.maintenanceMargin)
+  openFeeRate: number;            // e.g. 0.00051 = 0.051% (SOL)
+  closeFeeRate: number;           // e.g. 0.00051 = 0.051% (SOL)
+  maintenanceMarginRate: number;  // e.g. 0.001 = 0.1% — derived as 1/maxLeverage
+  maxLeverage: number;            // e.g. 1000 — from custody.pricing.maxLeverage / BPS_POWER
   source: 'on-chain' | 'sdk-default';
 }
 
@@ -80,10 +86,11 @@ function isCacheFresh(entry: CacheEntry, currentSlot: number): boolean {
 }
 
 /**
- * Fetch fee rates and maintenance margin from CustodyAccount via Flash SDK.
- * Uses perpClient.program.account.custody.fetch() for on-chain data.
+ * Fetch fee rates, max leverage, and maintenance margin from CustodyAccount.
  *
- * Cache invalidation: slot-based (entries expire ~60s after cached slot).
+ * Margin derivation (matches Flash protocol):
+ *   maxLeverage = custody.pricing.maxLeverage / BPS_POWER
+ *   maintenanceMarginRate = 1 / maxLeverage
  *
  * @param market - Market symbol (e.g. 'SOL')
  * @param perpClient - Flash SDK PerpetualsClient (or null for default)
@@ -107,7 +114,7 @@ export async function getProtocolFeeRates(
   // Attempt on-chain fetch
   if (perpClient) {
     try {
-      const { PoolConfig } = await import('flash-sdk');
+      const { PoolConfig, CustodyAccount } = await import('flash-sdk');
       const { getPoolForMarket } = await import('../config/index.js');
       const poolName = getPoolForMarket(upper);
       if (poolName) {
@@ -116,19 +123,34 @@ export async function getProtocolFeeRates(
         const custody = custodies.find(c => c.symbol.toUpperCase() === upper);
         if (custody) {
           const client = perpClient as any;
-          const custodyAcct = await client.program.account.custody.fetch(custody.custodyAccount);
+          const rawData = await client.program.account.custody.fetch(custody.custodyAccount);
+          // Must wrap with CustodyAccount.from() to get proper field structure
+          const custodyAcct = CustodyAccount.from(custody.custodyAccount, rawData);
           const openFeeRaw = parseFloat(custodyAcct.fees.openPosition.toString());
           const closeFeeRaw = parseFloat(custodyAcct.fees.closePosition.toString());
-          const maintenanceMarginRaw = parseFloat(custodyAcct.pricing.maintenanceMargin.toString());
 
           if (Number.isFinite(openFeeRaw) && openFeeRaw > 0 &&
               Number.isFinite(closeFeeRaw) && closeFeeRaw > 0) {
+
+            // Derive maxLeverage and maintenance margin from custody.pricing
+            const rawMaxLev = (custodyAcct as any).pricing?.maxLeverage;
+            const maxLevRaw = typeof rawMaxLev === 'object' && rawMaxLev?.toNumber
+              ? rawMaxLev.toNumber()
+              : typeof rawMaxLev === 'number' ? rawMaxLev : 0;
+
+            let maxLeverage = 100; // safe default
+            let maintenanceMarginRate = 0.01; // 1% default
+
+            if (Number.isFinite(maxLevRaw) && maxLevRaw > 0) {
+              maxLeverage = maxLevRaw / BPS_POWER;
+              maintenanceMarginRate = 1 / maxLeverage;
+            }
+
             const rates: ProtocolFeeRates = {
               openFeeRate: openFeeRaw / RATE_POWER,
               closeFeeRate: closeFeeRaw / RATE_POWER,
-              maintenanceMarginRate: (Number.isFinite(maintenanceMarginRaw) && maintenanceMarginRaw > 0)
-                ? maintenanceMarginRaw / BPS_POWER
-                : 0.01, // default 1% (100 BPS / 10000)
+              maintenanceMarginRate,
+              maxLeverage,
               source: 'on-chain',
             };
 
@@ -150,11 +172,12 @@ export async function getProtocolFeeRates(
     }
   }
 
-  // SDK default: 0.08% fee (8 BPS), 1% maintenance margin (100 BPS)
+  // SDK default: conservative values when on-chain fetch unavailable
   const defaultRates: ProtocolFeeRates = {
     openFeeRate: 0.0008,
     closeFeeRate: 0.0008,
     maintenanceMarginRate: 0.01,
+    maxLeverage: 100,
     source: 'sdk-default',
   };
   return defaultRates;

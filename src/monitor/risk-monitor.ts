@@ -201,7 +201,7 @@ export class RiskMonitor {
         Number.isFinite(p.collateralUsd) && p.collateralUsd > 0 &&
         Number.isFinite(p.entryPrice) && p.entryPrice > 0
       );
-      const assessed = valid.map(p => this.assessPosition(p));
+      const assessed = await Promise.all(valid.map(p => this.assessPosition(p)));
       const totalExposure = assessed.reduce((sum, r) => sum + r.sizeUsd, 0);
 
       // Leverage-weighted risk: sum(leverage * sizeWeight * (1 - distance))
@@ -253,7 +253,7 @@ export class RiskMonitor {
 
   // ─── Position Risk Assessment ────────────────────────────────────────
 
-  private assessPosition(pos: Position): PositionRisk {
+  private async assessPosition(pos: Position): Promise<PositionRisk> {
     const currentPrice = safeNumber(pos.markPrice > 0 ? pos.markPrice : pos.currentPrice, 0);
     const entryPrice = safeNumber(pos.entryPrice, 0);
     const liqPrice = safeNumber(pos.liquidationPrice, 0);
@@ -275,7 +275,7 @@ export class RiskMonitor {
     const riskLevel = this.classifyRiskWithHysteresis(distance, prevLevel);
 
     // Calculate collateral needed to restore safe distance
-    const suggestedCollateral = this.calcCollateralToRestore(pos, currentPrice, liqPrice);
+    const suggestedCollateral = await this.calcCollateralToRestore(pos, currentPrice, liqPrice);
 
     return {
       market: pos.market,
@@ -330,7 +330,7 @@ export class RiskMonitor {
    * Simplified: newLeverage = sizeUsd / (collateral + extra)
    *   target distance: abs(currentPrice - newLiqPrice) / entryPrice >= TARGET_SAFE_DISTANCE
    */
-  private calcCollateralToRestore(pos: Position, currentPrice: number, liqPrice: number): number {
+  private async calcCollateralToRestore(pos: Position, currentPrice: number, liqPrice: number): Promise<number> {
     const entryPrice = safeNumber(pos.entryPrice, 0);
     const sizeUsd = safeNumber(pos.sizeUsd, 0);
     const collateralUsd = safeNumber(pos.collateralUsd, 0);
@@ -341,15 +341,19 @@ export class RiskMonitor {
     const currentDistance = Math.abs(currentPrice - liqPrice) / entryPrice;
     if (currentDistance >= TARGET_SAFE_DISTANCE) return 0; // already safe
 
+    // Fetch protocol rates for this market
+    const { getProtocolFeeRates } = await import('../utils/protocol-fees.js');
+    const feeRates = await getProtocolFeeRates(pos.market, null);
+
     // Binary search for the right extra collateral
     let lo = 0;
     let hi = sizeUsd; // upper bound: full position size
     for (let i = 0; i < BINARY_SEARCH_MAX_ITER; i++) {
       const mid = (lo + hi) / 2;
       const newCollateral = collateralUsd + mid;
-      // Use protocol-aligned liquidation formula (matches getLiquidationPriceContractHelper)
+      // Use protocol-aligned liquidation formula with on-chain rates
       const newLiqPrice = computeSimulationLiquidationPrice(
-        entryPrice, sizeUsd, newCollateral, pos.side, 0.01, 0.0008,
+        entryPrice, sizeUsd, newCollateral, pos.side, feeRates.maintenanceMarginRate, feeRates.closeFeeRate,
       );
       // Use entryPrice as denominator (consistent)
       const newDistance = Math.abs(currentPrice - newLiqPrice) / entryPrice;

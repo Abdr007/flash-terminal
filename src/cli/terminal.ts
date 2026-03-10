@@ -2503,15 +2503,15 @@ export class FlashTerminal {
 
               const openRate = rawOpen / RATE_POWER;
               const closeRate = rawClose / RATE_POWER;
-              const maintenanceRate = rawMaintenanceMargin > 0 ? rawMaintenanceMargin / BPS_POWER : 0;
               const maxLev = rawMaxLeverage > 0 ? rawMaxLeverage / BPS_POWER : 0;
+              const derivedMarginRate = maxLev > 0 ? 1 / maxLev : 0;
 
               console.log(`  ${theme.section('Converted Rates')}`);
               console.log(theme.pair('openFeeRate', `${openRate} (${(openRate * 100).toFixed(4)}%)`));
               console.log(theme.pair('closeFeeRate', `${closeRate} (${(closeRate * 100).toFixed(4)}%)`));
-              console.log(theme.pair('maintenanceMarginRate', `${maintenanceRate} (${(maintenanceRate * 100).toFixed(2)}%)`));
               if (maxLev > 0) {
                 console.log(theme.pair('maxLeverage', `${maxLev}x`));
+                console.log(theme.pair('maintenanceMarginRate', `1/${maxLev} = ${derivedMarginRate} (${(derivedMarginRate * 100).toFixed(4)}%)`));
               }
               console.log('');
 
@@ -2521,19 +2521,24 @@ export class FlashTerminal {
               console.log(`  ${theme.section('getProtocolFeeRates() Output')}`);
               console.log(theme.pair('openFeeRate', `${feeRates.openFeeRate} (${(feeRates.openFeeRate * 100).toFixed(4)}%)`));
               console.log(theme.pair('closeFeeRate', `${feeRates.closeFeeRate} (${(feeRates.closeFeeRate * 100).toFixed(4)}%)`));
-              console.log(theme.pair('maintenanceMarginRate', `${feeRates.maintenanceMarginRate} (${(feeRates.maintenanceMarginRate * 100).toFixed(2)}%)`));
+              console.log(theme.pair('maxLeverage', `${feeRates.maxLeverage}x`));
+              console.log(theme.pair('maintenanceMarginRate', `${feeRates.maintenanceMarginRate} (${(feeRates.maintenanceMarginRate * 100).toFixed(4)}%)`));
               console.log(theme.pair('source', feeRates.source));
               console.log('');
 
               // Cross-check
               const openMatch = Math.abs(openRate - feeRates.openFeeRate) < 1e-12;
               const closeMatch = Math.abs(closeRate - feeRates.closeFeeRate) < 1e-12;
-              if (openMatch && closeMatch) {
+              const marginMatch = Math.abs(derivedMarginRate - feeRates.maintenanceMarginRate) < 1e-9;
+              const levMatch = maxLev > 0 && Math.abs(maxLev - feeRates.maxLeverage) < 1e-9;
+              if (openMatch && closeMatch && marginMatch && levMatch) {
                 console.log(chalk.green('  ✓ CustodyAccount and getProtocolFeeRates() match'));
               } else {
                 console.log(chalk.red('  ✗ MISMATCH between CustodyAccount and getProtocolFeeRates()'));
                 if (!openMatch) console.log(chalk.red(`    open: ${openRate} vs ${feeRates.openFeeRate}`));
                 if (!closeMatch) console.log(chalk.red(`    close: ${closeRate} vs ${feeRates.closeFeeRate}`));
+                if (!marginMatch) console.log(chalk.red(`    margin: ${derivedMarginRate} vs ${feeRates.maintenanceMarginRate}`));
+                if (!levMatch) console.log(chalk.red(`    leverage: ${maxLev} vs ${feeRates.maxLeverage}`));
               }
               console.log('');
               return;
@@ -2562,6 +2567,10 @@ export class FlashTerminal {
 
   private async handlePositionDebug(market: string): Promise<void> {
     const upper = market.toUpperCase();
+
+    // Fetch protocol fee rates for liquidation calculations
+    const { getProtocolFeeRates } = await import('../utils/protocol-fees.js');
+    const debugFeeRates = await getProtocolFeeRates(upper, null);
 
     // ─── 1. Fetch position ──────────────────────────────────────────
     let positions: Position[];
@@ -2844,7 +2853,7 @@ export class FlashTerminal {
           lines.push(`  Add ${formatUsd(addAmt).padEnd(8)} → ${chalk.green('Liquidation: None')}  ${dim(`(fully collateralized, ${newLeverage.toFixed(2)}x effective leverage)`)}`);
         } else if (pos.sizeUsd > 0 && pos.entryPrice > 0) {
           const fallbackLiqPrice = computeSimulationLiquidationPrice(
-            pos.entryPrice, pos.sizeUsd, newCollateral, pos.side, 0.01, 0.0008,
+            pos.entryPrice, pos.sizeUsd, newCollateral, pos.side, debugFeeRates.maintenanceMarginRate, debugFeeRates.closeFeeRate,
           );
           if (Number.isFinite(fallbackLiqPrice) && fallbackLiqPrice > 0) {
             lines.push(`  Add ${formatUsd(addAmt).padEnd(8)} → Liq Price: ${chalk.yellow(formatPrice(fallbackLiqPrice))}  (${newLeverage.toFixed(1)}x leverage)`);
@@ -2906,7 +2915,7 @@ export class FlashTerminal {
           // Fallback: use protocol-aligned liquidation formula
           if (targetLev >= 1 && pos.entryPrice > 0) {
             const fallbackLiq = computeSimulationLiquidationPrice(
-              pos.entryPrice, newSizeUsd, pos.collateralUsd, pos.side, 0.01, 0.0008,
+              pos.entryPrice, newSizeUsd, pos.collateralUsd, pos.side, debugFeeRates.maintenanceMarginRate, debugFeeRates.closeFeeRate,
             );
             if (Number.isFinite(fallbackLiq) && fallbackLiq > 0) {
               lines.push(`  Reduce to ${targetLev}x → Size: ${formatUsd(newSizeUsd).padEnd(10)} → Liq Price: ${chalk.yellow(formatPrice(fallbackLiq))}`);

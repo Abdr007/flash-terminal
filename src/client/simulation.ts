@@ -180,7 +180,7 @@ export class SimulatedFlashClient implements IFlashClient {
     const feeRates = await getProtocolFeeRates(market, null);
     const openFee = calcFeeUsd(sizeUsd, feeRates.openFeeRate);
 
-    const liquidationPrice = this.calcLiquidationPrice(price, leverage, side);
+    const liquidationPrice = this.calcLiquidationPrice(price, leverage, side, feeRates.maintenanceMarginRate, feeRates.closeFeeRate);
 
     // Reject positions where liquidation price equals entry (instant liquidation)
     if (liquidationPrice === price || liquidationPrice <= 0) {
@@ -201,6 +201,8 @@ export class SimulatedFlashClient implements IFlashClient {
       leverage,
       openFee,
       openedAt: Date.now(),
+      maintenanceMarginRate: feeRates.maintenanceMarginRate,
+      closeFeeRate: feeRates.closeFeeRate,
     };
 
     this.state.balance -= collateralAmount + openFee;
@@ -309,7 +311,7 @@ export class SimulatedFlashClient implements IFlashClient {
     const newLev = newCollateral > 0 ? pos.sizeUsd / newCollateral : 0;
     if (newLev > 0) {
       const currentPrice = this.livePrices.get(pos.market) ?? pos.entryPrice;
-      const newLiqPrice = this.calcLiquidationPrice(pos.entryPrice, newLev, side);
+      const newLiqPrice = this.calcLiquidationPrice(pos.entryPrice, newLev, side, pos.maintenanceMarginRate, pos.closeFeeRate);
       const wouldLiquidate = side === TradeSide.Long
         ? newLiqPrice >= currentPrice
         : newLiqPrice <= currentPrice;
@@ -337,7 +339,7 @@ export class SimulatedFlashClient implements IFlashClient {
       const unrealizedPnl = p.entryPrice > 0
         ? (priceDelta / p.entryPrice) * p.sizeUsd * pnlMultiplier
         : 0;
-      const liquidationPrice = this.calcLiquidationPrice(p.entryPrice, p.leverage, p.side);
+      const liquidationPrice = this.calcLiquidationPrice(p.entryPrice, p.leverage, p.side, p.maintenanceMarginRate, p.closeFeeRate);
 
       return {
         pubkey: `SIM_${p.id}`,
@@ -432,8 +434,8 @@ export class SimulatedFlashClient implements IFlashClient {
 
     const price = this.getPrice(market);
     const sizeUsd = collateralAmount * leverage;
-    const liqPrice = this.calcLiquidationPrice(price, leverage, side);
     const previewFeeRates = await getProtocolFeeRates(market, null);
+    const liqPrice = this.calcLiquidationPrice(price, leverage, side, previewFeeRates.maintenanceMarginRate, previewFeeRates.closeFeeRate);
     const fee = calcFeeUsd(sizeUsd, previewFeeRates.openFeeRate);
 
     return {
