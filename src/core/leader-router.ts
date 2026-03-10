@@ -24,11 +24,11 @@ import { getRpcManagerInstance, type RpcEndpoint } from '../network/rpc-manager.
 
 // ─── Configuration ───────────────────────────────────────────────────────────
 
-/** Slot polling interval — 400ms matches Solana's slot time */
-const SLOT_POLL_MS = 400;
+/** Slot polling interval — 2s balances leader awareness vs RPC rate limits */
+const SLOT_POLL_MS = 2_000;
 
-/** Leader schedule cache TTL — 60s (schedule rarely changes mid-epoch) */
-const SCHEDULE_CACHE_TTL_MS = 60_000;
+/** Leader schedule cache TTL — 5 min (schedule rarely changes mid-epoch) */
+const SCHEDULE_CACHE_TTL_MS = 300_000;
 
 /** Number of upcoming leader slots to look ahead */
 const LEADER_LOOKAHEAD_SLOTS = 4;

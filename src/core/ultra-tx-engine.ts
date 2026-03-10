@@ -33,11 +33,11 @@ import { getLeaderRouter, initLeaderRouter, shutdownLeaderRouter } from './leade
 
 // ─── Configuration ───────────────────────────────────────────────────────────
 
-/** Blockhash refresh interval — 2s for ultra-fresh blockhashes */
-const BLOCKHASH_REFRESH_MS = 2_000;
+/** Blockhash refresh interval — 10s keeps blockhash fresh without excessive RPC load */
+const BLOCKHASH_REFRESH_MS = 10_000;
 
 /** Maximum age before a cached blockhash is considered stale */
-const BLOCKHASH_MAX_AGE_MS = 4_000;
+const BLOCKHASH_MAX_AGE_MS = 15_000;
 
 /** Confirmation timeout per attempt */
 const CONFIRM_TIMEOUT_MS = 45_000;
@@ -46,10 +46,10 @@ const CONFIRM_TIMEOUT_MS = 45_000;
 const WS_CONFIRM_TIMEOUT_MS = 40_000;
 
 /** Rebroadcast interval during confirmation wait */
-const REBROADCAST_INTERVAL_MS = 2_000;
+const REBROADCAST_INTERVAL_MS = 3_000;
 
 /** HTTP poll interval (fallback when WS is slow) */
-const POLL_INTERVAL_MS = 2_000;
+const POLL_INTERVAL_MS = 3_000;
 
 /** Maximum transaction attempts before failure */
 const MAX_ATTEMPTS = 3;
@@ -468,13 +468,15 @@ export class UltraTxEngine {
       let settled = false;
       const startTime = Date.now();
 
-      const cleanup = () => {
+      const cleanup = (viaWs: boolean) => {
         settled = true;
         clearInterval(pollTimer);
         clearInterval(rebroadcastTimer);
         clearTimeout(timeoutTimer);
-        // Unsubscribe WebSocket — fire-and-forget, don't block on it
-        if (wsSubscriptionId !== undefined) {
+        // Unsubscribe WebSocket — only if confirmation came via polling (not WS).
+        // onSignature is a one-shot subscription that auto-removes after firing,
+        // so calling removeSignatureListener after WS delivery triggers a spurious warning.
+        if (wsSubscriptionId !== undefined && !viaWs) {
           try {
             conn.removeSignatureListener(wsSubscriptionId).catch(() => {});
           } catch {
@@ -485,13 +487,13 @@ export class UltraTxEngine {
 
       const onConfirmed = (viaWs: boolean) => {
         if (settled) return;
-        cleanup();
+        cleanup(viaWs);
         resolve({ confirmedViaWs: viaWs, rebroadcastCount });
       };
 
       const onError = (err: Error) => {
         if (settled) return;
-        cleanup();
+        cleanup(false);
         reject(err);
       };
 

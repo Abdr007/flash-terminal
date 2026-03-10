@@ -395,7 +395,7 @@ export class FlashClient implements IFlashClient {
     });
 
     // Start legacy blockhash pre-cache only if engine init failed
-    // (engine handles 2s refresh; running both wastes RPC quota)
+    // (engine handles its own refresh; running both wastes RPC quota)
     if (!getUltraTxEngine()) {
       this.startBlockhashRefresh();
     }
