@@ -66,6 +66,8 @@ const COMMANDS: string[] = [
   'monitor liquidations',
   'watch',
   'protocol status',
+  'protocol verify',
+  'protocol fees',
   'system status',
   'rpc status',
   'rpc test',

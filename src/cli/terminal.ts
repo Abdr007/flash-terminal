@@ -1574,6 +1574,9 @@ export class FlashTerminal {
       }
       await this.handleProtocolFees(market);
       return;
+    } else if (lower === 'protocol verify' || lower === 'verify protocol' || lower === 'verify') {
+      await this.handleProtocolVerify();
+      return;
     } else if (lower.startsWith('inspect market ') || (lower.startsWith('inspect ') && !lower.startsWith('inspect pool') && !lower.startsWith('inspect protocol') && lower !== 'inspect')) {
       // Handle both "inspect market crude oil" and "inspect crude oil"
       const prefix = lower.startsWith('inspect market ') ? 'inspect market ' : 'inspect ';
@@ -2565,6 +2568,262 @@ export class FlashTerminal {
     console.log(theme.pair('maintMarginRate', `${feeRates.maintenanceMarginRate} (${(feeRates.maintenanceMarginRate * 100).toFixed(2)}%)`));
     console.log('');
     console.log(chalk.yellow('  ⚠ Showing SDK defaults — connect in live mode for on-chain values'));
+    console.log('');
+  }
+
+  /**
+   * protocol verify — Full protocol alignment audit.
+   * Runs all checks in parallel with per-task timeout protection.
+   */
+  private async handleProtocolVerify(): Promise<void> {
+    const startTime = Date.now();
+    const TASK_TIMEOUT_MS = 1500;
+
+    console.log('');
+    console.log(`  ${theme.accentBold('FLASH TERMINAL — PROTOCOL VERIFY')}`);
+    console.log(`  ${theme.separator(50)}`);
+    console.log('');
+
+    interface CheckResult {
+      label: string;
+      ok: boolean;
+      detail: string;
+      error?: string;
+    }
+
+    const timedTask = <T>(task: Promise<T>, label: string): Promise<T> =>
+      Promise.race([
+        task,
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error(`${label} timed out`)), TASK_TIMEOUT_MS),
+        ),
+      ]);
+
+    // ── 1. RPC Health ──
+    const checkRpcHealth = async (): Promise<CheckResult> => {
+      try {
+        const latency = this.rpcManager.activeLatencyMs;
+        const ep = this.rpcManager.activeEndpoint;
+        const slot = await timedTask(
+          this.rpcManager.connection.getSlot('processed'),
+          'RPC slot fetch',
+        );
+        if (!Number.isFinite(slot) || slot <= 0) {
+          return { label: 'RPC', ok: false, detail: '', error: 'Slot not advancing' };
+        }
+        const latStr = latency > 0 ? `${latency}ms` : 'N/A';
+        if (latency > 500) {
+          return { label: 'RPC', ok: false, detail: `${ep.label} — ${latStr}`, error: `Latency ${latStr} exceeds 500ms threshold` };
+        }
+        return { label: 'RPC', ok: true, detail: `reachable (${ep.label} — ${latStr}, slot ${slot})` };
+      } catch (err: unknown) {
+        return { label: 'RPC', ok: false, detail: '', error: getErrorMessage(err) };
+      }
+    };
+
+    // ── 2. Oracle Health ──
+    const checkOracleHealth = async (): Promise<CheckResult> => {
+      try {
+        const { PriceService } = await import('../data/prices.js');
+        const priceSvc = new PriceService();
+        const oracleStart = Date.now();
+        const price = await timedTask(priceSvc.getPrice('SOL'), 'Oracle fetch');
+        const oracleMs = Date.now() - oracleStart;
+        if (!price || !Number.isFinite(price.price) || price.price <= 0) {
+          return { label: 'Oracle', ok: false, detail: '', error: 'Failed to fetch SOL price from Pyth Hermes' };
+        }
+        // Check timestamp freshness (< 5 seconds)
+        const age = price.timestamp ? (Date.now() / 1000 - price.timestamp) : 0;
+        if (age > 5) {
+          return { label: 'Oracle', ok: false, detail: '', error: `Oracle data stale (${age.toFixed(0)}s old)` };
+        }
+        return { label: 'Oracle', ok: true, detail: `healthy (Pyth Hermes — ${oracleMs}ms)` };
+      } catch (err: unknown) {
+        return { label: 'Oracle', ok: false, detail: '', error: getErrorMessage(err) };
+      }
+    };
+
+    // ── 3. Custody Account Validation ──
+    const validateCustodyAccounts = async (): Promise<CheckResult> => {
+      const markets = ['SOL', 'BTC', 'ETH'];
+      const passed: string[] = [];
+      const failed: string[] = [];
+
+      const perpClient = this.config.simulationMode ? null : (this.flashClient as any).perpClient ?? null;
+
+      for (const mkt of markets) {
+        try {
+          const { getProtocolFeeRates } = await import('../utils/protocol-fees.js');
+          const rates = await timedTask(getProtocolFeeRates(mkt, perpClient), `Custody ${mkt}`);
+          if (rates.source === 'on-chain') {
+            passed.push(mkt);
+          } else {
+            // sdk-default means we couldn't get on-chain data
+            passed.push(`${mkt} (default)`);
+          }
+        } catch (err: unknown) {
+          failed.push(`${mkt}: ${getErrorMessage(err)}`);
+        }
+      }
+
+      if (failed.length > 0) {
+        return { label: 'Custody accounts', ok: false, detail: '', error: failed.join('; ') };
+      }
+      return { label: 'Custody accounts', ok: true, detail: `valid (${passed.join(', ')})` };
+    };
+
+    // ── 4. Fee Engine Verification ──
+    const verifyFeeEngine = async (): Promise<CheckResult> => {
+      if (this.config.simulationMode) {
+        return { label: 'Fee engine', ok: true, detail: 'skipped (simulation mode — no perpClient)' };
+      }
+
+      const perpClient = (this.flashClient as any).perpClient ?? null;
+      if (!perpClient?.program?.account?.custody) {
+        return { label: 'Fee engine', ok: true, detail: 'skipped (no perpClient)' };
+      }
+
+      try {
+        const { PoolConfig, CustodyAccount } = await import('flash-sdk');
+        const { getPoolForMarket } = await import('../config/index.js');
+        const { getProtocolFeeRates } = await import('../utils/protocol-fees.js');
+        const RATE_POWER = 1_000_000_000;
+
+        const mismatches: string[] = [];
+        for (const mkt of ['SOL', 'BTC', 'ETH']) {
+          const poolName = getPoolForMarket(mkt);
+          if (!poolName) continue;
+          const pc = PoolConfig.fromIdsByName(poolName, this.config.network);
+          const custodies = pc.custodies as Array<{ custodyAccount: any; symbol: string }>;
+          const custody = custodies.find(c => c.symbol.toUpperCase() === mkt);
+          if (!custody) continue;
+
+          const rawData = await timedTask(
+            perpClient.program.account.custody.fetch(custody.custodyAccount),
+            `Fee engine ${mkt}`,
+          ) as any;
+          const custodyAcct = CustodyAccount.from(custody.custodyAccount, rawData);
+          const custodyOpen = parseFloat(custodyAcct.fees.openPosition.toString()) / RATE_POWER;
+          const custodyClose = parseFloat(custodyAcct.fees.closePosition.toString()) / RATE_POWER;
+
+          const engineRates = await getProtocolFeeRates(mkt, perpClient);
+
+          if (Math.abs(custodyOpen - engineRates.openFeeRate) > 0.00001) {
+            mismatches.push(`${mkt} open: custody=${custodyOpen}, engine=${engineRates.openFeeRate}`);
+          }
+          if (Math.abs(custodyClose - engineRates.closeFeeRate) > 0.00001) {
+            mismatches.push(`${mkt} close: custody=${custodyClose}, engine=${engineRates.closeFeeRate}`);
+          }
+        }
+
+        if (mismatches.length > 0) {
+          return { label: 'Fee engine', ok: false, detail: '', error: mismatches.join('; ') };
+        }
+        return { label: 'Fee engine', ok: true, detail: 'matches on-chain values' };
+      } catch (err: unknown) {
+        return { label: 'Fee engine', ok: false, detail: '', error: getErrorMessage(err) };
+      }
+    };
+
+    // ── 5. Liquidation Engine Verification ──
+    const verifyLiquidationEngine = async (): Promise<CheckResult> => {
+      try {
+        const { getProtocolFeeRates } = await import('../utils/protocol-fees.js');
+        const perpClient = this.config.simulationMode ? null : (this.flashClient as any).perpClient ?? null;
+        const rates = await getProtocolFeeRates('SOL', perpClient);
+
+        // Compute CLI liquidation for a reference position
+        const entryPrice = 100; // normalized reference
+        const sizeUsd = 1000;
+        const collateralUsd = 100; // 10x leverage
+        const cliLiqLong = computeSimulationLiquidationPrice(
+          entryPrice, sizeUsd, collateralUsd, TradeSide.Long,
+          rates.maintenanceMarginRate, rates.closeFeeRate,
+        );
+        const cliLiqShort = computeSimulationLiquidationPrice(
+          entryPrice, sizeUsd, collateralUsd, TradeSide.Short,
+          rates.maintenanceMarginRate, rates.closeFeeRate,
+        );
+
+        // Sanity checks: long liq < entry, short liq > entry
+        if (cliLiqLong <= 0 || cliLiqLong >= entryPrice) {
+          return { label: 'Liquidation engine', ok: false, detail: '', error: `Long liq price ${cliLiqLong} invalid for entry ${entryPrice}` };
+        }
+        if (cliLiqShort <= entryPrice) {
+          return { label: 'Liquidation engine', ok: false, detail: '', error: `Short liq price ${cliLiqShort} invalid for entry ${entryPrice}` };
+        }
+
+        // Verify symmetry: |longDist - shortDist| should be ~0
+        const longDist = entryPrice - cliLiqLong;
+        const shortDist = cliLiqShort - entryPrice;
+        if (Math.abs(longDist - shortDist) > 0.001) {
+          return { label: 'Liquidation engine', ok: false, detail: '', error: `Asymmetric liq distances: long=${longDist.toFixed(4)}, short=${shortDist.toFixed(4)}` };
+        }
+
+        // If live mode with SDK, compare against SDK helper
+        const divStatus = isDivergenceOk() ? 'aligned' : 'divergence detected';
+        return { label: 'Liquidation engine', ok: isDivergenceOk(), detail: `${divStatus} (long liq=$${cliLiqLong.toFixed(2)}, short liq=$${cliLiqShort.toFixed(2)})` };
+      } catch (err: unknown) {
+        return { label: 'Liquidation engine', ok: false, detail: '', error: getErrorMessage(err) };
+      }
+    };
+
+    // ── 6. Protocol Parameter Validation ──
+    const validateProtocolParameters = async (): Promise<CheckResult> => {
+      try {
+        const { getProtocolFeeRates } = await import('../utils/protocol-fees.js');
+        const perpClient = this.config.simulationMode ? null : (this.flashClient as any).perpClient ?? null;
+        const violations: string[] = [];
+
+        for (const mkt of ['SOL', 'BTC', 'ETH']) {
+          const rates = await getProtocolFeeRates(mkt, perpClient);
+          if (rates.maxLeverage <= 0) violations.push(`${mkt}: maxLeverage=${rates.maxLeverage}`);
+          if (rates.maintenanceMarginRate >= 1) violations.push(`${mkt}: margin≥100%`);
+          if (rates.openFeeRate < 0) violations.push(`${mkt}: negative openFee`);
+          if (rates.closeFeeRate < 0) violations.push(`${mkt}: negative closeFee`);
+        }
+
+        if (violations.length > 0) {
+          return { label: 'Protocol parameters', ok: false, detail: '', error: violations.join('; ') };
+        }
+        return { label: 'Protocol parameters', ok: true, detail: 'valid' };
+      } catch (err: unknown) {
+        return { label: 'Protocol parameters', ok: false, detail: '', error: getErrorMessage(err) };
+      }
+    };
+
+    // ── Run all checks in parallel ──
+    const results = await Promise.all([
+      checkRpcHealth(),
+      checkOracleHealth(),
+      validateCustodyAccounts(),
+      verifyFeeEngine(),
+      verifyLiquidationEngine(),
+      validateProtocolParameters(),
+    ]);
+
+    // ── Display results ──
+    let allOk = true;
+    for (const r of results) {
+      if (r.ok) {
+        console.log(chalk.green(`  ✓ ${r.label} ${r.detail}`));
+      } else {
+        allOk = false;
+        console.log(chalk.red(`  ✗ ${r.label} failed`));
+        if (r.error) {
+          console.log(chalk.dim(`    ${r.error}`));
+        }
+      }
+    }
+
+    console.log('');
+    const elapsed = Date.now() - startTime;
+    if (allOk) {
+      console.log(chalk.green(`  System Status: HEALTHY`));
+    } else {
+      console.log(chalk.red(`  System Status: DEGRADED`));
+    }
+    console.log(theme.dim(`  Completed in ${elapsed}ms`));
     console.log('');
   }
 

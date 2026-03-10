@@ -318,6 +318,7 @@ export class ToolEngine {
       `    ${cmd('inspect pool <name>')}       Inspect a specific pool`,
       `    ${cmd('inspect market <asset>')}    Deep market inspection`,
       `    ${cmd('protocol fees <market>')}    On-chain fee rate verification`,
+      `    ${cmd('protocol verify')}           Full protocol alignment audit`,
       '',
       // ── 5. Wallet ───────────────────────────────────────────────
       `  ${sec('Wallet')}`,
