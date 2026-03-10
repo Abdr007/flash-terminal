@@ -1,5 +1,6 @@
-import { appendFile, appendFileSync, mkdirSync, existsSync, writeFileSync, chmodSync, statSync, renameSync } from 'fs';
-import { join, dirname } from 'path';
+import { appendFile, appendFileSync, mkdirSync, existsSync, writeFileSync, chmodSync, statSync, renameSync, realpathSync } from 'fs';
+import { join, dirname, resolve } from 'path';
+import { homedir } from 'os';
 import chalk from 'chalk';
 
 const MAX_LOG_FILE_BYTES = 10 * 1024 * 1024; // 10MB max before rotation
@@ -46,6 +47,15 @@ export class Logger {
     this.level = opts?.level ?? LogLevel.Info;
     this.logFilePath = opts?.logFile ?? null;
     this.showInCli = opts?.showInCli ?? false;
+
+    if (this.logFilePath) {
+      // Validate log file path — must be under home directory to prevent arbitrary writes
+      const resolvedPath = resolve(this.logFilePath);
+      const home = homedir();
+      if (!resolvedPath.startsWith(home)) {
+        this.logFilePath = null; // Reject paths outside home directory
+      }
+    }
 
     if (this.logFilePath) {
       const dir = dirname(this.logFilePath);

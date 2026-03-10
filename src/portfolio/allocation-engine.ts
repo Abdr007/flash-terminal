@@ -167,6 +167,8 @@ export function filterOpportunities(
     } else {
       shortExposure += notional;
     }
+    // Deduct from free capital — prevents multiple opportunities sharing the same capital
+    freeCapital -= opp.recommendedCollateral;
   }
 
   return { accepted, rejected };

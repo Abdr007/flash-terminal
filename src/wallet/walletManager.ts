@@ -22,6 +22,13 @@ export class WalletManager {
     this.connection = connection;
   }
 
+  /** Update the RPC connection (called on failover to prevent stale balance queries). */
+  setConnection(connection: Connection): void {
+    this.connection = connection;
+    // Invalidate token balance cache — new connection may return different data
+    this.tokenBalancesCache = null;
+  }
+
   /** Reset the idle session timer (call on every signed operation). */
   resetIdleTimer(): void {
     if (this.idleTimer) clearTimeout(this.idleTimer);

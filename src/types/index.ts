@@ -70,6 +70,9 @@ export enum ActionType {
   // Transaction Debug
   TxDebug = 'tx_debug',
 
+  // TX Engine
+  TxMetrics = 'tx_metrics',
+
   // Trade Journal
   TradeHistory = 'trade_history',
 
@@ -90,7 +93,7 @@ export const OpenPositionSchema = z.object({
   market: z.string(),
   side: z.nativeEnum(TradeSide),
   collateral: z.number().positive().max(10_000_000),
-  leverage: z.number().min(1).max(1000), // absolute protocol max; per-market limits enforced at tool level
+  leverage: z.number().min(1).max(100), // protocol max 100x; per-market limits enforced at tool level
   collateral_token: z.string().optional(),
 });
 
@@ -284,6 +287,10 @@ export const SystemAuditSchema = z.object({
   action: z.literal(ActionType.SystemAudit),
 });
 
+export const TxMetricsSchema = z.object({
+  action: z.literal(ActionType.TxMetrics),
+});
+
 export const RpcStatusSchema = z.object({
   action: z.literal(ActionType.RpcStatus),
 });
@@ -362,6 +369,7 @@ export const ParsedIntentSchema = z.discriminatedUnion('action', [
   InspectMarketSchema,
   SystemStatusSchema,
   SystemAuditSchema,
+  TxMetricsSchema,
   RpcStatusSchema,
   RpcTestSchema,
   TxInspectSchema,

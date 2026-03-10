@@ -148,8 +148,9 @@ export class ProtocolStatsService {
     } catch {
       // Fall back to stale cache
       if (this.cache) return this.cache;
-      // Return empty stats as last resort
-      return {
+      // Return empty stats as last resort — cache it to prevent thundering herd
+      // of retries when the API is down
+      const fallback: ProtocolStats = {
         totalMarkets: 0,
         activeMarkets: 0,
         marketsWithOI: 0,
@@ -166,6 +167,8 @@ export class ProtocolStatsService {
         marketsByOI: [],
         fetchedAt: Date.now(),
       };
+      this.cache = fallback;
+      return fallback;
     }
   }
 }

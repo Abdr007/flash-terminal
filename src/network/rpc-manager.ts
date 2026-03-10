@@ -75,6 +75,16 @@ export class RpcManager {
     return this.endpoints.length;
   }
 
+  /** All configured endpoints (read-only snapshot for broadcast). */
+  getEndpoints(): readonly RpcEndpoint[] {
+    return this.endpoints;
+  }
+
+  /** Last known latency (ms) for a specific endpoint, or -1 if unknown. */
+  getEndpointLatency(url: string): number {
+    return this.latencyHistory.get(url) ?? -1;
+  }
+
   get fallbackCount(): number {
     return Math.max(0, this.endpoints.length - 1);
   }

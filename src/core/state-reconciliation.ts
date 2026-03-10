@@ -1,4 +1,4 @@
-import { appendFileSync, mkdirSync, existsSync } from 'fs';
+import { appendFileSync, mkdirSync, existsSync, statSync, renameSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
 import { IFlashClient, Position, Portfolio } from '../types/index.js';
@@ -19,6 +19,8 @@ const RECONCILE_INTERVAL_MS = 60_000;
 const RPC_RETRY_DELAY_MS = 400;
 const RECONCILE_LOG_DIR = join(homedir(), '.flash', 'logs');
 const RECONCILE_LOG_FILE = join(RECONCILE_LOG_DIR, 'reconcile.log');
+const RECONCILE_LOG_MAX_BYTES = 2 * 1024 * 1024; // 2MB max before rotation
+let reconcileLogWriteCount = 0;
 
 /** Small delay helper */
 function delay(ms: number): Promise<void> {
@@ -45,6 +47,20 @@ function writeReconcileLog(entry: {
       (entry.retrySucceeded !== undefined ? ` | Retry resolved: ${entry.retrySucceeded}` : '') +
       ` | Action: ${entry.action}\n`;
     appendFileSync(RECONCILE_LOG_FILE, line, { mode: 0o600 });
+
+    // Rotate log file if too large (check every 50 writes)
+    reconcileLogWriteCount++;
+    if (reconcileLogWriteCount % 50 === 0) {
+      try {
+        const stat = statSync(RECONCILE_LOG_FILE);
+        if (stat.size > RECONCILE_LOG_MAX_BYTES) {
+          const oldPath = RECONCILE_LOG_FILE + '.old';
+          renameSync(RECONCILE_LOG_FILE, oldPath);
+        }
+      } catch {
+        // Rotation is best-effort
+      }
+    }
   } catch {
     // Best-effort — never crash reconciler over log I/O
   }

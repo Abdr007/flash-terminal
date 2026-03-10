@@ -373,6 +373,13 @@ export const COMMAND_REGISTRY: CommandEntry[] = [
     description: 'Verify protocol data integrity',
   },
   {
+    name: 'tx metrics',
+    action: ActionType.TxMetrics,
+    category: 'Utilities',
+    description: 'TX engine performance stats',
+    aliases: ['tx stats', 'tx perf', 'tx engine'],
+  },
+  {
     name: 'rpc status',
     action: ActionType.RpcStatus,
     category: 'Utilities',

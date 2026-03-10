@@ -42,6 +42,7 @@ import { getLogger } from '../utils/logger.js';
 import { getErrorMessage, withRetry } from '../utils/retry.js';
 import type { WalletManager } from '../wallet/walletManager.js';
 import { getRpcManagerInstance } from '../network/rpc-manager.js';
+import { getUltraTxEngine, initUltraTxEngine } from '../core/ultra-tx-engine.js';
 
 // ─── Pyth Price Service ──────────────────────────────────────────────────────
 
@@ -279,8 +280,9 @@ const BASE_ALLOWED_PROGRAM_IDS = Object.freeze(new Set<string>([
   EVENT_AUTHORITY,
 ]));
 
-// Legacy reference — kept for backwards compatibility with validateInstructionPrograms.
-// Each FlashClient instance builds its own frozen set in the constructor.
+// Active program whitelist — updated by FlashClient constructor and getPoolConfigForMarket().
+// Starts with base system programs; Flash-specific IDs added per pool.
+// Only one FlashClient instance exists at a time; the reference is safe.
 let ALLOWED_PROGRAM_IDS: ReadonlySet<string> = BASE_ALLOWED_PROGRAM_IDS;
 
 /**
@@ -364,7 +366,8 @@ export class FlashClient implements IFlashClient {
       { prioritizationFee: config.computeUnitPrice }
     );
 
-    // [M-4] Build allowed program set from pool config, then freeze
+    // [M-4] Build allowed program set from pool config
+    // Not frozen: getPoolConfigForMarket() adds IDs when cross-pool trades occur
     const instanceAllowed = new Set<string>(BASE_ALLOWED_PROGRAM_IDS);
     instanceAllowed.add(this.poolConfig.programId.toBase58());
     if (this.poolConfig.perpComposibilityProgramId) {
@@ -382,8 +385,20 @@ export class FlashClient implements IFlashClient {
 
     this.priceService = new PythPriceService(config.pythnetUrl);
 
-    // Start background blockhash pre-cache
-    this.startBlockhashRefresh();
+    // Initialize ultra-low latency execution engine (handles its own blockhash refresh at 2s)
+    initUltraTxEngine(this.connection, this.wallet, {
+      computeUnitPrice: config.computeUnitPrice,
+      computeUnitLimit: config.computeUnitLimit,
+      dynamicPriorityFee: true,
+      multiBroadcast: true,
+      wsConfirmation: true,
+    });
+
+    // Start legacy blockhash pre-cache only if engine init failed
+    // (engine handles 2s refresh; running both wastes RPC quota)
+    if (!getUltraTxEngine()) {
+      this.startBlockhashRefresh();
+    }
   }
 
   /**
@@ -435,6 +450,9 @@ export class FlashClient implements IFlashClient {
       clearInterval(this.blockhashTimer);
       this.blockhashTimer = null;
     }
+    // Shut down ultra-tx engine
+    const txEngine = getUltraTxEngine();
+    if (txEngine) txEngine.shutdown();
   }
 
   get walletAddress(): string {
@@ -473,6 +491,10 @@ export class FlashClient implements IFlashClient {
     this.connection = connection;
     this.provider = newProvider;
     this.perpClient = newPerpClient;
+    // Propagate connection change to ultra-tx engine and wallet manager
+    const txEngine = getUltraTxEngine();
+    if (txEngine) txEngine.updateConnection(connection);
+    this.walletMgr.setConnection(connection);
     getLogger().info('CLIENT', 'Connection replaced (RPC failover)');
   }
 
@@ -631,6 +653,19 @@ export class FlashClient implements IFlashClient {
     // Freeze the instruction array to prevent mutation after validation.
     // Any attempt to push/splice instructions after this point will throw.
     const validatedInstructions = Object.freeze([...instructions]);
+
+    // ── Route through Ultra-TX Engine when available ──
+    const txEngine = getUltraTxEngine();
+    if (txEngine) {
+      const result = await txEngine.submitTransaction(
+        [...validatedInstructions],
+        additionalSigners,
+      );
+      logger.info('CLIENT', `Ultra-TX: ${result.signature} (${result.metrics.totalLatencyMs}ms, ${result.metrics.confirmedViaWs ? 'WS' : 'HTTP'}, ${result.broadcastEndpoints} endpoints)`);
+      // Reset session idle timer on successful trade
+      this.walletMgr.resetIdleTimer();
+      return result.signature;
+    }
 
     const maxAttempts = 3;
     const cuLimitIx = ComputeBudgetProgram.setComputeUnitLimit({ units: this.config.computeUnitLimit });

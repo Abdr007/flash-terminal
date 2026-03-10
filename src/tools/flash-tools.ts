@@ -400,6 +400,8 @@ export const flashOpenPosition: ToolDefinition = {
 
             // Log session trade (store openFeePaid for fee visibility)
             if (context.sessionTrades) {
+              // Cap session trades to prevent unbounded memory growth in long sessions
+              if (context.sessionTrades.length >= 500) context.sessionTrades.shift();
               context.sessionTrades.push({
                 action: 'open', market, side, leverage, collateral,
                 sizeUsd: result.sizeUsd, entryPrice: result.entryPrice,
@@ -555,6 +557,8 @@ export const flashClosePosition: ToolDefinition = {
 
             // Log session trade
             if (context.sessionTrades) {
+              // Cap session trades to prevent unbounded memory growth in long sessions
+              if (context.sessionTrades.length >= 500) context.sessionTrades.shift();
               context.sessionTrades.push({
                 action: 'close', market, side,
                 exitPrice: result.exitPrice, pnl: result.pnl,
@@ -685,6 +689,8 @@ export const flashAddCollateral: ToolDefinition = {
             });
             // Log session trade
             if (context.sessionTrades) {
+              // Cap session trades to prevent unbounded memory growth in long sessions
+              if (context.sessionTrades.length >= 500) context.sessionTrades.shift();
               context.sessionTrades.push({
                 action: 'add_collateral', market, side, collateral: amount,
                 txSignature: result.txSignature, timestamp: Date.now(),
@@ -810,6 +816,8 @@ export const flashRemoveCollateral: ToolDefinition = {
 
             // Log session trade
             if (context.sessionTrades) {
+              // Cap session trades to prevent unbounded memory growth in long sessions
+              if (context.sessionTrades.length >= 500) context.sessionTrades.shift();
               context.sessionTrades.push({
                 action: 'remove_collateral', market, side, collateral: amount,
                 txSignature: result.txSignature, timestamp: Date.now(),
@@ -2658,6 +2666,50 @@ const systemAuditTool: ToolDefinition = {
   },
 };
 
+// ─── tx_metrics ──────────────────────────────────────────────────────────────
+
+const txMetricsTool: ToolDefinition = {
+  name: 'tx_metrics',
+  description: 'Show ultra-TX engine performance metrics',
+  parameters: z.object({}),
+  execute: async (): Promise<ToolResult> => {
+    const { getUltraTxEngine } = await import('../core/ultra-tx-engine.js');
+    const engine = getUltraTxEngine();
+    if (!engine) {
+      return { success: false, message: 'Ultra-TX engine not initialized (simulation mode or no wallet connected).' };
+    }
+
+    const s = engine.getMetricsSummary();
+    if (s.totalTxs === 0) {
+      return { success: true, message: theme.titleBlock('TX ENGINE METRICS') + '\n\n  No transactions recorded yet.\n' };
+    }
+
+    const lines = [
+      theme.titleBlock('TX ENGINE METRICS'),
+      '',
+      theme.pair('Transactions', String(s.totalTxs)),
+      theme.pair('Avg Total Latency', `${s.avgTotalLatencyMs}ms`),
+      theme.pair('Avg Confirm Time', `${s.avgConfirmLatencyMs}ms`),
+      theme.pair('P50 Confirm', `${s.p50ConfirmMs}ms`),
+      theme.pair('P95 Confirm', `${s.p95ConfirmMs}ms`),
+      theme.pair('Avg Blockhash Fetch', s.avgBlockhashLatencyMs === 0 ? 'pre-cached' : `${s.avgBlockhashLatencyMs}ms`),
+      theme.pair('Avg Build Time', `${s.avgBuildTimeMs}ms`),
+      theme.pair('WS Confirmation', `${s.wsConfirmPct}%`),
+      theme.pair('Avg Broadcast Endpoints', `${s.avgBroadcastCount}`),
+      theme.pair('Avg Rebroadcasts', `${s.avgRebroadcastCount}`),
+      '',
+      theme.titleBlock('LEADER ROUTING'),
+      '',
+      theme.pair('Leader Routed', `${s.leaderRoutedPct}%`),
+      theme.pair('Avg Slot Delay', s.avgSlotDelay > 0 ? `${s.avgSlotDelay} slots` : 'n/a'),
+      theme.pair('Fastest Endpoint', s.fastestEndpoint ?? 'n/a'),
+      '',
+    ];
+
+    return { success: true, message: lines.join('\n') };
+  },
+};
+
 export const allFlashTools: ToolDefinition[] = [
   flashOpenPosition,
   flashClosePosition,
@@ -2697,4 +2749,5 @@ export const allFlashTools: ToolDefinition[] = [
   txDebugTool,
   tradeHistoryTool,
   systemAuditTool,
+  txMetricsTool,
 ];

@@ -37,7 +37,7 @@ export function analyzeRebalance(
   positions: Position[],
   totalCapital: number,
 ): RebalanceResult {
-  if (positions.length === 0) {
+  if (positions.length === 0 || !Number.isFinite(totalCapital) || totalCapital <= 0) {
     return {
       balanced: true,
       longPct: 0,
@@ -74,7 +74,7 @@ export function analyzeRebalance(
     balanced = false;
     const longs = positions
       .filter((p) => p.side === TradeSide.Long)
-      .sort((a, b) => a.unrealizedPnlPercent - b.unrealizedPnlPercent);
+      .sort((a, b) => (a.unrealizedPnlPercent || 0) - (b.unrealizedPnlPercent || 0));
 
     if (longs.length > 0) {
       const weakest = longs[0];
@@ -92,7 +92,7 @@ export function analyzeRebalance(
     balanced = false;
     const shorts = positions
       .filter((p) => p.side === TradeSide.Short)
-      .sort((a, b) => a.unrealizedPnlPercent - b.unrealizedPnlPercent);
+      .sort((a, b) => (a.unrealizedPnlPercent || 0) - (b.unrealizedPnlPercent || 0));
 
     if (shorts.length > 0) {
       const weakest = shorts[0];
@@ -121,17 +121,20 @@ export function analyzeRebalance(
   }
 
   // ── Step 4: Concentration check on remaining positions ──
+  // Use totalCapital as denominator (not remainingTotal) so concentration
+  // is measured against total portfolio, preventing false triggers when
+  // portfolio is mostly cash.
   for (const [market, exposure] of remainingExposure.entries()) {
-    const pct = remainingTotal > 0 ? exposure / remainingTotal : 0;
+    const pct = totalCapital > 0 ? exposure / totalCapital : 0;
     if (pct > REBALANCE_CONCENTRATION_TRIGGER) {
       balanced = false;
       const marketPositions = remainingPositions
         .filter((p) => p.market === market)
-        .sort((a, b) => a.unrealizedPnlPercent - b.unrealizedPnlPercent);
+        .sort((a, b) => (a.unrealizedPnlPercent || 0) - (b.unrealizedPnlPercent || 0));
 
       if (marketPositions.length > 0) {
         const target = marketPositions[0];
-        const reductionTarget = exposure - remainingTotal * MAX_MARKET_EXPOSURE;
+        const reductionTarget = exposure - totalCapital * MAX_MARKET_EXPOSURE;
         if (reductionTarget > 0) {
           actions.push({
             type: 'reduce_collateral',

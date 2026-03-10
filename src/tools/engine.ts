@@ -266,6 +266,9 @@ export class ToolEngine {
       case ActionType.TxDebug:
         return { toolName: 'tx_debug', params: { signature: intent.signature, showState: intent.showState } };
 
+      case ActionType.TxMetrics:
+        return { toolName: 'tx_metrics', params: {} };
+
       case ActionType.TradeHistory:
         return { toolName: 'trade_history', params: {} };
 

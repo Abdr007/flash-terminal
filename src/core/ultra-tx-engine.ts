@@ -1,0 +1,1089 @@
+/**
+ * Ultra-Low Latency Solana Execution Engine
+ *
+ * The ONLY component responsible for sending transactions to the Solana network.
+ * All trading commands route through this engine for maximum speed and reliability.
+ *
+ * Architecture:
+ *   1. Blockhash Pipeline — 2s refresh, pre-cached, zero-latency access
+ *   2. Prebuilt Transactions — sign-ready tx built before user confirms
+ *   3. Dynamic Compute Priority — scales with network congestion
+ *   4. Multi-Endpoint Broadcast — parallel submission to all healthy RPCs
+ *   5. WebSocket Confirmation — instant confirmation via subscription
+ *   6. Transaction Rebroadcast — periodic resend until confirmed
+ *   7. Latency Metrics — full pipeline timing for diagnostics
+ *   8. Failover Resilience — automatic endpoint rotation on failure
+ */
+
+import {
+  Connection,
+  Keypair,
+  TransactionInstruction,
+  Signer,
+  ComputeBudgetProgram,
+  VersionedTransaction,
+  MessageV0,
+  type Commitment,
+} from '@solana/web3.js';
+import { getLogger } from '../utils/logger.js';
+import { getRpcManagerInstance } from '../network/rpc-manager.js';
+import { createConnection } from '../wallet/connection.js';
+import { getErrorMessage } from '../utils/retry.js';
+import { getLeaderRouter, initLeaderRouter, shutdownLeaderRouter } from './leader-router.js';
+
+// ─── Configuration ───────────────────────────────────────────────────────────
+
+/** Blockhash refresh interval — 2s for ultra-fresh blockhashes */
+const BLOCKHASH_REFRESH_MS = 2_000;
+
+/** Maximum age before a cached blockhash is considered stale */
+const BLOCKHASH_MAX_AGE_MS = 4_000;
+
+/** Confirmation timeout per attempt */
+const CONFIRM_TIMEOUT_MS = 45_000;
+
+/** WebSocket confirmation timeout — fallback to polling if WS doesn't fire */
+const WS_CONFIRM_TIMEOUT_MS = 40_000;
+
+/** Rebroadcast interval during confirmation wait */
+const REBROADCAST_INTERVAL_MS = 2_000;
+
+/** HTTP poll interval (fallback when WS is slow) */
+const POLL_INTERVAL_MS = 2_000;
+
+/** Maximum transaction attempts before failure */
+const MAX_ATTEMPTS = 3;
+
+/** Priority fee floor (microLamports) — minimum even in low congestion */
+const PRIORITY_FEE_FLOOR = 100_000;
+
+/** Priority fee ceiling (microLamports) — cap to prevent overpay */
+const PRIORITY_FEE_CEILING = 5_000_000;
+
+/** Compute unit limit for Flash Trade transactions */
+const DEFAULT_CU_LIMIT = 600_000;
+
+/** Recent priority fee sample size for dynamic calculation */
+const PRIORITY_FEE_SAMPLE_SIZE = 20;
+
+/** Priority fee cache TTL */
+const PRIORITY_FEE_CACHE_MS = 10_000;
+
+/** Maximum number of metrics entries to retain */
+const MAX_METRICS_ENTRIES = 100;
+
+// ─── Types ───────────────────────────────────────────────────────────────────
+
+export interface TxEngineConfig {
+  /** Base compute unit price (microLamports) */
+  computeUnitPrice: number;
+  /** Compute unit limit */
+  computeUnitLimit: number;
+  /** Enable dynamic priority fee scaling */
+  dynamicPriorityFee: boolean;
+  /** Enable multi-endpoint broadcast */
+  multiBroadcast: boolean;
+  /** Enable WebSocket confirmation */
+  wsConfirmation: boolean;
+}
+
+export interface TxSubmitResult {
+  signature: string;
+  confirmationTimeMs: number;
+  attempts: number;
+  broadcastEndpoints: number;
+  metrics: TxMetrics;
+}
+
+export interface TxMetrics {
+  /** Time to acquire blockhash (0 if pre-cached) */
+  blockhashLatencyMs: number;
+  /** Time to build + sign the transaction */
+  buildTimeMs: number;
+  /** Time from first broadcast to confirmation */
+  confirmLatencyMs: number;
+  /** Total end-to-end time */
+  totalLatencyMs: number;
+  /** Number of endpoints that received the broadcast */
+  broadcastCount: number;
+  /** Number of rebroadcasts sent */
+  rebroadcastCount: number;
+  /** Whether WS confirmation was used (vs HTTP polling) */
+  confirmedViaWs: boolean;
+  /** Priority fee used (microLamports) */
+  priorityFee: number;
+  /** Which attempt succeeded (1-based) */
+  successAttempt: number;
+  /** Whether leader-aware routing was used for initial broadcast */
+  leaderRouted: boolean;
+  /** Slot at which the tx was submitted */
+  submittedAtSlot: number;
+}
+
+interface CachedBlockhash {
+  blockhash: string;
+  lastValidBlockHeight: number;
+  fetchedAt: number;
+}
+
+// ─── Singleton ───────────────────────────────────────────────────────────────
+
+let _instance: UltraTxEngine | null = null;
+
+export function getUltraTxEngine(): UltraTxEngine | null {
+  return _instance;
+}
+
+export function initUltraTxEngine(
+  primaryConnection: Connection,
+  wallet: Keypair,
+  config: Partial<TxEngineConfig> = {}
+): UltraTxEngine {
+  if (_instance) {
+    _instance.shutdown();
+  }
+  _instance = new UltraTxEngine(primaryConnection, wallet, config);
+  return _instance;
+}
+
+export function shutdownUltraTxEngine(): void {
+  if (_instance) {
+    _instance.shutdown();
+    _instance = null;
+  }
+}
+
+// ─── Engine ──────────────────────────────────────────────────────────────────
+
+export class UltraTxEngine {
+  private primaryConnection: Connection;
+  private wallet: Keypair;
+  private config: TxEngineConfig;
+
+  // Blockhash pipeline
+  private cachedBlockhash: CachedBlockhash | null = null;
+  private blockhashTimer: ReturnType<typeof setInterval> | null = null;
+  private blockhashInflight: Promise<CachedBlockhash> | null = null;
+
+  // Priority fee pipeline
+  private cachedPriorityFee: { fee: number; fetchedAt: number } | null = null;
+  private priorityFeeInflight: Promise<number> | null = null;
+
+  // Broadcast connections (all healthy endpoints)
+  private broadcastConnections: Connection[] = [];
+  private broadcastRefreshTimer: ReturnType<typeof setInterval> | null = null;
+
+  // Concurrency guard — prevents parallel submitTransaction calls from racing
+  private submitInProgress = false;
+
+  // Metrics
+  private metricsHistory: TxMetrics[] = [];
+
+  constructor(
+    primaryConnection: Connection,
+    wallet: Keypair,
+    config: Partial<TxEngineConfig> = {}
+  ) {
+    this.primaryConnection = primaryConnection;
+    this.wallet = wallet;
+    this.config = {
+      computeUnitPrice: config.computeUnitPrice ?? 500_000,
+      computeUnitLimit: config.computeUnitLimit ?? DEFAULT_CU_LIMIT,
+      dynamicPriorityFee: config.dynamicPriorityFee ?? true,
+      multiBroadcast: config.multiBroadcast ?? true,
+      wsConfirmation: config.wsConfirmation ?? true,
+    };
+
+    this.startBlockhashPipeline();
+    this.refreshBroadcastConnections();
+
+    // Refresh broadcast connections every 30s
+    this.broadcastRefreshTimer = setInterval(() => {
+      this.refreshBroadcastConnections();
+    }, 30_000);
+    this.broadcastRefreshTimer.unref();
+
+    // Initialize leader-aware routing
+    initLeaderRouter(primaryConnection);
+
+    getLogger().info('TX-ENGINE', 'Ultra-low latency execution engine initialized (leader-aware)');
+  }
+
+  // ─── Blockhash Pipeline ──────────────────────────────────────────────────
+
+  private startBlockhashPipeline(): void {
+    // Immediate first fetch
+    this.refreshBlockhash().catch(() => {});
+
+    this.blockhashTimer = setInterval(() => {
+      this.refreshBlockhash().catch(() => {});
+    }, BLOCKHASH_REFRESH_MS);
+    this.blockhashTimer.unref();
+  }
+
+  private async refreshBlockhash(): Promise<CachedBlockhash> {
+    // Deduplicate concurrent fetches
+    if (this.blockhashInflight) return this.blockhashInflight;
+
+    this.blockhashInflight = (async () => {
+      try {
+        const result = await this.primaryConnection.getLatestBlockhash('confirmed');
+        const cached: CachedBlockhash = {
+          blockhash: result.blockhash,
+          lastValidBlockHeight: result.lastValidBlockHeight,
+          fetchedAt: Date.now(),
+        };
+        this.cachedBlockhash = cached;
+        return cached;
+      } finally {
+        this.blockhashInflight = null;
+      }
+    })();
+
+    return this.blockhashInflight;
+  }
+
+  /**
+   * Get a fresh blockhash — uses pre-cached value if within age limit,
+   * otherwise fetches on-demand. Returns fetch latency for metrics.
+   */
+  private async getBlockhash(forceRefresh = false): Promise<{ blockhash: CachedBlockhash; fetchLatencyMs: number }> {
+    if (!forceRefresh && this.cachedBlockhash &&
+        (Date.now() - this.cachedBlockhash.fetchedAt) < BLOCKHASH_MAX_AGE_MS) {
+      return { blockhash: this.cachedBlockhash, fetchLatencyMs: 0 };
+    }
+
+    const start = Date.now();
+    const result = await this.refreshBlockhash();
+    return { blockhash: result, fetchLatencyMs: Date.now() - start };
+  }
+
+  // ─── Dynamic Priority Fee ────────────────────────────────────────────────
+
+  /**
+   * Compute optimal priority fee based on recent network fees.
+   * Uses getRecentPrioritizationFees() to sample the network,
+   * then targets the 75th percentile for fast inclusion.
+   */
+  private async getDynamicPriorityFee(): Promise<number> {
+    if (!this.config.dynamicPriorityFee) {
+      return this.config.computeUnitPrice;
+    }
+
+    // Return cached if fresh
+    if (this.cachedPriorityFee &&
+        (Date.now() - this.cachedPriorityFee.fetchedAt) < PRIORITY_FEE_CACHE_MS) {
+      return this.cachedPriorityFee.fee;
+    }
+
+    // Deduplicate concurrent fetches
+    if (this.priorityFeeInflight) return this.priorityFeeInflight;
+
+    this.priorityFeeInflight = (async () => {
+      try {
+        const fees = await this.primaryConnection.getRecentPrioritizationFees();
+
+        if (!fees || fees.length === 0) {
+          // Cache the fallback to prevent repeated failing RPC calls
+          this.cachedPriorityFee = { fee: this.config.computeUnitPrice, fetchedAt: Date.now() };
+          return this.config.computeUnitPrice;
+        }
+
+        // Sort by fee, take the 75th percentile
+        const sorted = fees
+          .map(f => f.prioritizationFee)
+          .filter(f => f > 0)
+          .sort((a, b) => a - b);
+
+        if (sorted.length === 0) {
+          this.cachedPriorityFee = { fee: this.config.computeUnitPrice, fetchedAt: Date.now() };
+          return this.config.computeUnitPrice;
+        }
+
+        const p75Index = Math.min(
+          Math.floor(sorted.length * 0.75),
+          sorted.length - 1
+        );
+        const p75Fee = sorted[p75Index];
+
+        // Clamp between floor and ceiling
+        const fee = Math.max(PRIORITY_FEE_FLOOR, Math.min(p75Fee, PRIORITY_FEE_CEILING));
+
+        this.cachedPriorityFee = { fee, fetchedAt: Date.now() };
+        return fee;
+      } catch {
+        // Cache the fallback to prevent hot loop of failing RPC calls
+        this.cachedPriorityFee = { fee: this.config.computeUnitPrice, fetchedAt: Date.now() };
+        return this.config.computeUnitPrice;
+      } finally {
+        this.priorityFeeInflight = null;
+      }
+    })();
+
+    return this.priorityFeeInflight;
+  }
+
+  // ─── Multi-Endpoint Broadcast ────────────────────────────────────────────
+
+  /**
+   * Build broadcast connection list from all healthy RPC endpoints.
+   * The primary connection is always included.
+   */
+  private refreshBroadcastConnections(): void {
+    const rpcMgr = getRpcManagerInstance();
+    if (!rpcMgr || !this.config.multiBroadcast) {
+      this.broadcastConnections = [this.primaryConnection];
+      return;
+    }
+
+    const connections: Connection[] = [this.primaryConnection];
+
+    // Add connections for all non-active endpoints
+    // We already have the active one as primaryConnection
+    const activeUrl = rpcMgr.activeEndpoint.url;
+    const allEndpoints = rpcMgr.getEndpoints();
+
+    for (const ep of allEndpoints) {
+      if (ep.url !== activeUrl) {
+          try {
+            // Lightweight connections for broadcast only — no WebSocket needed
+            const conn = new Connection(ep.url, {
+              commitment: 'confirmed',
+              disableRetryOnRateLimit: true,
+            });
+            connections.push(conn);
+          } catch {
+            // Skip invalid endpoints
+          }
+        }
+    }
+
+    this.broadcastConnections = connections;
+  }
+
+  /**
+   * Broadcast a serialized transaction to all healthy endpoints.
+   *
+   * Uses leader-aware routing when available:
+   *   1. Leader-preferred endpoint receives the tx first (lowest latency)
+   *   2. Remaining endpoints receive the tx in parallel immediately after
+   *
+   * Falls back to parallel broadcast if leader routing is unavailable.
+   * Returns the number of endpoints that accepted the broadcast.
+   */
+  private async broadcastToAll(txBytes: Buffer): Promise<{ signature: string; broadcastCount: number; leaderRouted: boolean }> {
+    const router = getLeaderRouter();
+    let leaderRouted = false;
+    let connections = this.broadcastConnections;
+
+    // Apply leader-aware ordering if available
+    if (router) {
+      const order = router.getBroadcastOrder(
+        this.primaryConnection,
+        this.broadcastConnections,
+      );
+      connections = order.connections;
+      leaderRouted = order.leaderRouted;
+    }
+
+    // Leader-first broadcast: send to the preferred endpoint first,
+    // then immediately fan out to the rest in parallel
+    let signature = '';
+    let broadcastCount = 0;
+
+    if (leaderRouted && connections.length > 1) {
+      // Send to leader-preferred endpoint first
+      try {
+        signature = await connections[0].sendRawTransaction(txBytes, {
+          skipPreflight: true,
+          maxRetries: 0,
+        });
+        broadcastCount = 1;
+      } catch {
+        // Leader endpoint failed — will try all remaining
+      }
+
+      // Fan out to remaining endpoints in parallel (non-blocking)
+      const remaining = connections.slice(1);
+      const remainingResults = await Promise.allSettled(
+        remaining.map(conn =>
+          conn.sendRawTransaction(txBytes, {
+            skipPreflight: true,
+            maxRetries: 0,
+          })
+        )
+      );
+
+      for (const result of remainingResults) {
+        if (result.status === 'fulfilled') {
+          if (!signature) signature = result.value;
+          broadcastCount++;
+        }
+      }
+    } else {
+      // Standard parallel broadcast (no leader data)
+      const results = await Promise.allSettled(
+        connections.map(conn =>
+          conn.sendRawTransaction(txBytes, {
+            skipPreflight: true,
+            maxRetries: 0,
+          })
+        )
+      );
+
+      for (const result of results) {
+        if (result.status === 'fulfilled') {
+          if (!signature) signature = result.value;
+          broadcastCount++;
+        }
+      }
+    }
+
+    if (!signature) {
+      const firstError = `All ${connections.length} broadcast endpoints failed`;
+      throw new Error(firstError);
+    }
+
+    return { signature, broadcastCount, leaderRouted };
+  }
+
+  // ─── WebSocket Confirmation ──────────────────────────────────────────────
+
+  /**
+   * Wait for transaction confirmation using WebSocket subscription with
+   * HTTP polling fallback. The first confirmation source wins.
+   */
+  private async waitForConfirmation(
+    signature: string,
+    txBytes: Buffer,
+    conn: Connection,
+    timeoutMs: number
+  ): Promise<{ confirmedViaWs: boolean; rebroadcastCount: number }> {
+    const logger = getLogger();
+    let confirmedViaWs = false;
+    let rebroadcastCount = 0;
+    let wsSubscriptionId: number | undefined;
+
+    return new Promise<{ confirmedViaWs: boolean; rebroadcastCount: number }>((resolve, reject) => {
+      let settled = false;
+      const startTime = Date.now();
+
+      const cleanup = () => {
+        settled = true;
+        clearInterval(pollTimer);
+        clearInterval(rebroadcastTimer);
+        clearTimeout(timeoutTimer);
+        // Unsubscribe WebSocket — fire-and-forget, don't block on it
+        if (wsSubscriptionId !== undefined) {
+          try {
+            conn.removeSignatureListener(wsSubscriptionId).catch(() => {});
+          } catch {
+            // Already cleaned up
+          }
+        }
+      };
+
+      const onConfirmed = (viaWs: boolean) => {
+        if (settled) return;
+        cleanup();
+        resolve({ confirmedViaWs: viaWs, rebroadcastCount });
+      };
+
+      const onError = (err: Error) => {
+        if (settled) return;
+        cleanup();
+        reject(err);
+      };
+
+      // ── WebSocket Confirmation ──
+      if (this.config.wsConfirmation) {
+        try {
+          // Assign to a local first, then to outer variable — ensures cleanup
+          // can find it even if the callback fires synchronously
+          const subId = conn.onSignature(
+            signature,
+            (result) => {
+              if (result.err) {
+                onError(new Error(`Transaction failed on-chain: ${JSON.stringify(result.err)}`));
+              } else {
+                confirmedViaWs = true;
+                onConfirmed(true);
+              }
+            },
+            'confirmed'
+          );
+          wsSubscriptionId = subId;
+        } catch {
+          // WS subscription failed — rely on polling
+          logger.debug('TX-ENGINE', 'WebSocket subscription failed — using HTTP polling only');
+        }
+      }
+
+      // ── HTTP Polling (fallback + parallel) ──
+      const pollTimer = setInterval(async () => {
+        if (settled) return;
+        try {
+          const { value } = await conn.getSignatureStatuses([signature]);
+          const status = value?.[0];
+          if (status?.err) {
+            onError(new Error(`Transaction failed on-chain: ${JSON.stringify(status.err)}`));
+            return;
+          }
+          if (status?.confirmationStatus === 'confirmed' || status?.confirmationStatus === 'finalized') {
+            onConfirmed(false);
+          }
+        } catch {
+          // Poll failure — will retry next interval
+        }
+      }, POLL_INTERVAL_MS);
+
+      // ── Rebroadcast Engine ──
+      // Re-evaluate leader routing on each cycle for optimal delivery
+      const rebroadcastTargets = [...this.broadcastConnections];
+      const rebroadcastTimer = setInterval(() => {
+        if (settled) return;
+        rebroadcastCount++;
+
+        // Re-evaluate leader ordering each cycle — leader changes every ~400ms
+        const router = getLeaderRouter();
+        let targets = rebroadcastTargets;
+        if (router) {
+          const order = router.getBroadcastOrder(conn, rebroadcastTargets);
+          targets = order.connections;
+        }
+
+        for (const broadcastConn of targets) {
+          broadcastConn.sendRawTransaction(txBytes, {
+            skipPreflight: true,
+            maxRetries: 0,
+          }).catch(() => {});
+        }
+      }, REBROADCAST_INTERVAL_MS);
+
+      // ── Timeout ──
+      const timeoutTimer = setTimeout(() => {
+        if (settled) return;
+        // One final status check before declaring timeout
+        conn.getSignatureStatuses([signature])
+          .then(({ value }) => {
+            const status = value?.[0];
+            if (status && !status.err &&
+                (status.confirmationStatus === 'confirmed' || status.confirmationStatus === 'finalized')) {
+              onConfirmed(false);
+            } else {
+              onError(new Error(`Not confirmed within ${timeoutMs / 1000}s`));
+            }
+          })
+          .catch(() => {
+            onError(new Error(`Not confirmed within ${timeoutMs / 1000}s`));
+          });
+      }, timeoutMs);
+    });
+  }
+
+  // ─── Pre-Send Simulation ─────────────────────────────────────────────────
+
+  /**
+   * Simulate transaction before broadcast. Catches program errors early
+   * to avoid wasting time on doomed transactions.
+   */
+  private async simulateTransaction(vtx: VersionedTransaction, conn: Connection): Promise<void> {
+    try {
+      const simResult = await conn.simulateTransaction(vtx, {
+        sigVerify: false,
+        replaceRecentBlockhash: true,
+      });
+
+      if (simResult.value.err) {
+        const simErr = JSON.stringify(simResult.value.err);
+        // Program errors are terminal — don't retry
+        if (simErr.includes('InstructionError') || simErr.includes('Custom')) {
+          throw new Error(this.mapProgramError(simErr));
+        }
+        getLogger().info('TX-ENGINE', `Pre-send simulation warning: ${simErr}`);
+      }
+    } catch (simError: unknown) {
+      const simMsg = getErrorMessage(simError);
+      // Re-throw program errors
+      if (simMsg.includes('simulation failed') || simMsg.includes('Trade rejected') || simMsg.includes('Transaction rejected')) {
+        throw simError;
+      }
+      // Non-critical simulation failures (RPC timeout etc) — proceed with send
+      getLogger().debug('TX-ENGINE', `Pre-send simulation skipped: ${simMsg}`);
+    }
+  }
+
+  // ─── Core Submit ─────────────────────────────────────────────────────────
+
+  /**
+   * Submit a transaction with ultra-low latency optimizations.
+   *
+   * Pipeline:
+   *   1. Get pre-cached blockhash (0ms if warm)
+   *   2. Compute dynamic priority fee
+   *   3. Build + sign transaction
+   *   4. Simulate on first attempt
+   *   5. Multi-endpoint broadcast
+   *   6. WebSocket + HTTP polling confirmation
+   *   7. Rebroadcast every 2s until confirmed
+   *   8. Retry with fresh blockhash on timeout
+   */
+  async submitTransaction(
+    instructions: TransactionInstruction[],
+    additionalSigners: Signer[] = [],
+  ): Promise<TxSubmitResult> {
+    // Concurrency guard — only one submitTransaction at a time
+    if (this.submitInProgress) {
+      throw new Error('Another transaction is already in progress. Wait for it to complete.');
+    }
+    this.submitInProgress = true;
+
+    try {
+      return await this._submitTransactionInner(instructions, additionalSigners);
+    } finally {
+      this.submitInProgress = false;
+    }
+  }
+
+  private async _submitTransactionInner(
+    instructions: TransactionInstruction[],
+    additionalSigners: Signer[],
+  ): Promise<TxSubmitResult> {
+    const logger = getLogger();
+    const pipelineStart = Date.now();
+    let lastError = '';
+    let lastSignature = '';
+    let totalBroadcastCount = 0;
+
+    // Metrics accumulators
+    let blockhashLatencyMs = 0;
+    let buildTimeMs = 0;
+    let confirmLatencyMs = 0;
+    let rebroadcastCount = 0;
+    let confirmedViaWs = false;
+    let priorityFee = this.config.computeUnitPrice;
+    let leaderRouted = false;
+    let submittedAtSlot = 0;
+
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      const conn = this.primaryConnection;
+
+      // Check if previous attempt's tx landed late
+      if (attempt > 1 && lastSignature) {
+        try {
+          const { value } = await conn.getSignatureStatuses([lastSignature]);
+          const status = value?.[0];
+          if (status && !status.err &&
+              (status.confirmationStatus === 'confirmed' || status.confirmationStatus === 'finalized')) {
+            logger.info('TX-ENGINE', `Previous tx confirmed (late detection): ${lastSignature}`);
+            const metrics = this.buildMetrics({
+              blockhashLatencyMs, buildTimeMs,
+              confirmLatencyMs: Date.now() - pipelineStart - buildTimeMs - blockhashLatencyMs,
+              totalLatencyMs: Date.now() - pipelineStart,
+              broadcastCount: totalBroadcastCount, rebroadcastCount,
+              confirmedViaWs: false, priorityFee, successAttempt: attempt - 1,
+              leaderRouted, submittedAtSlot,
+            });
+            return { signature: lastSignature, confirmationTimeMs: Date.now() - pipelineStart, attempts: attempt - 1, broadcastEndpoints: totalBroadcastCount, metrics };
+          }
+        } catch {
+          // Best-effort — proceed with retry
+        }
+      }
+
+      if (attempt === 1) {
+        process.stdout.write('  Sending transaction...   \r');
+      } else {
+        process.stdout.write(`  Retry ${attempt}/${MAX_ATTEMPTS} (fresh blockhash)...\r`);
+        logger.info('TX-ENGINE', `Retry attempt ${attempt}/${MAX_ATTEMPTS}`);
+      }
+
+      try {
+        // ── Step 1: Blockhash ──
+        const forceRefresh = attempt > 1;
+        const { blockhash: bh, fetchLatencyMs: bhLatency } = await this.getBlockhash(forceRefresh);
+        blockhashLatencyMs = bhLatency;
+
+        // ── Step 2: Priority Fee ──
+        const buildStart = Date.now();
+        priorityFee = await this.getDynamicPriorityFee();
+
+        // ── Step 3: Build + Sign ──
+        const cuLimitIx = ComputeBudgetProgram.setComputeUnitLimit({ units: this.config.computeUnitLimit });
+        const cuPriceIx = ComputeBudgetProgram.setComputeUnitPrice({ microLamports: priorityFee });
+
+        const allIxs = [cuLimitIx, cuPriceIx, ...instructions];
+        const message = MessageV0.compile({
+          payerKey: this.wallet.publicKey,
+          instructions: allIxs,
+          recentBlockhash: bh.blockhash,
+          addressLookupTableAccounts: [],
+        });
+        const vtx = new VersionedTransaction(message);
+        vtx.sign([this.wallet, ...additionalSigners]);
+
+        buildTimeMs = Date.now() - buildStart;
+
+        // ── Step 4: Simulate (first attempt only) ──
+        if (attempt === 1) {
+          await this.simulateTransaction(vtx, conn);
+        }
+
+        // ── Step 5: Multi-Endpoint Broadcast ──
+        const txBytes = Buffer.from(vtx.serialize());
+        const confirmStart = Date.now();
+
+        process.stdout.write('  Broadcasting...          \r');
+
+        // Record slot at broadcast time for inclusion tracking
+        const router = getLeaderRouter();
+        submittedAtSlot = router?.getCurrentSlot() ?? 0;
+
+        let signature: string;
+        let broadcastCount: number;
+
+        if (this.config.multiBroadcast && this.broadcastConnections.length > 1) {
+          const result = await this.broadcastToAll(txBytes);
+          signature = result.signature;
+          broadcastCount = result.broadcastCount;
+          leaderRouted = result.leaderRouted;
+        } else {
+          signature = await conn.sendRawTransaction(txBytes, {
+            skipPreflight: true,
+            maxRetries: 0,
+          });
+          broadcastCount = 1;
+        }
+
+        lastSignature = signature;
+        totalBroadcastCount = broadcastCount;
+        logger.info('TX-ENGINE', `Tx broadcast: ${signature} (${txBytes.length}B, ${broadcastCount} endpoints, attempt ${attempt}, priority ${priorityFee}µL${leaderRouted ? ', leader-routed' : ''})`);
+
+        // ── Step 6: Wait for Confirmation ──
+        // Reduce timeout if blockhash fetch was slow
+        const effectiveTimeout = bhLatency > 5_000
+          ? Math.max(CONFIRM_TIMEOUT_MS - bhLatency, 20_000)
+          : CONFIRM_TIMEOUT_MS;
+
+        process.stdout.write('  Awaiting confirmation... \r');
+
+        const confirmResult = await this.waitForConfirmation(
+          signature, txBytes, conn, effectiveTimeout
+        );
+
+        confirmLatencyMs = Date.now() - confirmStart;
+        rebroadcastCount = confirmResult.rebroadcastCount;
+        confirmedViaWs = confirmResult.confirmedViaWs;
+
+        // Success!
+        process.stdout.write('                              \r');
+        logger.info('TX-ENGINE', `Tx confirmed: ${signature} (${confirmLatencyMs}ms, ${confirmedViaWs ? 'WS' : 'HTTP'}, ${rebroadcastCount} rebroadcasts)`);
+
+        const metrics = this.buildMetrics({
+          blockhashLatencyMs, buildTimeMs, confirmLatencyMs,
+          totalLatencyMs: Date.now() - pipelineStart,
+          broadcastCount: totalBroadcastCount, rebroadcastCount,
+          confirmedViaWs, priorityFee, successAttempt: attempt,
+          leaderRouted, submittedAtSlot,
+        });
+
+        return {
+          signature,
+          confirmationTimeMs: Date.now() - pipelineStart,
+          attempts: attempt,
+          broadcastEndpoints: broadcastCount,
+          metrics,
+        };
+
+      } catch (e: unknown) {
+        const eMsg = getErrorMessage(e);
+
+        // Program errors are terminal — don't retry
+        if (eMsg.includes('failed on-chain') || eMsg.includes('Trade rejected') || eMsg.includes('Transaction rejected')) {
+          process.stdout.write('                              \r');
+          throw e;
+        }
+
+        lastError = eMsg;
+        logger.warn('TX-ENGINE', `Attempt ${attempt} failed: ${eMsg}`);
+
+        // On network errors, trigger RPC failover before next retry.
+        // Note: we do NOT update primaryConnection here — that's done by
+        // FlashClient.replaceConnection() via the RpcManager callback,
+        // which calls txEngine.updateConnection(). This prevents desync
+        // between engine and FlashClient connection state.
+        if (attempt < MAX_ATTEMPTS && this.isNetworkError(eMsg)) {
+          const rpcMgr = getRpcManagerInstance();
+          if (rpcMgr && rpcMgr.fallbackCount > 0) {
+            logger.info('TX-ENGINE', 'Network error — attempting RPC failover before retry');
+            rpcMgr.recordResult(false);
+            const didFailover = await rpcMgr.failover(true);
+            if (didFailover) {
+              // Connection is updated via the RpcManager's onConnectionChange callback
+              // which calls FlashClient.replaceConnection() → txEngine.updateConnection()
+              logger.info('TX-ENGINE', `Switched to ${rpcMgr.activeEndpoint.label}`);
+            }
+          }
+        }
+      }
+    }
+
+    process.stdout.write('                              \r');
+    throw new Error(
+      `Transaction failed after ${MAX_ATTEMPTS} attempts.\n` +
+      `  Last error: ${lastError}\n` +
+      (lastSignature ? `  Last signature: ${lastSignature}\n  Check https://solscan.io/tx/${lastSignature}` : '')
+    );
+  }
+
+  // ─── Prebuilt Transaction ────────────────────────────────────────────────
+
+  /**
+   * Prebuilt transaction: build and sign a transaction without submitting.
+   * Returns a ready-to-submit closure for instant execution after user confirms.
+   */
+  async prebuildTransaction(
+    instructions: TransactionInstruction[],
+    additionalSigners: Signer[] = [],
+  ): Promise<{
+    submit: () => Promise<TxSubmitResult>;
+    blockhashAge: () => number;
+    isExpired: () => boolean;
+  }> {
+    const { blockhash: bh } = await this.getBlockhash();
+    const priorityFee = await this.getDynamicPriorityFee();
+
+    const cuLimitIx = ComputeBudgetProgram.setComputeUnitLimit({ units: this.config.computeUnitLimit });
+    const cuPriceIx = ComputeBudgetProgram.setComputeUnitPrice({ microLamports: priorityFee });
+
+    const allIxs = [cuLimitIx, cuPriceIx, ...instructions];
+    const message = MessageV0.compile({
+      payerKey: this.wallet.publicKey,
+      instructions: allIxs,
+      recentBlockhash: bh.blockhash,
+      addressLookupTableAccounts: [],
+    });
+    const vtx = new VersionedTransaction(message);
+    vtx.sign([this.wallet, ...additionalSigners]);
+
+    const txBytes = Buffer.from(vtx.serialize());
+    const builtAt = Date.now();
+
+    return {
+      blockhashAge: () => Date.now() - builtAt,
+      isExpired: () => (Date.now() - builtAt) > 30_000, // ~60 slots ≈ 24s + margin
+      submit: async () => {
+        // If the prebuilt tx is too old, rebuild with fresh blockhash
+        if ((Date.now() - builtAt) > 30_000) {
+          getLogger().info('TX-ENGINE', 'Prebuilt tx expired — rebuilding with fresh blockhash');
+          return this.submitTransaction(instructions, additionalSigners);
+        }
+
+        const pipelineStart = Date.now();
+
+        // Direct broadcast — no simulation needed (was already validated when building)
+        let signature: string;
+        let broadcastCount: number;
+
+        if (this.config.multiBroadcast && this.broadcastConnections.length > 1) {
+          const result = await this.broadcastToAll(txBytes);
+          signature = result.signature;
+          broadcastCount = result.broadcastCount;
+        } else {
+          signature = await this.primaryConnection.sendRawTransaction(txBytes, {
+            skipPreflight: true,
+            maxRetries: 0,
+          });
+          broadcastCount = 1;
+        }
+
+        const confirmResult = await this.waitForConfirmation(
+          signature, txBytes, this.primaryConnection, CONFIRM_TIMEOUT_MS
+        );
+
+        const totalLatencyMs = Date.now() - pipelineStart;
+
+        const metrics = this.buildMetrics({
+          blockhashLatencyMs: 0, buildTimeMs: 0,
+          confirmLatencyMs: totalLatencyMs,
+          totalLatencyMs,
+          broadcastCount, rebroadcastCount: confirmResult.rebroadcastCount,
+          confirmedViaWs: confirmResult.confirmedViaWs,
+          priorityFee, successAttempt: 1,
+          leaderRouted: false, submittedAtSlot: 0,
+        });
+
+        return {
+          signature,
+          confirmationTimeMs: totalLatencyMs,
+          attempts: 1,
+          broadcastEndpoints: broadcastCount,
+          metrics,
+        };
+      },
+    };
+  }
+
+  // ─── Account State Prefetch ──────────────────────────────────────────────
+
+  /**
+   * Prefetch account data that will be needed for transaction building.
+   * Warms the RPC node's cache for faster subsequent reads.
+   */
+  async prefetchAccounts(accounts: string[]): Promise<void> {
+    if (accounts.length === 0) return;
+
+    const { PublicKey } = await import('@solana/web3.js');
+    const pubkeys = accounts.map(a => new PublicKey(a));
+
+    // Fire-and-forget — just warm the cache
+    this.primaryConnection.getMultipleAccountsInfo(pubkeys, 'confirmed').catch(() => {});
+  }
+
+  // ─── Metrics ─────────────────────────────────────────────────────────────
+
+  private buildMetrics(raw: TxMetrics): TxMetrics {
+    this.metricsHistory.push(raw);
+    if (this.metricsHistory.length > MAX_METRICS_ENTRIES) {
+      this.metricsHistory.shift();
+    }
+    return raw;
+  }
+
+  /**
+   * Get latency statistics from recent transactions.
+   */
+  getMetricsSummary(): {
+    totalTxs: number;
+    avgTotalLatencyMs: number;
+    avgConfirmLatencyMs: number;
+    avgBlockhashLatencyMs: number;
+    avgBuildTimeMs: number;
+    p50ConfirmMs: number;
+    p95ConfirmMs: number;
+    wsConfirmPct: number;
+    avgBroadcastCount: number;
+    avgRebroadcastCount: number;
+    leaderRoutedPct: number;
+    avgSlotDelay: number;
+    fastestEndpoint: string | null;
+  } {
+    const h = this.metricsHistory;
+    if (h.length === 0) {
+      return {
+        totalTxs: 0, avgTotalLatencyMs: 0, avgConfirmLatencyMs: 0,
+        avgBlockhashLatencyMs: 0, avgBuildTimeMs: 0,
+        p50ConfirmMs: 0, p95ConfirmMs: 0, wsConfirmPct: 0,
+        avgBroadcastCount: 0, avgRebroadcastCount: 0,
+        leaderRoutedPct: 0, avgSlotDelay: 0, fastestEndpoint: null,
+      };
+    }
+
+    const avg = (arr: number[]) => arr.reduce((a, b) => a + b, 0) / arr.length;
+    const percentile = (arr: number[], p: number) => {
+      const sorted = [...arr].sort((a, b) => a - b);
+      const idx = Math.min(Math.floor(sorted.length * p), sorted.length - 1);
+      return sorted[idx];
+    };
+
+    const confirmTimes = h.map(m => m.confirmLatencyMs);
+    const wsCount = h.filter(m => m.confirmedViaWs).length;
+    const leaderCount = h.filter(m => m.leaderRouted).length;
+
+    // Get leader router metrics
+    const router = getLeaderRouter();
+    const routerMetrics = router?.getMetrics();
+
+    return {
+      totalTxs: h.length,
+      avgTotalLatencyMs: Math.round(avg(h.map(m => m.totalLatencyMs))),
+      avgConfirmLatencyMs: Math.round(avg(confirmTimes)),
+      avgBlockhashLatencyMs: Math.round(avg(h.map(m => m.blockhashLatencyMs))),
+      avgBuildTimeMs: Math.round(avg(h.map(m => m.buildTimeMs))),
+      p50ConfirmMs: Math.round(percentile(confirmTimes, 0.5)),
+      p95ConfirmMs: Math.round(percentile(confirmTimes, 0.95)),
+      wsConfirmPct: Math.round((wsCount / h.length) * 100),
+      avgBroadcastCount: Math.round(avg(h.map(m => m.broadcastCount)) * 10) / 10,
+      avgRebroadcastCount: Math.round(avg(h.map(m => m.rebroadcastCount)) * 10) / 10,
+      leaderRoutedPct: Math.round((leaderCount / h.length) * 100),
+      avgSlotDelay: routerMetrics?.avgSlotDelay ?? 0,
+      fastestEndpoint: routerMetrics?.fastestEndpoint ?? null,
+    };
+  }
+
+  /** Get raw metrics history */
+  getMetricsHistory(): readonly TxMetrics[] {
+    return this.metricsHistory;
+  }
+
+  // ─── Connection Management ───────────────────────────────────────────────
+
+  /**
+   * Update the primary connection (called on RPC failover).
+   */
+  updateConnection(connection: Connection): void {
+    this.primaryConnection = connection;
+    this.refreshBroadcastConnections();
+    getLeaderRouter()?.updateConnection(connection);
+  }
+
+  /**
+   * Update the wallet keypair (called on wallet switch).
+   */
+  updateWallet(wallet: Keypair): void {
+    this.wallet = wallet;
+  }
+
+  // ─── Helpers ─────────────────────────────────────────────────────────────
+
+  private isNetworkError(msg: string): boolean {
+    const lower = msg.toLowerCase();
+    return lower.includes('timeout') ||
+      lower.includes('econnrefused') ||
+      lower.includes('econnreset') ||
+      lower.includes('enotfound') ||
+      lower.includes('fetch failed') ||
+      lower.includes('network request failed') ||
+      lower.includes('socket hang up') ||
+      lower.includes('429') ||
+      lower.includes('503') ||
+      lower.includes('502');
+  }
+
+  private mapProgramError(rawError: string): string {
+    if (rawError.includes('Custom(3012)') || rawError.includes('"Custom":3012')) {
+      return [
+        'Trade rejected by Flash protocol.',
+        '',
+        '  Possible reasons:',
+        '  • Market is currently closed (virtual markets follow real-world trading sessions)',
+        '  • Oracle price is stale or unavailable',
+        '  • Insufficient pool liquidity',
+        '  • Position below minimum size',
+        '',
+        '  If this is a commodity or FX market, try again during trading hours.',
+      ].join('\n');
+    }
+    const customMatch = rawError.match(/Custom\(?(\d+)\)?/i);
+    if (customMatch) {
+      return `Trade rejected by Flash protocol (error ${customMatch[1]}). The transaction did not execute.`;
+    }
+    return 'Transaction rejected by program. The transaction did not execute.';
+  }
+
+  // ─── Shutdown ────────────────────────────────────────────────────────────
+
+  shutdown(): void {
+    if (this.blockhashTimer) {
+      clearInterval(this.blockhashTimer);
+      this.blockhashTimer = null;
+    }
+    if (this.broadcastRefreshTimer) {
+      clearInterval(this.broadcastRefreshTimer);
+      this.broadcastRefreshTimer = null;
+    }
+    this.broadcastConnections = [];
+    shutdownLeaderRouter();
+    getLogger().info('TX-ENGINE', 'Ultra-low latency execution engine shut down');
+  }
+}

@@ -37,9 +37,9 @@ export function validatePosition(p: Position): void {
     );
   }
 
-  if (p.totalFees < 0) {
+  if (!Number.isFinite(p.totalFees) || p.totalFees < 0) {
     throw new InvariantViolationError(
-      `${p.market} ${p.side}: fees must not be negative, got ${p.totalFees}`,
+      `${p.market} ${p.side}: fees must be finite and non-negative, got ${p.totalFees}`,
     );
   }
 

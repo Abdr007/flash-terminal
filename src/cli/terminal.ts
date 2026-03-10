@@ -1227,6 +1227,19 @@ export class FlashTerminal {
 
     // Rebuild tool engine with updated context
     this.engine = new ToolEngine(this.context);
+
+    // Re-register plugin tools lost during engine rebuild
+    if (!this.config.noPlugins) {
+      try {
+        const { loadPlugins } = await import('../plugins/plugin-loader.js');
+        const pluginTools = await loadPlugins(this.context);
+        for (const tool of pluginTools) {
+          this.engine.registerTool(tool);
+        }
+      } catch {
+        // Non-critical — plugins may not be available
+      }
+    }
   }
 
   // ─── Prompt ────────────────────────────────────────────────────────
