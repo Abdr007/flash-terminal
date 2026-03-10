@@ -39,6 +39,20 @@ export class SimulatedFlashClient implements IFlashClient {
   private livePrices: Map<string, number> = new Map();
   private priceChanges24h: Map<string, number> = new Map();
   readonly walletAddress: string;
+  /** Trade mutex — prevents concurrent state mutations from corrupting balance/positions */
+  private tradeLock: Promise<void> = Promise.resolve();
+
+  private async withTradeLock<T>(fn: () => Promise<T>): Promise<T> {
+    let releasePrev: () => void;
+    const prev = this.tradeLock;
+    this.tradeLock = new Promise<void>(resolve => { releasePrev = resolve; });
+    await prev;
+    try {
+      return await fn();
+    } finally {
+      releasePrev!();
+    }
+  }
 
   constructor(initialBalance = 10_000) {
     this.walletAddress = `SIM_${randomUUID().slice(0, 8).toUpperCase()}`;
@@ -149,6 +163,15 @@ export class SimulatedFlashClient implements IFlashClient {
     collateralAmount: number,
     leverage: number,
   ): Promise<OpenPositionResult> {
+    return this.withTradeLock(() => this._openPosition(market, side, collateralAmount, leverage));
+  }
+
+  private async _openPosition(
+    market: string,
+    side: TradeSide,
+    collateralAmount: number,
+    leverage: number,
+  ): Promise<OpenPositionResult> {
     const logger = getLogger();
     await this.refreshPrices();
 
@@ -228,6 +251,10 @@ export class SimulatedFlashClient implements IFlashClient {
   }
 
   async closePosition(market: string, side: TradeSide): Promise<ClosePositionResult> {
+    return this.withTradeLock(() => this._closePosition(market, side));
+  }
+
+  private async _closePosition(market: string, side: TradeSide): Promise<ClosePositionResult> {
     const logger = getLogger();
     await this.refreshPrices();
 
@@ -276,6 +303,10 @@ export class SimulatedFlashClient implements IFlashClient {
   }
 
   async addCollateral(market: string, side: TradeSide, amount: number): Promise<CollateralResult> {
+    return this.withTradeLock(() => this._addCollateral(market, side, amount));
+  }
+
+  private async _addCollateral(market: string, side: TradeSide, amount: number): Promise<CollateralResult> {
     if (!Number.isFinite(amount) || amount <= 0) {
       throw new Error('Collateral amount must be a positive number');
     }
@@ -297,9 +328,15 @@ export class SimulatedFlashClient implements IFlashClient {
   }
 
   async removeCollateral(market: string, side: TradeSide, amount: number): Promise<CollateralResult> {
+    return this.withTradeLock(() => this._removeCollateral(market, side, amount));
+  }
+
+  private async _removeCollateral(market: string, side: TradeSide, amount: number): Promise<CollateralResult> {
     if (!Number.isFinite(amount) || amount <= 0) {
       throw new Error('Collateral amount must be a positive number');
     }
+    // Refresh prices before liquidation safety check
+    await this.refreshPrices();
     const pos = this.state.positions.find(
       (p) => p.market === market.toUpperCase() && p.side === side
     );

@@ -217,7 +217,8 @@ export async function getProtocolFeeRates(
     }
   }
 
-  // SDK default: conservative values when on-chain fetch unavailable
+  // SDK default: conservative values when on-chain fetch unavailable.
+  // Cache with short TTL to prevent RPC spam on persistent failure.
   const defaultRates: ProtocolFeeRates = {
     openFeeRate: 0.0008,
     closeFeeRate: 0.0008,
@@ -225,6 +226,7 @@ export async function getProtocolFeeRates(
     maxLeverage: 100,
     source: 'sdk-default',
   };
+  feeCache.set(upper, { rates: defaultRates, cachedAtSlot: 0 });
   return defaultRates;
 }
 

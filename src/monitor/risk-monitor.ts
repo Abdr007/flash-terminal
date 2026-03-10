@@ -87,6 +87,7 @@ export class RiskMonitor {
   private cachedPositions: Position[] = [];
   private lastPositionFetch = 0;
   private tickCount = 0;
+  private tickInProgress = false;
   private lastHeartbeat = 0;
   private static readonly HEARTBEAT_INTERVAL_MS = 60_000; // status output every 60s
 
@@ -149,7 +150,16 @@ export class RiskMonitor {
   // ─── Core Monitoring Tick ────────────────────────────────────────────
 
   private async tick(): Promise<void> {
-    if (!this._active) return;
+    if (!this._active || this.tickInProgress) return;
+    this.tickInProgress = true;
+    try {
+      await this._tick();
+    } finally {
+      this.tickInProgress = false;
+    }
+  }
+
+  private async _tick(): Promise<void> {
     const logger = getLogger();
     this.tickCount++;
 

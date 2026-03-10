@@ -201,7 +201,7 @@ export const flashOpenPosition: ToolDefinition = {
     market: z.string(),
     side: z.nativeEnum(TradeSide),
     collateral: z.number().positive().max(10_000_000),
-    leverage: z.number().min(1).max(500),  // Per-market protocol limits enforced below
+    leverage: z.number().min(1).max(1000), // Absolute protocol max; per-market limits enforced below
     collateral_token: z.string().optional(),
   }),
   execute: async (params, context): Promise<ToolResult> => {

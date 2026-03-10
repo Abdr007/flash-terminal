@@ -24,12 +24,15 @@ const DIVERGENCE_THRESHOLD = 0.005; // 0.5%
 /** If true, divergence throws instead of warning. Set via FLASH_STRICT_PROTOCOL env. */
 const STRICT_MODE = (process.env.FLASH_STRICT_PROTOCOL ?? '').toLowerCase() === 'true';
 
-/** Last divergence check result — consumed by telemetry status bar. */
-let _lastDivergenceOk = true;
+/** Per-market divergence status — consumed by telemetry status bar. */
+const _divergenceStatus = new Map<string, boolean>();
 
-/** Get last divergence check status for telemetry. */
+/** Get overall divergence check status for telemetry. True if no market has diverged. */
 export function isDivergenceOk(): boolean {
-  return _lastDivergenceOk;
+  for (const ok of _divergenceStatus.values()) {
+    if (!ok) return false;
+  }
+  return true;
 }
 
 /**
@@ -67,7 +70,7 @@ export async function checkLiquidationDivergence(
     const deviation = Math.abs(cliLiqPrice - sdkLiq) / sdkLiq;
 
     if (deviation > DIVERGENCE_THRESHOLD) {
-      _lastDivergenceOk = false;
+      _divergenceStatus.set(market.toUpperCase(), false);
       const msg = [
         `Protocol divergence detected for ${market}`,
         `  CLI liquidation:  $${cliLiqPrice.toFixed(2)}`,
@@ -90,7 +93,7 @@ export async function checkLiquidationDivergence(
       console.log(chalk.yellow(`    Deviation:        ${(deviation * 100).toFixed(2)}%`));
       console.log('');
     } else {
-      _lastDivergenceOk = true;
+      _divergenceStatus.set(market.toUpperCase(), true);
     }
 
     return deviation;
@@ -172,6 +175,11 @@ export function computeSimulationLiquidationPrice(
       !Number.isFinite(collateralUsd) || collateralUsd <= 0) {
     return 0;
   }
+
+  // Validate protocol parameters — reject NaN/negative to prevent garbage calculations
+  if (!Number.isFinite(maintenanceMarginRate) || maintenanceMarginRate < 0) return 0;
+  if (!Number.isFinite(closeFeeRate) || closeFeeRate < 0) return 0;
+  if (!Number.isFinite(unsettledFeesUsd) || unsettledFeesUsd < 0) unsettledFeesUsd = 0;
 
   // Maintenance margin from custodyAcct.pricing.maintenanceMargin / BPS_POWER
   const maintenanceMargin = sizeUsd * maintenanceMarginRate;

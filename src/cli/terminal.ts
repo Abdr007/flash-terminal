@@ -2384,12 +2384,15 @@ export class FlashTerminal {
 
     // ─── STEP 6: Exit on 'q' keypress ────────────────────────────
     await new Promise<void>((resolve) => {
-      const onKey = (buf: Buffer) => {
-        const key = buf.toString();
-        if (key !== 'q' && key !== 'Q' && key !== '\x03') return;
+      let exited = false;
 
-        // Remove listener FIRST to prevent double-fire
+      const cleanup = () => {
+        if (exited) return;
+        exited = true;
+
         process.stdin.removeListener('data', onKey);
+        process.stdin.removeListener('error', onStdinError);
+        process.stdin.removeListener('end', onStdinEnd);
         running = false;
         clearInterval(interval);
 
@@ -2398,24 +2401,30 @@ export class FlashTerminal {
         renderer.reset();
 
         // Drain any remaining stdin bytes before restoring readline
-        // This prevents the 'q' keystroke from leaking into the CLI prompt
         const drainHandler = () => { /* discard */ };
         process.stdin.on('data', drainHandler);
         setTimeout(() => {
           process.stdin.removeListener('data', drainHandler);
-
-          // Restore terminal state
           if (process.stdin.isTTY) {
             process.stdin.setRawMode(wasRaw ?? false);
           }
-
-          // Resume readline AFTER cleanup
           this.rl.resume();
           resolve();
         }, 50);
       };
 
+      const onKey = (buf: Buffer) => {
+        const key = buf.toString();
+        if (key !== 'q' && key !== 'Q' && key !== '\x03') return;
+        cleanup();
+      };
+
+      const onStdinError = () => cleanup();
+      const onStdinEnd = () => cleanup();
+
       process.stdin.on('data', onKey);
+      process.stdin.on('error', onStdinError);
+      process.stdin.on('end', onStdinEnd);
     });
   }
 

@@ -105,8 +105,15 @@ export class EventMonitor {
     // Print header
     this.printHeader();
 
-    // Initial data fetch + render
-    await this.tick();
+    // Initial data fetch + render (guarded against overlap with first interval tick)
+    this.refreshInProgress = true;
+    try {
+      await this.tick();
+    } catch (err) {
+      getLogger().debug('MONITOR', `Initial tick failed: ${getErrorMessage(err)}`);
+    } finally {
+      this.refreshInProgress = false;
+    }
 
     // Polling loop
     this.interval = setInterval(async () => {
@@ -120,6 +127,7 @@ export class EventMonitor {
         this.refreshInProgress = false;
       }
     }, POLL_INTERVAL_MS);
+    if (this.interval.unref) this.interval.unref();
 
     // Keypress handler for exit
     await new Promise<void>((resolve) => {

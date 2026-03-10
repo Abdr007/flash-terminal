@@ -89,7 +89,7 @@ export const OpenPositionSchema = z.object({
   market: z.string(),
   side: z.nativeEnum(TradeSide),
   collateral: z.number().positive().max(10_000_000),
-  leverage: z.number().min(1).max(500),  // per-market limits enforced at tool level
+  leverage: z.number().min(1).max(1000), // absolute protocol max; per-market limits enforced at tool level
   collateral_token: z.string().optional(),
 });
 

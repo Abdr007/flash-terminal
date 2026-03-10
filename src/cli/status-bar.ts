@@ -83,6 +83,7 @@ class LatencySmoother {
 
 export class StatusBar {
   private timer: ReturnType<typeof setInterval> | null = null;
+  private initDelayTimer: ReturnType<typeof setTimeout> | null = null;
   private rl: ReadlineInterface;
   private client: IFlashClient;
   private rpcManager: RpcManager;
@@ -113,12 +114,13 @@ export class StatusBar {
     this.active = true;
 
     // Initial render after a brief delay to avoid stomping on startup output
-    const initDelay = setTimeout(() => {
+    this.initDelayTimer = setTimeout(() => {
+      this.initDelayTimer = null;
       if (this.active && !this.suspended) {
         this.refresh().catch(() => {});
       }
     }, 2_000);
-    if (initDelay.unref) initDelay.unref();
+    if (this.initDelayTimer.unref) this.initDelayTimer.unref();
 
     this.timer = setInterval(() => {
       if (!this.suspended) {
@@ -134,6 +136,10 @@ export class StatusBar {
   /** Stop the status bar permanently. */
   stop(): void {
     this.active = false;
+    if (this.initDelayTimer) {
+      clearTimeout(this.initDelayTimer);
+      this.initDelayTimer = null;
+    }
     if (this.timer) {
       clearInterval(this.timer);
       this.timer = null;
