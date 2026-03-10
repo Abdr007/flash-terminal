@@ -84,6 +84,9 @@ export enum ActionType {
 
   // Dry Run
   DryRun = 'dry_run',
+
+  // Source Verification
+  SourceVerify = 'source_verify',
 }
 
 // ─── Zod Schemas for Intent Parsing ──────────────────────────────────────────
@@ -327,6 +330,11 @@ export const DryRunSchema = z.object({
   innerCommand: z.string().max(1000),
 });
 
+export const SourceVerifySchema = z.object({
+  action: z.literal(ActionType.SourceVerify),
+  market: z.string().max(20),
+});
+
 export const ParsedIntentSchema = z.discriminatedUnion('action', [
   OpenPositionSchema,
   ClosePositionSchema,
@@ -378,6 +386,7 @@ export const ParsedIntentSchema = z.discriminatedUnion('action', [
   MarketMonitorSchema,
   ProtocolStatusSchema,
   DryRunSchema,
+  SourceVerifySchema,
 ]);
 
 export type ParsedIntent = z.infer<typeof ParsedIntentSchema>;

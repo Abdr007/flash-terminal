@@ -408,6 +408,15 @@ export const COMMAND_REGISTRY: CommandEntry[] = [
     parameterized: true,
   },
   {
+    name: 'source verify',
+    action: null,
+    category: 'Protocol Inspection',
+    description: 'Verify data provenance for a market',
+    helpFormat: 'source verify <asset>',
+    aliases: ['verify source'],
+    parameterized: true,
+  },
+  {
     name: 'doctor',
     action: null,
     category: 'Utilities',

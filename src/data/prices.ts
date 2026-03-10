@@ -91,6 +91,11 @@ let _lastHistoryRecord = 0;
 let _lastDiskSave = 0;
 let _historyLoaded = false;
 
+/** Get the Pyth feed ID for a market symbol (for diagnostics). */
+export function getPythFeedId(symbol: string): string | null {
+  return PYTH_FEED_IDS[symbol.toUpperCase()] ?? null;
+}
+
 export class PriceService {
   private cache: Map<string, { data: TokenPrice; expiry: number }> = new Map();
   private cacheTtlMs = 5_000; // 5s cache — Pyth is free, no rate limiting concern

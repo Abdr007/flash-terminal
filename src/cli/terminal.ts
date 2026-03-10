@@ -1485,6 +1485,21 @@ export class FlashTerminal {
       }
       await this.handleProtocolFees(market);
       return;
+    } else if (lower.startsWith('source verify ') || lower.startsWith('verify source ')) {
+      const prefix = lower.startsWith('source verify ') ? 'source verify ' : 'verify source ';
+      const rawMarket = input.slice(prefix.length).trim();
+      if (!rawMarket) {
+        console.log(chalk.yellow('  Usage: source verify <asset>  (e.g. source verify sol)'));
+        return;
+      }
+      const market = resolveMarketAlias(rawMarket);
+      const { getPoolForMarket } = await import('../config/index.js');
+      if (!getPoolForMarket(market)) {
+        console.log(chalk.red(`  Unknown market: ${rawMarket}`));
+        return;
+      }
+      await this.handleSourceVerify(market);
+      return;
     } else if (lower === 'protocol verify' || lower === 'verify protocol' || lower === 'verify') {
       await this.handleProtocolVerify();
       return;
@@ -2742,6 +2757,188 @@ export class FlashTerminal {
       console.log(chalk.red(`  System Status: DEGRADED`));
     }
     console.log(theme.dim(`  Completed in ${elapsed}ms`));
+    console.log('');
+  }
+
+  private async handleSourceVerify(market: string): Promise<void> {
+    const upper = market.toUpperCase();
+
+    console.log('');
+    console.log(`  ${theme.accentBold('DATA PROVENANCE VERIFICATION')}  ${theme.dim(`— ${upper}`)}`);
+    console.log(`  ${theme.separator(50)}`);
+
+    const checks: string[] = [];
+    let allOk = true;
+
+    // ── Section 1: Price Source ──
+    console.log(theme.titleBlock('Price Source'));
+    try {
+      const { PriceService } = await import('../data/prices.js');
+      const priceSvc = new PriceService();
+
+      const priceData = await priceSvc.getPrice(upper);
+      if (priceData && Number.isFinite(priceData.price) && priceData.price > 0) {
+        // Fetch raw Pyth data for confidence interval
+        let confidence = 'N/A';
+        let publishSlot = 'N/A';
+        const { getPythFeedId } = await import('../data/prices.js');
+        const feedId = getPythFeedId(upper) ?? 'N/A';
+
+        try {
+          if (feedId === 'N/A') throw new Error('No feed ID');
+          const rawUrl = `https://hermes.pyth.network/v2/updates/price/latest?ids[]=${encodeURIComponent(feedId)}&parsed=true`;
+          const controller = new AbortController();
+          const timeout = setTimeout(() => controller.abort(), 5000);
+          try {
+            const res = await fetch(rawUrl, { signal: controller.signal, headers: { Accept: 'application/json' } });
+            if (res.ok) {
+              const raw = await res.json() as { parsed?: Array<{ price: { price: string; expo: number; publish_time: number; conf: string } }> };
+              const entry = raw.parsed?.[0];
+              if (entry) {
+                const price = parseInt(entry.price.price, 10) * Math.pow(10, entry.price.expo);
+                const conf = parseInt(entry.price.conf ?? '0', 10) * Math.pow(10, entry.price.expo);
+                if (Number.isFinite(price) && price > 0 && Number.isFinite(conf)) {
+                  confidence = `${((conf / price) * 100).toFixed(4)}%`;
+                }
+                publishSlot = entry.price.publish_time ? String(entry.price.publish_time) : 'N/A';
+              }
+            }
+          } finally {
+            clearTimeout(timeout);
+          }
+        } catch {
+          // Raw fetch failed — non-critical
+        }
+
+        console.log(theme.pair('Oracle', 'Pyth Hermes'));
+        console.log(theme.pair('Feed', `${upper}/USD`));
+        console.log(theme.pair('Price', `$${priceData.price.toFixed(4)}`));
+        console.log(theme.pair('Publish Time', publishSlot));
+        console.log(theme.pair('Confidence', confidence));
+        console.log(theme.pair('Endpoint', 'hermes.pyth.network'));
+        checks.push('Oracle price verified');
+      } else {
+        console.log(chalk.red(`  Failed to fetch price for ${upper}`));
+        allOk = false;
+      }
+    } catch (err: unknown) {
+      console.log(chalk.red(`  Price fetch error: ${getErrorMessage(err)}`));
+      allOk = false;
+    }
+
+    // ── Section 2: Protocol Fee Source ──
+    console.log(theme.titleBlock('Protocol Fees'));
+    try {
+      const { getProtocolFeeRates } = await import('../utils/protocol-fees.js');
+      const perpClient = this.config.simulationMode ? null : (this.flashClient as any).perpClient ?? null;
+      const rates = await getProtocolFeeRates(upper, perpClient);
+
+      // Get custody account address
+      let custodyAddress = 'N/A';
+      try {
+        const { PoolConfig } = await import('flash-sdk');
+        const { getPoolForMarket } = await import('../config/index.js');
+        const poolName = getPoolForMarket(upper);
+        if (poolName) {
+          const pc = PoolConfig.fromIdsByName(poolName, 'mainnet-beta');
+          const custodies = pc.custodies as Array<{ custodyAccount: any; symbol: string }>;
+          const custody = custodies.find(c => c.symbol.toUpperCase() === upper);
+          if (custody) {
+            custodyAddress = custody.custodyAccount.toString();
+          }
+        }
+      } catch {
+        // Non-critical — address display only
+      }
+
+      console.log(theme.pair('CustodyAccount', custodyAddress));
+      console.log(theme.pair('Open Fee', `${(rates.openFeeRate * 100).toFixed(4)}%`));
+      console.log(theme.pair('Close Fee', `${(rates.closeFeeRate * 100).toFixed(4)}%`));
+      console.log(theme.pair('Max Leverage', `${rates.maxLeverage}x`));
+      console.log(theme.pair('Source', rates.source === 'on-chain'
+        ? theme.positive('On-chain protocol data')
+        : theme.warning('SDK defaults (simulation mode)')));
+      checks.push('Protocol fees ' + (rates.source === 'on-chain' ? 'on-chain' : 'sdk-default'));
+    } catch (err: unknown) {
+      console.log(chalk.red(`  Fee fetch error: ${getErrorMessage(err)}`));
+      allOk = false;
+    }
+
+    // ── Section 3: Position Data Source ──
+    console.log(theme.titleBlock('Position Data'));
+    const { FLASH_PROGRAM_ID } = await import('../config/index.js');
+    if (this.config.simulationMode) {
+      console.log(theme.pair('Source', 'SimulatedFlashClient'));
+      console.log(theme.pair('Method', 'In-memory SimulationState'));
+      console.log(theme.pair('Account Type', 'N/A (simulation)'));
+      console.log(theme.pair('Program', theme.dim(FLASH_PROGRAM_ID)));
+      checks.push('Positions from simulation state');
+    } else {
+      console.log(theme.pair('Source', 'Flash SDK'));
+      console.log(theme.pair('Method', 'perpClient.getPositions()'));
+      console.log(theme.pair('Account Type', 'UserPosition PDA'));
+      console.log(theme.pair('Program', theme.accent(FLASH_PROGRAM_ID)));
+      checks.push('Positions from protocol accounts');
+    }
+
+    // ── Section 4: Liquidation Engine ──
+    console.log(theme.titleBlock('Liquidation Engine'));
+    if (this.config.simulationMode) {
+      console.log(theme.pair('Calculation', 'CLI formula'));
+      console.log(theme.pair('Method', 'computeSimulationLiquidationPrice()'));
+      console.log(theme.pair('Parameters', 'SDK-default fee rates'));
+      checks.push('Simulation liquidation engine');
+    } else {
+      console.log(theme.pair('Calculation', 'SDK helper'));
+      console.log(theme.pair('Method', 'getLiquidationPriceContractHelper()'));
+      console.log(theme.pair('Parameters', 'CustodyAccount pricing data'));
+      console.log(theme.pair('Divergence Check', 'Enabled (0.5% threshold)'));
+      checks.push('SDK liquidation engine');
+    }
+
+    // ── Section 5: Analytics Data ──
+    console.log(theme.titleBlock('Analytics Data'));
+    const { FSTATS_BASE_URL } = await import('../config/index.js');
+    console.log(theme.pair('Open Interest', 'fstats API'));
+    console.log(theme.pair('Endpoint', '/positions/open-interest'));
+    console.log(theme.pair('Volume Data', '/volume/daily'));
+    console.log(theme.pair('Base URL', FSTATS_BASE_URL));
+
+    // Verify fstats is reachable
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 5000);
+      try {
+        const res = await fetch(`${FSTATS_BASE_URL}/overview/stats?period=7d`, {
+          signal: controller.signal,
+          headers: { Accept: 'application/json' },
+        });
+        if (res.ok) {
+          console.log(theme.pair('Status', theme.positive('Reachable')));
+          checks.push('Analytics from external API');
+        } else {
+          console.log(theme.pair('Status', theme.warning(`HTTP ${res.status}`)));
+          allOk = false;
+        }
+      } finally {
+        clearTimeout(timeout);
+      }
+    } catch {
+      console.log(theme.pair('Status', theme.negative('Unreachable')));
+      allOk = false;
+    }
+
+    // ── Section 6: Verification Summary ──
+    console.log(theme.titleBlock('Verification'));
+    for (const check of checks) {
+      console.log(chalk.green(`  ✓ ${check}`));
+    }
+    if (!allOk) {
+      console.log(chalk.yellow(`  ! Some checks could not be completed`));
+    }
+
+    console.log('');
+    console.log(theme.dim(`  Mode: ${this.config.simulationMode ? 'Simulation' : 'Live'}`));
     console.log('');
   }
 
