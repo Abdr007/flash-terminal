@@ -254,7 +254,10 @@ export class FlashTerminal {
     // Sync open positions into session history so CLOSE events have matching OPEN records
     const sessionTrades: import('../types/index.js').SessionTrade[] = [];
     try {
-      const existingPositions = await this.flashClient.getPositions();
+      const existingPositions = await Promise.race([
+        this.flashClient.getPositions(),
+        new Promise<never[]>((resolve) => setTimeout(() => resolve([]), 3_000)),
+      ]);
       for (const pos of existingPositions) {
         sessionTrades.push({
           action: 'open',
@@ -821,22 +824,24 @@ export class FlashTerminal {
       console.log(theme.pair('Network', theme.value(this.config.network)));
       console.log('');
 
-      // Fetch SOL + USDC balances
+      // Fetch SOL + USDC balances with a tight timeout to avoid blocking startup
       let solBal: number | null = null;
       let usdcBal: number | null = null;
       try {
-        const tokenData = await this.walletManager.getTokenBalances();
-        solBal = tokenData.sol;
-        const usdcToken = tokenData.tokens.find(
-          (t) => t.mint === 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
-        );
-        usdcBal = usdcToken?.amount ?? 0;
-      } catch {
-        try {
-          solBal = await this.walletManager.getBalance();
-        } catch {
-          // best-effort
+        const balancePromise = this.walletManager.getTokenBalances();
+        const tokenData = await Promise.race([
+          balancePromise,
+          new Promise<null>((resolve) => setTimeout(() => resolve(null), 3_000)),
+        ]);
+        if (tokenData) {
+          solBal = tokenData.sol;
+          const usdcToken = tokenData.tokens.find(
+            (t) => t.mint === 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
+          );
+          usdcBal = usdcToken?.amount ?? 0;
         }
+      } catch {
+        // best-effort — skip balance display on failure
       }
 
       if (solBal !== null) {
@@ -845,6 +850,9 @@ export class FlashTerminal {
       if (usdcBal !== null) {
         const val = usdcBal > 0 ? theme.positive(usdcBal.toFixed(2) + ' USDC') : theme.warning(usdcBal.toFixed(2) + ' USDC');
         console.log(theme.pair('USDC Balance', val));
+      }
+      if (solBal === null && usdcBal === null) {
+        console.log(theme.dim('  Run "wallet tokens" to view balances.'));
       }
 
       console.log('');
