@@ -2511,7 +2511,7 @@ export class FlashTerminal {
               console.log(theme.pair('closeFeeRate', `${closeRate} (${(closeRate * 100).toFixed(4)}%)`));
               if (maxLev > 0) {
                 console.log(theme.pair('maxLeverage', `${maxLev}x`));
-                console.log(theme.pair('maintenanceMarginRate', `1/${maxLev} = ${derivedMarginRate} (${(derivedMarginRate * 100).toFixed(4)}%)`));
+                console.log(theme.pair('maintMarginRate', `1/${maxLev} = ${derivedMarginRate} (${(derivedMarginRate * 100).toFixed(4)}%)`));
               }
               console.log('');
 
@@ -2522,7 +2522,7 @@ export class FlashTerminal {
               console.log(theme.pair('openFeeRate', `${feeRates.openFeeRate} (${(feeRates.openFeeRate * 100).toFixed(4)}%)`));
               console.log(theme.pair('closeFeeRate', `${feeRates.closeFeeRate} (${(feeRates.closeFeeRate * 100).toFixed(4)}%)`));
               console.log(theme.pair('maxLeverage', `${feeRates.maxLeverage}x`));
-              console.log(theme.pair('maintenanceMarginRate', `${feeRates.maintenanceMarginRate} (${(feeRates.maintenanceMarginRate * 100).toFixed(4)}%)`));
+              console.log(theme.pair('maintMarginRate', `${feeRates.maintenanceMarginRate} (${(feeRates.maintenanceMarginRate * 100).toFixed(4)}%)`));
               console.log(theme.pair('source', feeRates.source));
               console.log('');
 
@@ -2559,7 +2559,7 @@ export class FlashTerminal {
     console.log(`  ${theme.section('Fee Rates (default fallback)')}`);
     console.log(theme.pair('openFeeRate', `${feeRates.openFeeRate} (${(feeRates.openFeeRate * 100).toFixed(4)}%)`));
     console.log(theme.pair('closeFeeRate', `${feeRates.closeFeeRate} (${(feeRates.closeFeeRate * 100).toFixed(4)}%)`));
-    console.log(theme.pair('maintenanceMarginRate', `${feeRates.maintenanceMarginRate} (${(feeRates.maintenanceMarginRate * 100).toFixed(2)}%)`));
+    console.log(theme.pair('maintMarginRate', `${feeRates.maintenanceMarginRate} (${(feeRates.maintenanceMarginRate * 100).toFixed(2)}%)`));
     console.log('');
     console.log(chalk.yellow('  ⚠ Showing SDK defaults — connect in live mode for on-chain values'));
     console.log('');
