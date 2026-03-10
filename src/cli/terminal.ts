@@ -251,27 +251,37 @@ export class FlashTerminal {
       }
     }
 
+    // Start balance fetch early so it runs in parallel with setup below
+    const balancePromise = !this.config.simulationMode
+      ? Promise.race([
+          this.walletManager.getTokenBalances(),
+          new Promise<null>((resolve) => setTimeout(() => resolve(null), 3_000)),
+        ]).catch(() => null)
+      : Promise.resolve(null);
+
     // Sync open positions into session history so CLOSE events have matching OPEN records
+    // Non-blocking: populates sessionTrades in background to avoid startup delay
     const sessionTrades: import('../types/index.js').SessionTrade[] = [];
-    try {
-      const existingPositions = await Promise.race([
+    if (!this.config.simulationMode) {
+      Promise.race([
         this.flashClient.getPositions(),
         new Promise<never[]>((resolve) => setTimeout(() => resolve([]), 3_000)),
-      ]);
-      for (const pos of existingPositions) {
-        sessionTrades.push({
-          action: 'open',
-          market: pos.market,
-          side: pos.side,
-          leverage: pos.leverage,
-          sizeUsd: pos.sizeUsd,
-          entryPrice: pos.entryPrice,
-          openFeePaid: pos.openFee > 0 ? pos.openFee : undefined,
-          timestamp: pos.timestamp ? pos.timestamp * 1000 : Date.now(),
-        });
-      }
-    } catch {
-      // Non-critical: proceed with empty session history
+      ]).then((existingPositions) => {
+        for (const pos of existingPositions) {
+          sessionTrades.push({
+            action: 'open',
+            market: pos.market,
+            side: pos.side,
+            leverage: pos.leverage,
+            sizeUsd: pos.sizeUsd,
+            entryPrice: pos.entryPrice,
+            openFeePaid: pos.openFee > 0 ? pos.openFee : undefined,
+            timestamp: pos.timestamp ? pos.timestamp * 1000 : Date.now(),
+          });
+        }
+      }).catch(() => {
+        // Non-critical: proceed with empty session history
+      });
     }
 
     // Build tool context
@@ -349,7 +359,8 @@ export class FlashTerminal {
     }
 
     // ─── Display Intelligence Screen ─────────────────────────────────
-    await this.showIntelligenceScreen(walletInfo?.name ?? null);
+    const prefetchedBalances = await balancePromise;
+    await this.showIntelligenceScreen(walletInfo?.name ?? null, prefetchedBalances);
 
     // ─── Start Status Bar ─────────────────────────────────────────────
     this.statusBar = new StatusBar(this.rl, this.flashClient, this.rpcManager, {
@@ -798,7 +809,7 @@ export class FlashTerminal {
 
   // ─── Intelligence Screen ─────────────────────────────────────────
 
-  private async showIntelligenceScreen(walletName: string | null): Promise<void> {
+  private async showIntelligenceScreen(walletName: string | null, prefetchedBalances?: unknown): Promise<void> {
     const isSim = this.config.simulationMode;
     const modeLabel = isSim ? 'SIMULATION' : 'LIVE TRADING';
     const modeBg = isSim ? theme.simBadge : theme.liveBadge;
@@ -824,24 +835,16 @@ export class FlashTerminal {
       console.log(theme.pair('Network', theme.value(this.config.network)));
       console.log('');
 
-      // Fetch SOL + USDC balances with a tight timeout to avoid blocking startup
+      // Use pre-fetched balance data (started before setup) — no extra RPC call
       let solBal: number | null = null;
       let usdcBal: number | null = null;
-      try {
-        const balancePromise = this.walletManager.getTokenBalances();
-        const tokenData = await Promise.race([
-          balancePromise,
-          new Promise<null>((resolve) => setTimeout(() => resolve(null), 3_000)),
-        ]);
-        if (tokenData) {
-          solBal = tokenData.sol;
-          const usdcToken = tokenData.tokens.find(
-            (t) => t.mint === 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
-          );
-          usdcBal = usdcToken?.amount ?? 0;
-        }
-      } catch {
-        // best-effort — skip balance display on failure
+      const tokenData = prefetchedBalances as { sol: number; tokens: Array<{ mint: string; amount: number }> } | null;
+      if (tokenData) {
+        solBal = tokenData.sol;
+        const usdcToken = tokenData.tokens.find(
+          (t) => t.mint === 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
+        );
+        usdcBal = usdcToken?.amount ?? 0;
       }
 
       if (solBal !== null) {
