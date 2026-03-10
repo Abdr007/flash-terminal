@@ -1054,7 +1054,37 @@ export class FlashClient implements IFlashClient {
         );
         const liqUi = parseFloat(liqResult.toUiPrice(8));
         if (Number.isFinite(liqUi) && liqUi > 0) openLiqPrice = liqUi;
-      } catch {
+
+        // ── Protocol divergence check ──
+        // Compare CLI formula against SDK result to detect math drift.
+        // Reuses existing data — no extra RPC calls.
+        if (openLiqPrice > 0) {
+          try {
+            const { computeSimulationLiquidationPrice, checkLiquidationDivergence } =
+              await import('../utils/protocol-liq.js');
+            const { getProtocolFeeRates } = await import('../utils/protocol-fees.js');
+            const feeRates = await getProtocolFeeRates(market, this.perpClient);
+            const sizeUsd = collateralAmount * leverage;
+            const cliLiq = computeSimulationLiquidationPrice(
+              targetPrice.uiPrice, sizeUsd, collateralAmount, side,
+              feeRates.maintenanceMarginRate, feeRates.closeFeeRate,
+            );
+            if (cliLiq > 0) {
+              await checkLiquidationDivergence(
+                cliLiq, this.perpClient,
+                targetPrice.price, BN_ZERO, sdkSide,
+                targetCustodyAcct, null, market,
+              );
+            }
+          } catch (divErr: unknown) {
+            const divMsg = getErrorMessage(divErr);
+            if (divMsg.includes('Protocol divergence exceeds')) throw divErr;
+            logger.debug('DIVERGENCE', `Check skipped: ${divMsg}`);
+          }
+        }
+      } catch (liqErr: unknown) {
+        const liqMsg = getErrorMessage(liqErr);
+        if (liqMsg.includes('Protocol divergence exceeds')) throw liqErr;
         // Non-critical: liquidation price is display-only
       }
 

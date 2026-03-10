@@ -29,7 +29,7 @@ import { startWatch } from './watch.js';
 import { theme } from './theme.js';
 import { completer, getSuggestions } from './completer.js';
 import { resolveMarket } from '../utils/market-resolver.js';
-import { computeSimulationLiquidationPrice } from '../utils/protocol-liq.js';
+import { computeSimulationLiquidationPrice, isDivergenceOk } from '../utils/protocol-liq.js';
 import type { MonitorType } from '../monitor/event-monitor.js';
 
 /** Alias for backward compat — delegates to centralized resolver */
@@ -2265,7 +2265,10 @@ export class FlashTerminal {
       const renderStr = theme.dim(`Render ${telemetry.renderTimeMs}ms`);
       const refreshStr = theme.dim(`Refresh ${REFRESH_MS / 1000}s`);
 
-      const telemetryLine = `  ${rpcStr}  ${theme.dim('|')}  ${oracleStr}  ${theme.dim('|')}  ${slotStr}  ${theme.dim('|')}  ${lagStr}  ${theme.dim('|')}  ${renderStr}  ${theme.dim('|')}  ${refreshStr}`;
+      // Divergence status from protocol-liq module (sync — no await needed)
+      const divStr = isDivergenceOk() ? chalk.green('Divergence OK') : chalk.yellow('Divergence ⚠');
+
+      const telemetryLine = `  ${rpcStr}  ${theme.dim('|')}  ${oracleStr}  ${theme.dim('|')}  ${slotStr}  ${theme.dim('|')}  ${lagStr}  ${theme.dim('|')}  ${renderStr}  ${theme.dim('|')}  ${divStr}`;
 
       // Chrome: title(1) + telemetry(1) + time(1) + separator(1) + header(1) + separator(1) + footer separator(1) + source(1) = 8 fixed lines
       const CHROME_LINES = 8;

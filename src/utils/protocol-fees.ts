@@ -22,6 +22,17 @@
 const RATE_POWER = 1_000_000_000; // Flash SDK RATE_DECIMALS = 9
 const BPS_POWER = 10_000;         // Flash SDK BPS_DECIMALS = 4
 
+/**
+ * Thrown when CustodyAccount returns invalid or corrupted protocol parameters.
+ * Callers should display a clear CLI message and abort — never silently fallback.
+ */
+export class ProtocolParameterError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ProtocolParameterError';
+  }
+}
+
 export interface ProtocolFeeRates {
   openFeeRate: number;            // e.g. 0.00051 = 0.051% (SOL)
   closeFeeRate: number;           // e.g. 0.00051 = 0.051% (SOL)
@@ -129,46 +140,80 @@ export async function getProtocolFeeRates(
           const openFeeRaw = parseFloat(custodyAcct.fees.openPosition.toString());
           const closeFeeRaw = parseFloat(custodyAcct.fees.closePosition.toString());
 
-          if (Number.isFinite(openFeeRaw) && openFeeRaw > 0 &&
-              Number.isFinite(closeFeeRaw) && closeFeeRaw > 0) {
+          // ── Fee rate validation ──
+          const openFeeRate = openFeeRaw / RATE_POWER;
+          const closeFeeRate = closeFeeRaw / RATE_POWER;
 
-            // Derive maxLeverage and maintenance margin from custody.pricing
-            const rawMaxLev = (custodyAcct as any).pricing?.maxLeverage;
-            const maxLevRaw = typeof rawMaxLev === 'object' && rawMaxLev?.toNumber
-              ? rawMaxLev.toNumber()
-              : typeof rawMaxLev === 'number' ? rawMaxLev : 0;
-
-            let maxLeverage = 100; // safe default
-            let maintenanceMarginRate = 0.01; // 1% default
-
-            if (Number.isFinite(maxLevRaw) && maxLevRaw > 0) {
-              maxLeverage = maxLevRaw / BPS_POWER;
-              maintenanceMarginRate = 1 / maxLeverage;
-            }
-
-            const rates: ProtocolFeeRates = {
-              openFeeRate: openFeeRaw / RATE_POWER,
-              closeFeeRate: closeFeeRaw / RATE_POWER,
-              maintenanceMarginRate,
-              maxLeverage,
-              source: 'on-chain',
-            };
-
-            const cacheSlot = lastKnownSlot > 0 ? lastKnownSlot : 0;
-            feeCache.set(upper, { rates, cachedAtSlot: cacheSlot });
-
-            // Bound cache size
-            if (feeCache.size > 50) {
-              const oldest = feeCache.keys().next().value;
-              if (oldest) feeCache.delete(oldest);
-            }
-
-            return rates;
+          if (!Number.isFinite(openFeeRate) || openFeeRate < 0) {
+            throw new ProtocolParameterError(
+              `Invalid openFeeRate from CustodyAccount for ${upper}: raw=${openFeeRaw}`,
+            );
           }
+          if (!Number.isFinite(closeFeeRate) || closeFeeRate < 0) {
+            throw new ProtocolParameterError(
+              `Invalid closeFeeRate from CustodyAccount for ${upper}: raw=${closeFeeRaw}`,
+            );
+          }
+
+          // ── Max leverage validation ──
+          const rawMaxLev = (custodyAcct as any).pricing?.maxLeverage;
+          const maxLevRaw = typeof rawMaxLev === 'object' && rawMaxLev?.toNumber
+            ? rawMaxLev.toNumber()
+            : typeof rawMaxLev === 'number' ? rawMaxLev : 0;
+
+          const maxLeverage = maxLevRaw / BPS_POWER;
+
+          if (!Number.isFinite(maxLeverage) || maxLeverage <= 0) {
+            throw new ProtocolParameterError(
+              `Invalid maxLeverage from CustodyAccount for ${upper}: raw=${maxLevRaw}`,
+            );
+          }
+
+          // ── Maintenance margin validation ──
+          const maintenanceMarginRate = 1 / maxLeverage;
+
+          if (!Number.isFinite(maintenanceMarginRate) || maintenanceMarginRate <= 0) {
+            throw new ProtocolParameterError(
+              `Invalid maintenanceMarginRate derived for ${upper}: 1/${maxLeverage}`,
+            );
+          }
+
+          // ── Protocol invariant checks ──
+          if (maintenanceMarginRate >= 1) {
+            throw new ProtocolParameterError(
+              `Protocol invariant violation: maintenance margin ≥ 100% for ${upper}`,
+            );
+          }
+          if (openFeeRate > 0.1 || closeFeeRate > 0.1) {
+            throw new ProtocolParameterError(
+              `Protocol invariant violation: unusually high fee rate for ${upper} (open=${openFeeRate}, close=${closeFeeRate})`,
+            );
+          }
+
+          const rates: ProtocolFeeRates = {
+            openFeeRate,
+            closeFeeRate,
+            maintenanceMarginRate,
+            maxLeverage,
+            source: 'on-chain',
+          };
+
+          const cacheSlot = lastKnownSlot > 0 ? lastKnownSlot : 0;
+          feeCache.set(upper, { rates, cachedAtSlot: cacheSlot });
+
+          // Bound cache size
+          if (feeCache.size > 50) {
+            const oldest = feeCache.keys().next().value;
+            if (oldest) feeCache.delete(oldest);
+          }
+
+          return rates;
         }
       }
-    } catch {
-      // Fall through to SDK default
+    } catch (err) {
+      // Protocol parameter errors must not be silently swallowed
+      if (err instanceof ProtocolParameterError) throw err;
+      // Other errors (network, missing custody) fall through to SDK default
     }
   }
 

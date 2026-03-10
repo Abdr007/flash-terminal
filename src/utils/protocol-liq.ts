@@ -13,9 +13,95 @@
  */
 
 import { TradeSide } from '../types/index.js';
+import { getLogger } from '../utils/logger.js';
 
 const RATE_POWER = 1_000_000_000;
 const BPS_POWER = 10_000;
+
+/** Maximum acceptable deviation between CLI and SDK liquidation prices. */
+const DIVERGENCE_THRESHOLD = 0.005; // 0.5%
+
+/** If true, divergence throws instead of warning. Set via FLASH_STRICT_PROTOCOL env. */
+const STRICT_MODE = (process.env.FLASH_STRICT_PROTOCOL ?? '').toLowerCase() === 'true';
+
+/** Last divergence check result — consumed by telemetry status bar. */
+let _lastDivergenceOk = true;
+
+/** Get last divergence check status for telemetry. */
+export function isDivergenceOk(): boolean {
+  return _lastDivergenceOk;
+}
+
+/**
+ * Verify CLI liquidation calculation against Flash SDK helper.
+ * Called after position open or simulation — reuses existing data, no extra RPC calls.
+ *
+ * @returns deviation ratio, or -1 if SDK check is unavailable
+ */
+export async function checkLiquidationDivergence(
+  cliLiqPrice: number,
+  perpClient: unknown | null,
+  entryOraclePrice: any,
+  unsettledFees: any,
+  sdkSide: any,
+  custodyAcct: any,
+  posAcct: any,
+  market: string,
+): Promise<number> {
+  if (!perpClient || !entryOraclePrice || !custodyAcct || !posAcct) {
+    // SDK data not available (simulation mode) — skip check
+    return -1;
+  }
+
+  try {
+    const client = perpClient as any;
+    const liqOraclePrice = client.getLiquidationPriceContractHelper(
+      entryOraclePrice, unsettledFees, sdkSide, custodyAcct, posAcct,
+    );
+    const sdkLiq = parseFloat(liqOraclePrice.toUiPrice(8));
+
+    if (!Number.isFinite(sdkLiq) || sdkLiq <= 0 || !Number.isFinite(cliLiqPrice) || cliLiqPrice <= 0) {
+      return -1;
+    }
+
+    const deviation = Math.abs(cliLiqPrice - sdkLiq) / sdkLiq;
+
+    if (deviation > DIVERGENCE_THRESHOLD) {
+      _lastDivergenceOk = false;
+      const msg = [
+        `Protocol divergence detected for ${market}`,
+        `  CLI liquidation:  $${cliLiqPrice.toFixed(2)}`,
+        `  SDK liquidation:  $${sdkLiq.toFixed(2)}`,
+        `  Deviation:        ${(deviation * 100).toFixed(2)}%`,
+      ].join('\n');
+
+      getLogger().warn('DIVERGENCE', msg);
+
+      if (STRICT_MODE) {
+        throw new Error(`Protocol divergence exceeds threshold (${(deviation * 100).toFixed(2)}% > ${(DIVERGENCE_THRESHOLD * 100).toFixed(1)}%) for ${market}`);
+      }
+
+      // Print warning to CLI
+      const chalk = (await import('chalk')).default;
+      console.log('');
+      console.log(chalk.yellow('  ⚠ Protocol divergence detected'));
+      console.log(chalk.yellow(`    CLI liquidation:  $${cliLiqPrice.toFixed(2)}`));
+      console.log(chalk.yellow(`    SDK liquidation:  $${sdkLiq.toFixed(2)}`));
+      console.log(chalk.yellow(`    Deviation:        ${(deviation * 100).toFixed(2)}%`));
+      console.log('');
+    } else {
+      _lastDivergenceOk = true;
+    }
+
+    return deviation;
+  } catch (err) {
+    // Re-throw strict mode errors
+    if (err instanceof Error && err.message.includes('Protocol divergence exceeds')) throw err;
+    // SDK helper not available — skip silently
+    getLogger().debug('DIVERGENCE', `SDK check skipped: ${err}`);
+    return -1;
+  }
+}
 
 /**
  * Compute liquidation price using Flash SDK's getLiquidationPriceContractHelper().

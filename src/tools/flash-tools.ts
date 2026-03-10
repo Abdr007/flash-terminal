@@ -23,7 +23,7 @@ import {
   humanizeSdkError,
 } from '../utils/format.js';
 import { getErrorMessage } from '../utils/retry.js';
-import { getProtocolFeeRates, calcFeeUsd } from '../utils/protocol-fees.js';
+import { getProtocolFeeRates, calcFeeUsd, ProtocolParameterError } from '../utils/protocol-fees.js';
 import { computeSimulationLiquidationPrice } from '../utils/protocol-liq.js';
 import { getSigningGuard, SigningAuditEntry } from '../security/signing-guard.js';
 import { updateLastWallet, clearLastWallet } from '../wallet/session.js';
@@ -272,7 +272,22 @@ export const flashOpenPosition: ToolDefinition = {
 
     // Fetch fee rate from CustodyAccount via Flash SDK (cached, 60s TTL)
     const perpClient = context.simulationMode ? null : (context.flashClient as any).perpClient ?? null;
-    const feeRates = await getProtocolFeeRates(market, perpClient);
+    let feeRates;
+    try {
+      feeRates = await getProtocolFeeRates(market, perpClient);
+    } catch (err) {
+      if (err instanceof ProtocolParameterError) {
+        return { success: false, message: [
+          '',
+          chalk.red(`  Protocol parameter error detected for ${market}`),
+          chalk.red('  CustodyAccount data invalid or RPC corrupted.'),
+          chalk.red('  Please verify RPC integrity.'),
+          chalk.dim(`  Detail: ${err.message}`),
+          '',
+        ].join('\n') };
+      }
+      throw err;
+    }
     const estimatedFeeRate = feeRates.openFeeRate;
     const estimatedFee = calcFeeUsd(sizeUsd, estimatedFeeRate);
 
