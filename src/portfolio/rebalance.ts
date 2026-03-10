@@ -104,6 +104,11 @@ export function analyzeRebalance(
   }
 
   // 2. Concentration check (any market > 40% of total exposure)
+  // Skip if a close_position action already targets this market+side
+  const closedPositions = new Set(
+    actions.filter(a => a.type === 'close_position').map(a => `${a.market}:${a.side}`)
+  );
+
   const CONCENTRATION_THRESHOLD = 0.40;
   for (const [market, exposure] of marketExposure.entries()) {
     const pct = totalExposure > 0 ? exposure / totalExposure : 0;
@@ -116,6 +121,8 @@ export function analyzeRebalance(
 
       if (marketPositions.length > 0) {
         const target = marketPositions[0];
+        // Don't suggest reduce_collateral if we're already suggesting closing this position
+        if (closedPositions.has(`${target.market}:${target.side}`)) continue;
         const reductionTarget = exposure - totalExposure * ALLOCATION_LIMITS.MAX_MARKET_EXPOSURE;
         actions.push({
           type: 'reduce_collateral',

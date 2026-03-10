@@ -3253,7 +3253,20 @@ export class FlashTerminal {
       } else {
         console.log(`    Status:         ${chalk.red('FAILED')}`);
         if (preview.simulationError) {
-          console.log(`    Error:          ${chalk.red(preview.simulationError)}`);
+          // Map raw Solana errors to human-readable explanations
+          const rawErr = preview.simulationError;
+          const isInvalidArg = rawErr.includes('InvalidArgument') || rawErr.includes('invalid program argument');
+          if (isInvalidArg) {
+            console.log(`    Error:          ${chalk.red('Protocol rejected parameters')}`);
+            console.log('');
+            console.log(chalk.dim('  Possible causes:'));
+            console.log(chalk.dim('    • Leverage exceeds market limit'));
+            console.log(chalk.dim('    • Insufficient pool liquidity'));
+            console.log(chalk.dim('    • Position size exceeds protocol limits'));
+            console.log(chalk.dim('    • Duplicate position on same market/side'));
+          } else {
+            console.log(`    Error:          ${chalk.red(humanizeSdkError(rawErr))}`);
+          }
         }
       }
 

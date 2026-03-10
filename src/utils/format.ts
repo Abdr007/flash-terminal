@@ -4,9 +4,11 @@ import { theme } from '../cli/theme.js';
 
 export function formatUsd(value: number): string {
   if (!Number.isFinite(value)) return 'N/A';
-  const abs = Math.abs(value);
-  if (abs >= 1_000_000) return `$${(value / 1_000_000).toFixed(2)}M`;
-  const sign = value < 0 ? '-' : '';
+  // Normalize negative zero
+  const v = Math.abs(value) < 0.005 ? 0 : value;
+  const abs = Math.abs(v);
+  if (abs >= 1_000_000) return `$${(v / 1_000_000).toFixed(2)}M`;
+  const sign = v < 0 ? '-' : '';
   return `${sign}$${abs.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
@@ -19,8 +21,10 @@ export function formatPrice(value: number): string {
 
 export function formatPercent(value: number): string {
   if (!Number.isFinite(value)) return 'N/A';
-  const sign = value >= 0 ? '+' : '';
-  return `${sign}${value.toFixed(2)}%`;
+  // Normalize negative zero
+  const v = Math.abs(value) < 0.005 ? 0 : value;
+  const sign = v >= 0 ? '+' : '';
+  return `${sign}${v.toFixed(2)}%`;
 }
 
 export function colorPnl(value: number): string {
@@ -86,8 +90,26 @@ export function formatTable(headers: string[], rows: string[][]): string {
   return [headerLine, separator, ...bodyLines].join('\n');
 }
 
-function stripAnsi(str: string): string {
+/** Strip ANSI escape sequences for accurate width measurement. */
+export function stripAnsi(str: string): string {
   return str.replace(/\u001b\[[0-9;]*m/g, '');
+}
+
+/** Visible length of a string (excluding ANSI escape codes). */
+export function visibleLength(str: string): number {
+  return stripAnsi(str).length;
+}
+
+/** Pad a string to a target visible width, ignoring ANSI codes. */
+export function padVisible(str: string, width: number): string {
+  const pad = width - visibleLength(str);
+  return pad > 0 ? str + ' '.repeat(pad) : str;
+}
+
+/** padStart equivalent that accounts for ANSI codes. */
+export function padVisibleStart(str: string, width: number): string {
+  const pad = width - visibleLength(str);
+  return pad > 0 ? ' '.repeat(pad) + str : str;
 }
 
 export function banner(): string {

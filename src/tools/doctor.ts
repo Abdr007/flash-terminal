@@ -88,9 +88,10 @@ async function checkProtocolData(
   let passed = true;
 
   try {
-    const { POOL_MARKETS } = await import('../config/index.js');
-    const marketCount = new Set(Object.values(POOL_MARKETS).flat()).size;
-    details.push(theme.positive('  ✔') + ` Markets loaded (${marketCount} markets)`);
+    const { getProtocolStatsService } = await import('../data/protocol-stats.js');
+    const pss = getProtocolStatsService(fstats as import('../types/index.js').IDataClient);
+    const pStats = await pss.getStats();
+    details.push(theme.positive('  ✔') + ` Markets loaded (${pStats.activeMarkets} active, ${pStats.marketsComingSoon} coming soon)`);
   } catch {
     details.push(theme.negative('  ✘') + ' Markets failed to load');
     passed = false;

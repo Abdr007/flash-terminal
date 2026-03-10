@@ -64,6 +64,20 @@ export class ProtocolInspector {
       lines.push(`    ${theme.accent(pool)} ${theme.dim('→')} ${markets ? markets.join(', ') : 'N/A'}`);
     }
 
+    // Market summary from ProtocolStatsService
+    try {
+      const { getProtocolStatsService } = await import('../data/protocol-stats.js');
+      const pss = getProtocolStatsService(this.fstats);
+      const pStats = await pss.getStats();
+      lines.push('');
+      lines.push(`  ${theme.section('Market Summary')}`);
+      lines.push(theme.pair('Active Markets', pStats.activeMarkets.toString()));
+      lines.push(theme.pair('Markets With OI', pStats.marketsWithOI.toString()));
+      if (pStats.marketsComingSoon > 0) {
+        lines.push(theme.pair('Coming Soon', pStats.marketsComingSoon.toString()));
+      }
+    } catch { /* non-critical */ }
+
     // Overview stats
     if (snap.overviewStats) {
       lines.push('');

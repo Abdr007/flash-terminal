@@ -385,8 +385,17 @@ export const aiDashboard: ToolDefinition = {
     // ═══════════════════════════════════════════════════════════════════
     lines.push(boxTop(' Protocol Health '));
 
-    const activeMarkets = snapshot.markets.filter(m => Number.isFinite(m.price) && m.price > 0);
-    lines.push(boxLine(dashPair('Active Markets:', String(activeMarkets.length))));
+    // Use ProtocolStatsService for consistent market count
+    let psActiveMarkets = 0;
+    try {
+      const { getProtocolStatsService } = await import('../data/protocol-stats.js');
+      const pss = getProtocolStatsService(context.dataClient);
+      const pStats = await pss.getStats();
+      psActiveMarkets = pStats.activeMarkets;
+    } catch {
+      psActiveMarkets = snapshot.markets.filter(m => Number.isFinite(m.price) && m.price > 0).length;
+    }
+    lines.push(boxLine(dashPair('Active Markets:', String(psActiveMarkets))));
 
     let totalOi = 0;
     for (const m of snapshot.openInterest.markets) {
@@ -397,7 +406,7 @@ export const aiDashboard: ToolDefinition = {
     // 24h volume from overview stats (fstats API)
     const stats = snapshot.overviewStats;
     const hasStats = stats && (stats.volumeUsd > 0 || stats.trades > 0);
-    lines.push(boxLine(dashPair('24h Volume:', hasStats ? formatUsd(stats.volumeUsd) : chalk.dim('Data unavailable'))));
+    lines.push(boxLine(dashPair('30d Volume:', hasStats ? formatUsd(stats.volumeUsd) : chalk.dim('Data unavailable'))));
 
     // Flash Trade uses borrow/lock fees, not periodic funding rates
     lines.push(boxLine(dashPair('Fee Model:', 'Borrow/Lock fees')));
@@ -459,7 +468,7 @@ export const aiDashboard: ToolDefinition = {
           lines.push(boxLine(`${rank}  ${sym}${formatUsd(estimatedVol)}`));
         }
       } else if (lastDay) {
-        lines.push(boxLine(dashPair('Total 24h:', formatUsd(lastDay.volumeUsd))));
+        lines.push(boxLine(dashPair('Last Day:', formatUsd(lastDay.volumeUsd))));
         lines.push(boxLine(chalk.dim('Per-market breakdown unavailable')));
       }
     } else {

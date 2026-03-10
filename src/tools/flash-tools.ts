@@ -21,6 +21,7 @@ import {
   formatTable,
   shortAddress,
   humanizeSdkError,
+  padVisibleStart,
 } from '../utils/format.js';
 import { getErrorMessage } from '../utils/retry.js';
 import { getProtocolFeeRates, calcFeeUsd, ProtocolParameterError } from '../utils/protocol-fees.js';
@@ -1020,6 +1021,8 @@ export const flashGetVolume: ToolDefinition = {
           '',
           formatTable(headers, rows),
           '',
+          theme.dim(`  Data updated: ${new Date().toLocaleTimeString()}`),
+          '',
         ].join('\n'),
         data: { volume },
       };
@@ -1056,6 +1059,8 @@ export const flashGetOpenInterest: ToolDefinition = {
           theme.titleBlock('OPEN INTEREST'),
           '',
           formatTable(headers, rows),
+          '',
+          theme.dim(`  Data updated: ${new Date().toLocaleTimeString()}`),
           '',
         ].join('\n'),
         data: { openInterest: oi },
@@ -1852,11 +1857,12 @@ export const protocolStatusTool: ToolDefinition = {
       }
     }
 
-    // 5. Active Markets
+    // 5. Active Markets (tradeable markets only — consistent with protocol health)
     try {
-      const { POOL_MARKETS } = await import('../config/index.js');
-      const marketCount = Object.values(POOL_MARKETS).flat().length;
-      lines.push(`  Markets:       ${chalk.bold(String(marketCount))} active`);
+      const { getProtocolStatsService } = await import('../data/protocol-stats.js');
+      const pss = getProtocolStatsService(context.dataClient);
+      const stats = await pss.getStats();
+      lines.push(`  Markets:       ${chalk.bold(String(stats.activeMarkets))} active`);
     } catch {
       lines.push(`  Markets:       ${chalk.dim('unavailable')}`);
     }
@@ -1988,11 +1994,11 @@ const tradeHistoryTool: ToolDefinition = {
           : formatPrice(t.price).padStart(10);
         const exitStr = isClose
           ? formatPrice(t.price).padStart(10)
-          : theme.dim('—').padStart(10);
+          : padVisibleStart(theme.dim('—'), 10);
         const coll = formatUsd(t.collateralUsd).padStart(10);
         const pnl = t.pnl !== undefined
           ? (t.pnl >= 0 ? theme.positive(`+${formatUsd(t.pnl)}`) : theme.negative(formatUsd(t.pnl)))
-          : theme.dim('  —');
+          : padVisibleStart(theme.dim('—'), 5);
 
         lines.push(`  ${time}  ${action}   ${market}  ${side}  ${entryStr}  ${exitStr}  ${coll}  ${pnl}`);
       }
@@ -2043,12 +2049,12 @@ const tradeHistoryTool: ToolDefinition = {
       const actionStr = theme.command((actionLabels[t.action] ?? t.action).padEnd(10));
       const market = (t.market ?? '').padEnd(9);
       const side = (t.side ?? '').toUpperCase() === 'LONG' ? theme.long('LONG ') : theme.short('SHORT');
-      const entryStr = t.entryPrice !== undefined ? formatPrice(t.entryPrice).padStart(10) : theme.dim('—').padStart(10);
-      const exitStr = t.exitPrice !== undefined ? formatPrice(t.exitPrice).padStart(10) : theme.dim('—').padStart(10);
-      const coll = t.collateral !== undefined ? formatUsd(t.collateral).padStart(10) : '         —';
+      const entryStr = t.entryPrice !== undefined ? formatPrice(t.entryPrice).padStart(10) : padVisibleStart(theme.dim('—'), 10);
+      const exitStr = t.exitPrice !== undefined ? formatPrice(t.exitPrice).padStart(10) : padVisibleStart(theme.dim('—'), 10);
+      const coll = t.collateral !== undefined ? formatUsd(t.collateral).padStart(10) : padVisibleStart(theme.dim('—'), 10);
       const pnl = t.pnl !== undefined
         ? (t.pnl >= 0 ? theme.positive(`+${formatUsd(t.pnl)}`) : theme.negative(formatUsd(t.pnl)))
-        : theme.dim('  —');
+        : padVisibleStart(theme.dim('—'), 5);
 
       lines.push(`  ${time}  ${actionStr} ${market} ${side}  ${entryStr}  ${exitStr}  ${coll}  ${pnl}`);
     }
@@ -2372,7 +2378,7 @@ export const liquidityDepthTool: ToolDefinition = {
         lines.push(theme.pair('Open Interest', formatUsd(totalOi)));
         lines.push(theme.pair('  Long OI', `${formatUsd(longOi)} (${longPct.toFixed(1)}%)`));
         lines.push(theme.pair('  Short OI', `${formatUsd(shortOi)} (${shortPct.toFixed(1)}%)`));
-        lines.push(theme.pair('Long / Short Ratio', `${longPct.toFixed(0)} / ${shortPct.toFixed(0)}`));
+        lines.push(theme.pair('Long / Short', `${longPct.toFixed(0)} / ${shortPct.toFixed(0)}`));
         lines.push('');
         lines.push(theme.dim('  Orderbook depth unavailable for this perpetual market.'));
         lines.push(theme.dim('  Flash Trade uses pool-based liquidity, not an orderbook.'));
@@ -2394,87 +2400,55 @@ export const protocolHealthTool: ToolDefinition = {
   parameters: z.object({}),
   execute: async (_params, context): Promise<ToolResult> => {
     try {
-      const [markets, oiData, overviewStats] = await Promise.all([
-        context.flashClient.getMarketData(),
-        context.dataClient.getOpenInterest(),
-        context.dataClient.getOverviewStats('30d'),
-      ]);
-
-      // Aggregate OI
-      let totalLongOi = 0;
-      let totalShortOi = 0;
-      for (const m of oiData.markets) {
-        totalLongOi += m.longOi;
-        totalShortOi += m.shortOi;
-      }
-      const totalOi = totalLongOi + totalShortOi;
-
-      // Active markets (those with price > 0 and OI > 0)
-      const activeMarkets = markets.filter(m =>
-        Number.isFinite(m.price) && m.price > 0 &&
-        (m.openInterestLong + m.openInterestShort > 0 || oiData.markets.some(oi => oi.market.toUpperCase() === m.symbol.toUpperCase()))
-      );
+      const { getProtocolStatsService } = await import('../data/protocol-stats.js');
+      const pss = getProtocolStatsService(context.dataClient);
+      const stats = await pss.getStats();
 
       // RPC latency
       let rpcLatency = 'N/A';
+      let blockHeight = 'N/A';
       try {
         const { getRpcManagerInstance } = await import('../network/rpc-manager.js');
         const rpcMgr = getRpcManagerInstance();
         if (rpcMgr) {
           const lat = rpcMgr.activeLatencyMs;
           rpcLatency = lat >= 0 ? `${lat}ms` : 'N/A';
+          const slot = rpcMgr.activeSlot > 0 ? rpcMgr.activeSlot : await rpcMgr.connection.getSlot('confirmed');
+          if (Number.isFinite(slot)) blockHeight = slot.toLocaleString();
         }
       } catch { /* non-critical */ }
-
-      // Block height
-      let blockHeight = 'N/A';
-      try {
-        const { getRpcManagerInstance } = await import('../network/rpc-manager.js');
-        const rpcMgr = getRpcManagerInstance();
-        if (rpcMgr) {
-          const slot = await rpcMgr.connection.getSlot('confirmed');
-          if (Number.isFinite(slot)) {
-            blockHeight = slot.toLocaleString();
-          }
-        }
-      } catch { /* non-critical */ }
-
-      // L/S ratio
-      const longPct = totalOi > 0 ? ((totalLongOi / totalOi) * 100).toFixed(0) : '50';
-      const shortPct = totalOi > 0 ? ((totalShortOi / totalOi) * 100).toFixed(0) : '50';
 
       // Top markets by OI
-      const sortedOi = [...oiData.markets]
-        .map(m => ({ market: m.market, total: m.longOi + m.shortOi }))
-        .sort((a, b) => b.total - a.total)
-        .slice(0, 5);
+      const top5 = stats.marketsByOI.filter(m => m.total > 0).slice(0, 5);
+
+      const dataAge = pss.getDataAge();
+      const freshnessStr = dataAge >= 0 ? theme.dim(`  Data updated: ${dataAge}s ago`) : '';
 
       const lines: string[] = [
         theme.titleBlock('FLASH PROTOCOL HEALTH'),
         '',
         `  ${theme.section('Protocol Overview')}`,
-        theme.pair('Active Markets', activeMarkets.length.toString()),
-        theme.pair('Total Open Interest', formatUsd(totalOi)),
-        theme.pair('Long/Short Ratio', `${theme.positive(longPct + '%')} / ${theme.negative(shortPct + '%')}`),
+        theme.pair('Active Markets', stats.activeMarkets.toString()),
+        theme.pair('Total Open Interest', formatUsd(stats.totalOpenInterest)),
+        theme.pair('Long/Short Ratio', `${theme.positive(stats.longPct + '%')} / ${theme.negative(stats.shortPct + '%')}`),
         '',
       ];
 
       // 30d stats
-      if (overviewStats) {
+      if (stats.volume30d > 0 || stats.trades30d > 0) {
         lines.push(`  ${theme.section('Activity (30d)')}`);
-        lines.push(theme.pair('Volume', formatUsd(overviewStats.volumeUsd)));
-        lines.push(theme.pair('Trades', overviewStats.trades.toLocaleString()));
-        lines.push(theme.pair('Unique Traders', overviewStats.uniqueTraders.toLocaleString()));
-        lines.push(theme.pair('Fees Collected', formatUsd(overviewStats.feesUsd)));
+        lines.push(theme.pair('Volume', formatUsd(stats.volume30d)));
+        lines.push(theme.pair('Trades', stats.trades30d.toLocaleString()));
+        lines.push(theme.pair('Unique Traders', stats.traders30d.toLocaleString()));
+        lines.push(theme.pair('Fees Collected', formatUsd(stats.fees30d)));
         lines.push('');
       }
 
       // Top markets
-      if (sortedOi.length > 0) {
+      if (top5.length > 0) {
         lines.push(`  ${theme.section('Top Markets by OI')}`);
-        for (const m of sortedOi) {
-          if (m.total <= 0) continue;
-          const pct = totalOi > 0 ? ((m.total / totalOi) * 100).toFixed(1) : '0';
+        for (const m of top5) {
+          const pct = stats.totalOpenInterest > 0 ? ((m.total / stats.totalOpenInterest) * 100).toFixed(1) : '0';
           lines.push(`    ${m.market.padEnd(10)} ${formatUsd(m.total).padEnd(14)} ${theme.dim(`(${pct}%)`)}`);
         }
         lines.push('');
@@ -2484,6 +2458,8 @@ export const protocolHealthTool: ToolDefinition = {
       lines.push(`  ${theme.section('Infrastructure')}`);
       lines.push(theme.pair('RPC Latency', rpcLatency));
       lines.push(theme.pair('Block Height', blockHeight));
+      lines.push('');
+      if (freshnessStr) lines.push(freshnessStr);
       lines.push('');
 
       return { success: true, message: lines.join('\n') };
