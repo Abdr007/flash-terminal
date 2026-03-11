@@ -4,158 +4,144 @@
  * and integration with the interpreter localParse.
  */
 
+import { describe, it } from 'vitest';
 import { resolveMarket, resolveAndValidateMarket, isValidMarket, normalizeAssetText } from '../src/utils/market-resolver.js';
 import { localParse } from '../src/ai/interpreter.js';
 import { ActionType } from '../src/types/index.js';
 import assert from 'assert';
 
-let passed = 0;
-let failed = 0;
-
-function test(name: string, fn: () => void) {
-  try {
-    fn();
-    passed++;
-    console.log(`  ✔ ${name}`);
-  } catch (e: unknown) {
-    failed++;
-    console.log(`  ✖ ${name}`);
-    console.log(`    ${(e as Error).message}`);
-  }
-}
-
-console.log('\n  MARKET RESOLVER TESTS\n');
+describe('Market Resolver', () => {
 
 // ─── resolveMarket() ──────────────────────────────────────────────────────
 
-test('resolves "crude oil" → CRUDEOIL', () => {
+it('resolves "crude oil" → CRUDEOIL', () => {
   assert.strictEqual(resolveMarket('crude oil'), 'CRUDEOIL');
 });
 
-test('resolves "oil" → CRUDEOIL', () => {
+it('resolves "oil" → CRUDEOIL', () => {
   assert.strictEqual(resolveMarket('oil'), 'CRUDEOIL');
 });
 
-test('resolves "CRUDE OIL" → CRUDEOIL', () => {
+it('resolves "CRUDE OIL" → CRUDEOIL', () => {
   assert.strictEqual(resolveMarket('CRUDE OIL'), 'CRUDEOIL');
 });
 
-test('resolves "crude" → CRUDEOIL', () => {
+it('resolves "crude" → CRUDEOIL', () => {
   assert.strictEqual(resolveMarket('crude'), 'CRUDEOIL');
 });
 
-test('resolves "Crude Oil" (mixed case) → CRUDEOIL', () => {
+it('resolves "Crude Oil" (mixed case) → CRUDEOIL', () => {
   assert.strictEqual(resolveMarket('Crude Oil'), 'CRUDEOIL');
 });
 
-test('resolves "SOL" → SOL', () => {
+it('resolves "SOL" → SOL', () => {
   assert.strictEqual(resolveMarket('SOL'), 'SOL');
 });
 
-test('resolves "sol" → SOL', () => {
+it('resolves "sol" → SOL', () => {
   assert.strictEqual(resolveMarket('sol'), 'SOL');
 });
 
-test('resolves "bitcoin" → BTC', () => {
+it('resolves "bitcoin" → BTC', () => {
   assert.strictEqual(resolveMarket('bitcoin'), 'BTC');
 });
 
-test('resolves "gold" → XAU', () => {
+it('resolves "gold" → XAU', () => {
   assert.strictEqual(resolveMarket('gold'), 'XAU');
 });
 
-test('resolves "met" → MET (case insensitive canonical lookup)', () => {
+it('resolves "met" → MET (case insensitive canonical lookup)', () => {
   assert.strictEqual(resolveMarket('met'), 'MET');
 });
 
-test('resolves "metaplex" → MET', () => {
+it('resolves "metaplex" → MET', () => {
   assert.strictEqual(resolveMarket('metaplex'), 'MET');
 });
 
-test('resolves "yen" → USDJPY', () => {
+it('resolves "yen" → USDJPY', () => {
   assert.strictEqual(resolveMarket('yen'), 'USDJPY');
 });
 
-test('resolves "EUR" → EUR', () => {
+it('resolves "EUR" → EUR', () => {
   assert.strictEqual(resolveMarket('EUR'), 'EUR');
 });
 
-test('resolves "fartcoin" → FARTCOIN', () => {
+it('resolves "fartcoin" → FARTCOIN', () => {
   assert.strictEqual(resolveMarket('fartcoin'), 'FARTCOIN');
 });
 
-test('resolves "CRUDEOIL" → CRUDEOIL (already canonical)', () => {
+it('resolves "CRUDEOIL" → CRUDEOIL (already canonical)', () => {
   assert.strictEqual(resolveMarket('CRUDEOIL'), 'CRUDEOIL');
 });
 
 // ─── resolveAndValidateMarket() ──────────────────────────────────────────
 
-test('validates "oil" as valid market', () => {
+it('validates "oil" as valid market', () => {
   assert.strictEqual(resolveAndValidateMarket('oil'), 'CRUDEOIL');
 });
 
-test('validates "sol" as valid market', () => {
+it('validates "sol" as valid market', () => {
   assert.strictEqual(resolveAndValidateMarket('sol'), 'SOL');
 });
 
-test('rejects "NOTAMARKET" as invalid', () => {
+it('rejects "NOTAMARKET" as invalid', () => {
   assert.strictEqual(resolveAndValidateMarket('NOTAMARKET'), null);
 });
 
 // ─── isValidMarket() ─────────────────────────────────────────────────────
 
-test('isValidMarket("SOL") → true', () => {
+it('isValidMarket("SOL") → true', () => {
   assert.strictEqual(isValidMarket('SOL'), true);
 });
 
-test('isValidMarket("CRUDEOIL") → true', () => {
+it('isValidMarket("CRUDEOIL") → true', () => {
   assert.strictEqual(isValidMarket('CRUDEOIL'), true);
 });
 
-test('isValidMarket("MET") → true', () => {
+it('isValidMarket("MET") → true', () => {
   assert.strictEqual(isValidMarket('MET'), true);
 });
 
-test('isValidMarket("FAKE") → false', () => {
+it('isValidMarket("FAKE") → false', () => {
   assert.strictEqual(isValidMarket('FAKE'), false);
 });
 
 // ─── normalizeAssetText() ────────────────────────────────────────────────
 
-test('normalizeAssetText handles "crude oil" → "crudeoil"', () => {
+it('normalizeAssetText handles "crude oil" → "crudeoil"', () => {
   const result = normalizeAssetText('analyze crude oil');
   assert.ok(result.includes('crudeoil'), `Expected "crudeoil" in "${result}"`);
 });
 
-test('normalizeAssetText handles "gold" → "xau"', () => {
+it('normalizeAssetText handles "gold" → "xau"', () => {
   const result = normalizeAssetText('analyze gold');
   assert.ok(result.includes('xau'), `Expected "xau" in "${result}"`);
 });
 
 // ─── localParse integration: analyze ──────────────────────────────────────
 
-test('localParse("analyze crude oil") → Analyze CRUDEOIL', () => {
+it('localParse("analyze crude oil") → Analyze CRUDEOIL', () => {
   const result = localParse('analyze crude oil');
   assert.ok(result, 'Should parse');
   assert.strictEqual(result!.action, ActionType.Analyze);
   assert.strictEqual((result as Record<string, unknown>).market, 'CRUDEOIL');
 });
 
-test('localParse("analyze oil") → Analyze CRUDEOIL', () => {
+it('localParse("analyze oil") → Analyze CRUDEOIL', () => {
   const result = localParse('analyze oil');
   assert.ok(result, 'Should parse');
   assert.strictEqual(result!.action, ActionType.Analyze);
   assert.strictEqual((result as Record<string, unknown>).market, 'CRUDEOIL');
 });
 
-test('localParse("analyse sol") → Analyze SOL (British spelling)', () => {
+it('localParse("analyse sol") → Analyze SOL (British spelling)', () => {
   const result = localParse('analyse sol');
   assert.ok(result, 'Should parse');
   assert.strictEqual(result!.action, ActionType.Analyze);
   assert.strictEqual((result as Record<string, unknown>).market, 'SOL');
 });
 
-test('localParse("analyze met") → Analyze MET', () => {
+it('localParse("analyze met") → Analyze MET', () => {
   const result = localParse('analyze met');
   assert.ok(result, 'Should parse');
   assert.strictEqual(result!.action, ActionType.Analyze);
@@ -164,14 +150,14 @@ test('localParse("analyze met") → Analyze MET', () => {
 
 // ─── localParse integration: liquidations ─────────────────────────────────
 
-test('localParse("liquidations crude oil") → LiquidationMap CRUDEOIL', () => {
+it('localParse("liquidations crude oil") → LiquidationMap CRUDEOIL', () => {
   const result = localParse('liquidations crude oil');
   assert.ok(result, 'Should parse');
   assert.strictEqual(result!.action, ActionType.LiquidationMap);
   assert.strictEqual((result as Record<string, unknown>).market, 'CRUDEOIL');
 });
 
-test('localParse("liquidations sol") → LiquidationMap SOL', () => {
+it('localParse("liquidations sol") → LiquidationMap SOL', () => {
   const result = localParse('liquidations sol');
   assert.ok(result, 'Should parse');
   assert.strictEqual(result!.action, ActionType.LiquidationMap);
@@ -180,14 +166,14 @@ test('localParse("liquidations sol") → LiquidationMap SOL', () => {
 
 // ─── localParse integration: funding ──────────────────────────────────────
 
-test('localParse("funding crude oil") → FundingDashboard CRUDEOIL', () => {
+it('localParse("funding crude oil") → FundingDashboard CRUDEOIL', () => {
   const result = localParse('funding crude oil');
   assert.ok(result, 'Should parse');
   assert.strictEqual(result!.action, ActionType.FundingDashboard);
   assert.strictEqual((result as Record<string, unknown>).market, 'CRUDEOIL');
 });
 
-test('localParse("funding met") → FundingDashboard MET', () => {
+it('localParse("funding met") → FundingDashboard MET', () => {
   const result = localParse('funding met');
   assert.ok(result, 'Should parse');
   assert.strictEqual(result!.action, ActionType.FundingDashboard);
@@ -196,14 +182,14 @@ test('localParse("funding met") → FundingDashboard MET', () => {
 
 // ─── localParse integration: depth ────────────────────────────────────────
 
-test('localParse("depth crude oil") → LiquidityDepth CRUDEOIL', () => {
+it('localParse("depth crude oil") → LiquidityDepth CRUDEOIL', () => {
   const result = localParse('depth crude oil');
   assert.ok(result, 'Should parse');
   assert.strictEqual(result!.action, ActionType.LiquidityDepth);
   assert.strictEqual((result as Record<string, unknown>).market, 'CRUDEOIL');
 });
 
-test('localParse("depth sol") → LiquidityDepth SOL', () => {
+it('localParse("depth sol") → LiquidityDepth SOL', () => {
   const result = localParse('depth sol');
   assert.ok(result, 'Should parse');
   assert.strictEqual(result!.action, ActionType.LiquidityDepth);
@@ -212,7 +198,7 @@ test('localParse("depth sol") → LiquidityDepth SOL', () => {
 
 // ─── localParse integration: add collateral with dollar word ──────────────
 
-test('localParse("add $5 collateral on sol long") → AddCollateral SOL', () => {
+it('localParse("add $5 collateral on sol long") → AddCollateral SOL', () => {
   const result = localParse('add $5 collateral on sol long');
   assert.ok(result, 'Should parse');
   assert.strictEqual(result!.action, ActionType.AddCollateral);
@@ -220,14 +206,11 @@ test('localParse("add $5 collateral on sol long") → AddCollateral SOL', () => 
   assert.strictEqual((result as Record<string, unknown>).amount, 5);
 });
 
-test('localParse("add 5 dollar collateral on sol") → AddCollateral SOL (no side, auto-detect)', () => {
+it('localParse("add 5 dollar collateral on sol") → AddCollateral SOL (no side, auto-detect)', () => {
   const result = localParse('add 5 dollar collateral on sol');
   assert.ok(result, 'Should parse');
   assert.strictEqual(result!.action, ActionType.AddCollateral);
   assert.strictEqual((result as Record<string, unknown>).market, 'SOL');
 });
 
-// ─── Summary ─────────────────────────────────────────────────────────────
-
-console.log(`\n  Results: ${passed} passed, ${failed} failed\n`);
-if (failed > 0) process.exit(1);
+}); // end describe
