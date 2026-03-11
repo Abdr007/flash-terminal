@@ -294,21 +294,39 @@ export class PriceService {
 
   private compute24hChange(symbol: string, currentPrice: number): number {
     const history = _sharedHistory.get(symbol);
-    if (!history || history.length === 0) return 0;
 
-    // Find the snapshot closest to 24h ago
-    const target = Date.now() - HISTORY_WINDOW_MS;
-    let closest = history[0];
-    for (const snap of history) {
-      if (Math.abs(snap.timestamp - target) < Math.abs(closest.timestamp - target)) {
-        closest = snap;
+    // Check if we have sufficient local history (at least 1 hour of data)
+    if (history && history.length >= 2) {
+      const oldestTimestamp = history[0].timestamp;
+      const historyAgeMs = Date.now() - oldestTimestamp;
+
+      // Only use local history if we have at least 1 hour of data
+      if (historyAgeMs >= 60 * 60_000) {
+        const target = Date.now() - HISTORY_WINDOW_MS;
+        let closest = history[0];
+        for (const snap of history) {
+          if (Math.abs(snap.timestamp - target) < Math.abs(closest.timestamp - target)) {
+            closest = snap;
+          }
+        }
+
+        if (closest.price > 0 && Number.isFinite(closest.price)) {
+          const change = ((currentPrice - closest.price) / closest.price) * 100;
+          if (Number.isFinite(change)) return change;
+        }
       }
     }
 
-    if (closest.price <= 0 || !Number.isFinite(closest.price)) return 0;
+    // Fallback: use DexScreener cached 24h change (bootstraps on fresh start)
+    const dexChange = _dexScreenerCache.get(symbol);
+    if (dexChange && Date.now() - dexChange.fetchedAt < DEXSCREENER_CACHE_TTL_MS) {
+      return dexChange.change;
+    }
 
-    const change = ((currentPrice - closest.price) / closest.price) * 100;
-    return Number.isFinite(change) ? change : 0;
+    // Trigger async DexScreener fetch (non-blocking, results available next cycle)
+    this.triggerDexScreenerFetch();
+
+    return 0;
   }
 
   // ─── Disk Persistence ──────────────────────────────────────────────────────
@@ -416,4 +434,106 @@ export class PriceService {
     _lastHistoryRecord = 0;
     _lastDiskSave = 0;
   }
+
+  // ─── DexScreener 24h Change Bootstrap ────────────────────────────────────
+  // Used only when local price history is insufficient (<1h of data).
+  // Non-blocking: triggers async fetch, results available on next price cycle.
+
+  private triggerDexScreenerFetch(): void {
+    if (_dexScreenerFetchInFlight || Date.now() - _dexScreenerLastFetch < DEXSCREENER_MIN_INTERVAL_MS) {
+      return;
+    }
+    _dexScreenerFetchInFlight = true;
+    this.fetchDexScreener24h().catch(() => {}).finally(() => {
+      _dexScreenerFetchInFlight = false;
+    });
+  }
+
+  private async fetchDexScreener24h(): Promise<void> {
+    const logger = getLogger();
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8_000);
+
+    try {
+      // DexScreener search endpoint — returns pairs with 24h change
+      // Fetch top crypto symbols that Flash Trade supports
+      const symbols = Object.keys(DEXSCREENER_TOKEN_ADDRESSES);
+      let fetched = 0;
+
+      for (const sym of symbols) {
+        const addr = DEXSCREENER_TOKEN_ADDRESSES[sym];
+        if (!addr) continue;
+
+        // Check if we already have a fresh cache entry
+        const existing = _dexScreenerCache.get(sym);
+        if (existing && Date.now() - existing.fetchedAt < DEXSCREENER_CACHE_TTL_MS) continue;
+
+        try {
+          const res = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${addr}`, {
+            signal: controller.signal,
+            headers: { Accept: 'application/json' },
+          });
+
+          if (!res.ok) continue;
+
+          const text = await res.text();
+          if (text.length > MAX_RESPONSE_BYTES) continue;
+
+          const data = JSON.parse(text) as { pairs?: Array<{ priceChange?: { h24?: number } }> };
+          const topPair = data.pairs?.[0];
+          const change = topPair?.priceChange?.h24;
+
+          if (typeof change === 'number' && Number.isFinite(change)) {
+            _dexScreenerCache.set(sym, { change, fetchedAt: Date.now() });
+            fetched++;
+          }
+
+          // Bound cache size
+          if (_dexScreenerCache.size > 50) {
+            const oldest = _dexScreenerCache.keys().next().value;
+            if (oldest) _dexScreenerCache.delete(oldest);
+          }
+        } catch {
+          // Per-symbol fetch failure is non-critical
+        }
+      }
+
+      _dexScreenerLastFetch = Date.now();
+      if (fetched > 0) {
+        logger.debug('PRICE', `DexScreener: bootstrapped 24h change for ${fetched} markets`);
+      }
+    } catch (error: unknown) {
+      logger.debug('PRICE', `DexScreener fetch failed: ${getErrorMessage(error)}`);
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
 }
+
+// ─── DexScreener Module State ──────────────────────────────────────────────
+// Shared across all PriceService instances, bounded at 50 entries with 5min TTL.
+
+const DEXSCREENER_CACHE_TTL_MS = 5 * 60_000; // 5 minutes
+const DEXSCREENER_MIN_INTERVAL_MS = 60_000;   // max 1 fetch batch per minute
+let _dexScreenerFetchInFlight = false;
+let _dexScreenerLastFetch = 0;
+const _dexScreenerCache = new Map<string, { change: number; fetchedAt: number }>();
+
+// Solana token mint addresses for DexScreener lookup
+const DEXSCREENER_TOKEN_ADDRESSES: Record<string, string> = {
+  SOL: 'So11111111111111111111111111111111111111112',
+  BONK: 'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263',
+  WIF: 'EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm',
+  JUP: 'JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN',
+  JTO: 'jtojtomepa8beP8AuQc6eXt5FriJwfFMwQx2v2f9mCL',
+  PYTH: 'HZ1JovNiVvGrGNiiYvEozEVgZ58xaU3RKwX8eACQBCt3',
+  RAY: '4k3Dyjzvzp8eMZWUXbBCjEvwSkkk59S5iCNLY3QrkX6R',
+  PENGU: '2zMMhcVQEXDtdE6vsFS7S7D5oUodfJHE8vd1gnBouauv',
+  HYPE: 'HYPExVFoRdKxAFRoMSkTC5PBRJK4TZjPZBpGpydrWu3C',
+  FARTCOIN: '9BB6NFEcjBCtnNLFko2FqVQBq8HHM13kCyYcdQbgpump',
+  KMNO: 'KMNo3nJsBXfcpJTVhZcXLW7RmTwTt4GVFE7suUBo9sS',
+  PUMP: '7GCihgDB8fe6KNjn2MYtkzZcRjQy3t9GHdC8uHYmW2hr',
+  ORE: 'oreV2w6Bqtzn4BSLBeF5VHxBDB9FAbTw5jknCByYMPu',
+  BNB: 'Cfuzmm9K7AXJBwBaDs5j8t7RY5THp2Vm7bLS4JVMviJM',
+  ETH: '7vfCXTUXx5WJV5JADk17DUJ4ksgau7utNKj4b963voxs',
+};

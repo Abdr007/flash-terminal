@@ -213,15 +213,26 @@ export async function getProtocolFeeRates(
     } catch (err) {
       // Protocol parameter errors must not be silently swallowed
       if (err instanceof ProtocolParameterError) throw err;
-      // Network/custody errors — throw clear error instead of silent fallback
-      throw new ProtocolParameterError(
-        `Failed to fetch on-chain fee rates for ${upper}: ${err instanceof Error ? err.message : 'unknown error'}. ` +
-        `Ensure RPC is reachable and market is tradeable.`,
-      );
+
+      // Network/RPC failure — return stale cached on-chain data if available
+      const stale = feeCache.get(upper);
+      if (stale && stale.rates.source === 'on-chain') {
+        try {
+          const { getLogger } = await import('../utils/logger.js');
+          getLogger().warn('FEES', `RPC fetch failed for ${upper}, using cached on-chain rates (slot ${stale.cachedAtSlot}): ${err instanceof Error ? err.message : 'unknown'}`);
+        } catch { /* logger not available — continue silently */ }
+        return stale.rates;
+      }
+
+      // No cached on-chain data — fall through to SDK defaults with warning
+      try {
+        const { getLogger } = await import('../utils/logger.js');
+        getLogger().warn('FEES', `RPC fetch failed for ${upper}, using SDK defaults: ${err instanceof Error ? err.message : 'unknown'}`);
+      } catch { /* logger not available — continue silently */ }
     }
   }
 
-  // No perpClient available (simulation mode) — use conservative defaults
+  // No perpClient available (simulation mode) or RPC fetch failed — use conservative defaults
   // clearly marked as non-authoritative
   const defaultRates: ProtocolFeeRates = {
     openFeeRate: 0.0008,
@@ -242,6 +253,21 @@ export function calcFeeUsd(sizeUsd: number, feeRate: number): number {
     return 0;
   }
   return sizeUsd * feeRate;
+}
+
+/**
+ * Sweep expired entries from the fee cache.
+ * Called by the maintenance module to prevent stale entries from accumulating.
+ */
+export function sweepExpiredCache(): void {
+  if (feeCache.size === 0) return;
+  const now = Date.now();
+  // If we have no slot info, use time-based expiry
+  for (const [key, entry] of feeCache) {
+    if (entry.cachedAtSlot === 0 && lastSlotFetchTime > 0 && (now - lastSlotFetchTime) > FALLBACK_TTL_MS * 2) {
+      feeCache.delete(key);
+    }
+  }
 }
 
 /** RATE_POWER and BPS_POWER exported for direct CustodyAccount parsing */

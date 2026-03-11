@@ -40,6 +40,7 @@ import {
 import { updateLastWallet, clearLastWallet } from '../wallet/session.js';
 import { getShadowEngine } from '../shadow/shadow-engine.js';
 import { logShadowTrade } from '../observability/shadow-events.js';
+import { getTradeJournal } from '../journal/trade-journal.js';
 import chalk from 'chalk';
 import { theme } from '../cli/theme.js';
 import { resolveMarket } from '../utils/market-resolver.js';
@@ -254,10 +255,18 @@ export const flashOpenPosition: ToolDefinition = {
       data: {
         executeAction: async (): Promise<ToolResult> => {
           logTradeStart('open', market, side, { collateral, leverage, sizeUsd });
+          // Journal: record pending BEFORE broadcast
+          const journal = getTradeJournal();
+          const journalId = journal.recordPending({ market, side: side.toString(), action: 'open', collateral, leverage, sizeUsd });
           try {
             const result = await context.flashClient.openPosition(
               market, side, collateral, leverage, collateral_token
             );
+
+            // Journal: mark confirmed and remove
+            journal.recordSent(journalId, result.txSignature);
+            journal.recordConfirmed(journalId);
+            journal.remove(journalId);
 
             // Record trade open in circuit breaker
             getCircuitBreaker().recordOpen();
@@ -341,6 +350,8 @@ export const flashOpenPosition: ToolDefinition = {
               txSignature: result.txSignature,
             };
           } catch (error: unknown) {
+            // Journal: remove on failure (trade did not land)
+            journal.remove(journalId);
             logTradeFailure('open', market, side, getErrorMessage(error));
             // Audit log — failed
             guard.logAudit({
@@ -457,8 +468,15 @@ export const flashClosePosition: ToolDefinition = {
       data: {
         executeAction: async (): Promise<ToolResult> => {
           logTradeStart('close', market, side);
+          const journal = getTradeJournal();
+          const journalId = journal.recordPending({ market, side: side.toString(), action: 'close' });
           try {
             const result = await context.flashClient.closePosition(market, side);
+
+            // Journal: confirmed
+            journal.recordSent(journalId, result.txSignature);
+            journal.recordConfirmed(journalId);
+            journal.remove(journalId);
 
             // Record PnL in circuit breaker
             if (Number.isFinite(result.pnl)) {
@@ -510,6 +528,7 @@ export const flashClosePosition: ToolDefinition = {
               txSignature: result.txSignature,
             };
           } catch (error: unknown) {
+            journal.remove(journalId);
             logTradeFailure('close', market, side, getErrorMessage(error));
             guard.logAudit({
               timestamp: new Date().toISOString(),
@@ -622,8 +641,13 @@ export const flashAddCollateral: ToolDefinition = {
       confirmationPrompt: isLive ? 'Type "yes" to sign or "no" to cancel' : 'Confirm?',
       data: {
         executeAction: async (): Promise<ToolResult> => {
+          const journal = getTradeJournal();
+          const journalId = journal.recordPending({ market, side: side.toString(), action: 'add_collateral', collateral: amount });
           try {
             const result = await context.flashClient.addCollateral(market, side, amount);
+            journal.recordSent(journalId, result.txSignature);
+            journal.recordConfirmed(journalId);
+            journal.remove(journalId);
             guard.recordSigning();
             guard.logAudit({
               timestamp: new Date().toISOString(),
@@ -656,6 +680,7 @@ export const flashAddCollateral: ToolDefinition = {
               txSignature: result.txSignature,
             };
           } catch (error: unknown) {
+            journal.remove(journalId);
             guard.logAudit({
               timestamp: new Date().toISOString(),
               type: 'add_collateral', market, side,
@@ -771,8 +796,13 @@ export const flashRemoveCollateral: ToolDefinition = {
       confirmationPrompt: isLive ? 'Type "yes" to sign or "no" to cancel' : 'Confirm?',
       data: {
         executeAction: async (): Promise<ToolResult> => {
+          const journal = getTradeJournal();
+          const journalId = journal.recordPending({ market, side: side.toString(), action: 'remove_collateral', collateral: amount });
           try {
             const result = await context.flashClient.removeCollateral(market, side, amount);
+            journal.recordSent(journalId, result.txSignature);
+            journal.recordConfirmed(journalId);
+            journal.remove(journalId);
             guard.recordSigning();
             guard.logAudit({
               timestamp: new Date().toISOString(),
@@ -806,6 +836,7 @@ export const flashRemoveCollateral: ToolDefinition = {
               txSignature: result.txSignature,
             };
           } catch (error: unknown) {
+            journal.remove(journalId);
             guard.logAudit({
               timestamp: new Date().toISOString(),
               type: 'remove_collateral', market, side,

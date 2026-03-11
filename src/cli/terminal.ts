@@ -102,6 +102,8 @@ export class FlashTerminal {
   private bufferedLine: string | null = null;
   /** RPC manager for failover support */
   private rpcManager!: RpcManager;
+  /** Background maintenance handle */
+  private maintenance: { stop(): void } | null = null;
   /** Live status bar */
   private statusBar: StatusBar | null = null;
   /** Last executed command text (for context line) */
@@ -334,11 +336,34 @@ export class FlashTerminal {
       this.rpcManager.startMonitoring();
     }
 
+    // Run crash recovery engine (verifies pending transactions from previous session)
+    try {
+      const { runRecovery } = await import('../runtime/recovery-engine.js');
+      const conn = this.rpcManager?.connection ?? null;
+      const recoveryResult = await runRecovery(conn);
+      if (recoveryResult.recovered > 0) {
+        console.log(chalk.green(`  Recovery: ${recoveryResult.recovered} pending trade(s) confirmed on-chain`));
+      }
+      if (recoveryResult.failed > 0) {
+        console.log(chalk.yellow(`  Recovery: ${recoveryResult.failed} trade(s) did not land`));
+      }
+    } catch {
+      // Recovery is non-critical — never block startup
+    }
+
     // Initialize state reconciliation engine
     const reconciler = initReconciler(this.flashClient);
     reconciler.reconcile().catch(() => {}); // Initial sync — fire and forget
     if (!this.config.simulationMode) {
       reconciler.startPeriodicSync(); // 60s background sync for live mode
+    }
+
+    // Start background maintenance (cache sweep, memory monitoring, oracle freshness)
+    try {
+      const { startMaintenance } = await import('../system/maintenance.js');
+      this.maintenance = startMaintenance();
+    } catch {
+      // Maintenance is non-critical
     }
 
     // Load plugins and register their tools
@@ -1371,6 +1396,11 @@ export class FlashTerminal {
       // Best-effort cleanup
     }
     try {
+      if (this.maintenance) this.maintenance.stop();
+    } catch {
+      // Best-effort cleanup
+    }
+    try {
       if (this.flashClient && 'stopBlockhashRefresh' in this.flashClient) {
         (this.flashClient as { stopBlockhashRefresh: () => void }).stopBlockhashRefresh();
       }
@@ -2163,6 +2193,9 @@ export class FlashTerminal {
         rows.push({ symbol: sym, price: tp.price, change: tp.priceChange24h, totalOi, longPct, shortPct, priceDirection });
       }
 
+      // Evict stale events (>60s old) and cap size
+      const eventNow = Date.now();
+      recentEvents = recentEvents.filter(e => eventNow - e.timestamp < 60_000);
       if (recentEvents.length > MAX_EVENTS) {
         recentEvents = recentEvents.slice(-MAX_EVENTS);
       }
@@ -2226,7 +2259,8 @@ export class FlashTerminal {
 
       const oMs = telemetry.oracleLatencyMs;
       const oracleStr = oMs < 0 ? theme.dim('Oracle N/A')
-        : oMs <= 1000 ? chalk.green(`Oracle ${oMs}ms`)
+        : oMs <= 3000 ? chalk.green(`Oracle ${oMs}ms`)
+        : oMs <= 5000 ? chalk.yellow(`Oracle ${oMs}ms ⚠`)
         : chalk.red(`Oracle ${oMs}ms ⚠`);
 
       const slotStr = telemetry.slot < 0 ? theme.dim('Slot N/A')
@@ -3458,6 +3492,29 @@ export class FlashTerminal {
     if (!mktStatus.isOpen) {
       console.log(chalk.yellow(formatMarketClosedMessage(market)));
       return;
+    }
+
+    // Check for existing position on same market/side (Flash rejects duplicates)
+    try {
+      const existingPositions = await this.flashClient.getPositions();
+      const duplicate = existingPositions.find(
+        p => (p.market ?? '').toUpperCase() === market.toUpperCase() && p.side === side,
+      );
+      if (duplicate) {
+        const sideLabel = side === TradeSide.Long ? 'LONG' : 'SHORT';
+        console.log('');
+        console.log(chalk.yellow(`  Position already exists for ${market.toUpperCase()} ${sideLabel}`));
+        console.log(chalk.dim(`    Size:       ${formatUsd(duplicate.sizeUsd)}`));
+        console.log(chalk.dim(`    Collateral: ${formatUsd(duplicate.collateralUsd)}`));
+        console.log(chalk.dim(`    Entry:      $${formatPrice(duplicate.entryPrice)}`));
+        console.log('');
+        console.log(chalk.dim('  Flash Trade does not allow duplicate positions on the same market/side.'));
+        console.log(chalk.dim('  Use "add collateral" to increase an existing position, or close it first.'));
+        console.log('');
+        return;
+      }
+    } catch {
+      // Best-effort — don't block dry-run if position fetch fails
     }
 
     process.stdout.write(chalk.dim('  Building transaction preview...\r'));
