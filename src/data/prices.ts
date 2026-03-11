@@ -53,17 +53,12 @@ const PYTH_FEED_IDS: Record<string, string> = {
   PLTR: '0x3a4c922ec7e8cd86a6fa4005827e723a134a16f4ffe836eac91e7820c61f75a1',
 };
 
-// Non-crypto markets — cannot get 24h change from DexScreener
-const NON_CRYPTO_MARKETS = new Set([
-  'XAU', 'XAG', 'CRUDEOIL', 'EUR', 'GBP', 'USDJPY', 'USDCNH',
-  'SPY', 'NVDA', 'TSLA', 'AAPL', 'AMD', 'AMZN', 'PLTR',
-]);
-
 const FETCH_TIMEOUT_MS = 8_000;
 const MAX_PRICE_CACHE_ENTRIES = 100;
 const MAX_RESPONSE_BYTES = 1024 * 1024; // 1MB max
 
-// 24h price history: record price snapshots, compute real 24h change from Pyth data.
+// 24h price history: record Pyth price snapshots, compute 24h change from oracle data.
+// This is the ONLY source of 24h price change — no external APIs.
 const HISTORY_INTERVAL_MS = 5 * 60_000; // record every 5 minutes
 const HISTORY_WINDOW_MS = 24 * 60 * 60_000; // 24 hours
 const MAX_HISTORY_PER_SYMBOL = 300; // ~25h at 5min intervals
@@ -96,11 +91,6 @@ const _sharedHistory: Map<string, PriceSnapshot[]> = new Map();
 let _lastHistoryRecord = 0;
 let _lastDiskSave = 0;
 let _historyLoaded = false;
-
-/** Check if a market is non-crypto (commodities, forex, equities) — no DexScreener data available. */
-export function isNonCryptoMarket(symbol: string): boolean {
-  return NON_CRYPTO_MARKETS.has(symbol.toUpperCase());
-}
 
 /** Get the Pyth feed ID for a market symbol (for diagnostics). */
 export function getPythFeedId(symbol: string): string | null {
@@ -279,13 +269,8 @@ export class PriceService {
 
       history.push({ price: tp.price, timestamp: now });
 
-      // Evict old entries beyond 24h window + trim to max size
-      while (history.length > 0 && history[0].timestamp < now - HISTORY_WINDOW_MS) {
-        history.shift();
-      }
-      if (history.length > MAX_HISTORY_PER_SYMBOL) {
-        history.splice(0, history.length - MAX_HISTORY_PER_SYMBOL);
-      }
+      // Prune: evict entries older than 24h + trim to max size
+      this.pruneHistory(history);
     }
 
     // Bound total symbols tracked in history
@@ -303,48 +288,60 @@ export class PriceService {
     }
   }
 
+  /**
+   * Prune a history array: remove entries older than 24h and cap at MAX_HISTORY_PER_SYMBOL.
+   */
+  private pruneHistory(history: PriceSnapshot[]): void {
+    const cutoff = Date.now() - HISTORY_WINDOW_MS;
+    while (history.length > 0 && history[0].timestamp < cutoff) {
+      history.shift();
+    }
+    if (history.length > MAX_HISTORY_PER_SYMBOL) {
+      history.splice(0, history.length - MAX_HISTORY_PER_SYMBOL);
+    }
+  }
+
+  /**
+   * Compute 24h price change from Pyth oracle history.
+   *
+   * Algorithm:
+   *   1. Look up history for symbol
+   *   2. Find entry closest to (now - 24h)
+   *   3. Compute: ((current - historical) / historical) * 100
+   *   4. Return NaN if insufficient history (callers render as "N/A")
+   *
+   * Data source: Pyth Hermes only — no external price APIs.
+   */
   private compute24hChange(symbol: string, currentPrice: number): number {
     const history = _sharedHistory.get(symbol);
 
-    // Check if we have sufficient local history (at least 1 hour of data)
-    if (history && history.length >= 2) {
-      const oldestTimestamp = history[0].timestamp;
-      const historyAgeMs = Date.now() - oldestTimestamp;
-
-      // Only use local history if we have at least 1 hour of data
-      if (historyAgeMs >= 60 * 60_000) {
-        const target = Date.now() - HISTORY_WINDOW_MS;
-        let closest = history[0];
-        for (const snap of history) {
-          if (Math.abs(snap.timestamp - target) < Math.abs(closest.timestamp - target)) {
-            closest = snap;
-          }
-        }
-
-        if (closest.price > 0 && Number.isFinite(closest.price)) {
-          const change = ((currentPrice - closest.price) / closest.price) * 100;
-          if (Number.isFinite(change)) return change;
-        }
-      }
-    }
-
-    // Fallback: use DexScreener cached 24h change (bootstraps on fresh start)
-    const dexChange = _dexScreenerCache.get(symbol);
-    if (dexChange && Date.now() - dexChange.fetchedAt < DEXSCREENER_CACHE_TTL_MS) {
-      return dexChange.change;
-    }
-
-    // Non-crypto markets have no DexScreener data — return NaN so callers can show "N/A"
-    if (NON_CRYPTO_MARKETS.has(symbol)) {
+    // Need at least 2 entries with ≥1 hour of data to compute meaningful change
+    if (!history || history.length < 2) {
       return NaN;
     }
 
-    // Trigger async DexScreener fetch (non-blocking, results available next cycle)
-    if (DEXSCREENER_TOKEN_ADDRESSES[symbol]) {
-      this.triggerDexScreenerFetch();
+    const oldestTimestamp = history[0].timestamp;
+    const historyAgeMs = Date.now() - oldestTimestamp;
+
+    // Require at least 1 hour of accumulated history before reporting change
+    if (historyAgeMs < 60 * 60_000) {
+      return NaN;
     }
 
-    // No data available yet — return NaN (callers should show "N/A" not "+0.00%")
+    // Find entry closest to 24h ago
+    const target = Date.now() - HISTORY_WINDOW_MS;
+    let closest = history[0];
+    for (const snap of history) {
+      if (Math.abs(snap.timestamp - target) < Math.abs(closest.timestamp - target)) {
+        closest = snap;
+      }
+    }
+
+    if (closest.price > 0 && Number.isFinite(closest.price)) {
+      const change = ((currentPrice - closest.price) / closest.price) * 100;
+      if (Number.isFinite(change)) return change;
+    }
+
     return NaN;
   }
 
@@ -453,106 +450,4 @@ export class PriceService {
     _lastHistoryRecord = 0;
     _lastDiskSave = 0;
   }
-
-  // ─── DexScreener 24h Change Bootstrap ────────────────────────────────────
-  // Used only when local price history is insufficient (<1h of data).
-  // Non-blocking: triggers async fetch, results available on next price cycle.
-
-  private triggerDexScreenerFetch(): void {
-    if (_dexScreenerFetchInFlight || Date.now() - _dexScreenerLastFetch < DEXSCREENER_MIN_INTERVAL_MS) {
-      return;
-    }
-    _dexScreenerFetchInFlight = true;
-    this.fetchDexScreener24h().catch(() => {}).finally(() => {
-      _dexScreenerFetchInFlight = false;
-    });
-  }
-
-  private async fetchDexScreener24h(): Promise<void> {
-    const logger = getLogger();
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 8_000);
-
-    try {
-      // DexScreener search endpoint — returns pairs with 24h change
-      // Fetch top crypto symbols that Flash Trade supports
-      const symbols = Object.keys(DEXSCREENER_TOKEN_ADDRESSES);
-      let fetched = 0;
-
-      for (const sym of symbols) {
-        const addr = DEXSCREENER_TOKEN_ADDRESSES[sym];
-        if (!addr) continue;
-
-        // Check if we already have a fresh cache entry
-        const existing = _dexScreenerCache.get(sym);
-        if (existing && Date.now() - existing.fetchedAt < DEXSCREENER_CACHE_TTL_MS) continue;
-
-        try {
-          const res = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${addr}`, {
-            signal: controller.signal,
-            headers: { Accept: 'application/json' },
-          });
-
-          if (!res.ok) continue;
-
-          const text = await res.text();
-          if (text.length > MAX_RESPONSE_BYTES) continue;
-
-          const data = JSON.parse(text) as { pairs?: Array<{ priceChange?: { h24?: number } }> };
-          const topPair = data.pairs?.[0];
-          const change = topPair?.priceChange?.h24;
-
-          if (typeof change === 'number' && Number.isFinite(change)) {
-            _dexScreenerCache.set(sym, { change, fetchedAt: Date.now() });
-            fetched++;
-          }
-
-          // Bound cache size
-          if (_dexScreenerCache.size > 50) {
-            const oldest = _dexScreenerCache.keys().next().value;
-            if (oldest) _dexScreenerCache.delete(oldest);
-          }
-        } catch {
-          // Per-symbol fetch failure is non-critical
-        }
-      }
-
-      _dexScreenerLastFetch = Date.now();
-      if (fetched > 0) {
-        logger.debug('PRICE', `DexScreener: bootstrapped 24h change for ${fetched} markets`);
-      }
-    } catch (error: unknown) {
-      logger.debug('PRICE', `DexScreener fetch failed: ${getErrorMessage(error)}`);
-    } finally {
-      clearTimeout(timeout);
-    }
-  }
 }
-
-// ─── DexScreener Module State ──────────────────────────────────────────────
-// Shared across all PriceService instances, bounded at 50 entries with 5min TTL.
-
-const DEXSCREENER_CACHE_TTL_MS = 5 * 60_000; // 5 minutes
-const DEXSCREENER_MIN_INTERVAL_MS = 60_000;   // max 1 fetch batch per minute
-let _dexScreenerFetchInFlight = false;
-let _dexScreenerLastFetch = 0;
-const _dexScreenerCache = new Map<string, { change: number; fetchedAt: number }>();
-
-// Solana token mint addresses for DexScreener lookup
-const DEXSCREENER_TOKEN_ADDRESSES: Record<string, string> = {
-  SOL: 'So11111111111111111111111111111111111111112',
-  BONK: 'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263',
-  WIF: 'EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm',
-  JUP: 'JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN',
-  JTO: 'jtojtomepa8beP8AuQc6eXt5FriJwfFMwQx2v2f9mCL',
-  PYTH: 'HZ1JovNiVvGrGNiiYvEozEVgZ58xaU3RKwX8eACQBCt3',
-  RAY: '4k3Dyjzvzp8eMZWUXbBCjEvwSkkk59S5iCNLY3QrkX6R',
-  PENGU: '2zMMhcVQEXDtdE6vsFS7S7D5oUodfJHE8vd1gnBouauv',
-  HYPE: 'HYPExVFoRdKxAFRoMSkTC5PBRJK4TZjPZBpGpydrWu3C',
-  FARTCOIN: '9BB6NFEcjBCtnNLFko2FqVQBq8HHM13kCyYcdQbgpump',
-  KMNO: 'KMNo3nJsBXfcpJTVhZcXLW7RmTwTt4GVFE7suUBo9sS',
-  PUMP: '7GCihgDB8fe6KNjn2MYtkzZcRjQy3t9GHdC8uHYmW2hr',
-  ORE: 'oreV2w6Bqtzn4BSLBeF5VHxBDB9FAbTw5jknCByYMPu',
-  BNB: 'Cfuzmm9K7AXJBwBaDs5j8t7RY5THp2Vm7bLS4JVMviJM',
-  ETH: '7vfCXTUXx5WJV5JADk17DUJ4ksgau7utNKj4b963voxs',
-};
