@@ -2,15 +2,15 @@
   <img src="assets/logo.svg" width="96" height="96" alt="Flash Terminal" />
 </p>
 
-<h1 align="center">FLASH TERMINAL</h1>
+<h1 align="center">Flash Terminal</h1>
 
 <p align="center">
-  <strong>Deterministic CLI Trading Interface for Flash Trade</strong>
+  <strong>Production-grade Solana perpetual futures trading CLI</strong>
 </p>
 
 <p align="center">
-  A protocol-aligned command line terminal for analyzing and executing trades<br/>
-  on <a href="https://www.flash.trade/">Flash Trade</a> using live on-chain data.
+  Execute leveraged trades on <a href="https://www.flash.trade/">Flash Trade</a> from the command line<br/>
+  with deterministic execution, automated risk controls, and real-time monitoring.
 </p>
 
 <p align="center">
@@ -29,28 +29,112 @@
 
 ## Overview
 
-Flash Terminal is a deterministic command line interface for the [Flash Trade](https://www.flash.trade/) perpetual futures protocol on Solana.
+Flash Terminal is a command line trading interface for the [Flash Trade](https://www.flash.trade/) perpetual futures protocol on Solana. It connects directly to the Flash protocol through the official SDK, executes trades on-chain, and provides real-time position management, risk monitoring, and protocol analytics.
 
-It interacts directly with the Flash protocol using the official SDK and live data sources. Every protocol parameter — fees, leverage limits, maintenance margins, liquidation math — is derived from on-chain state or official SDK helpers.
-
-Flash Terminal does not generate synthetic analytics, modify protocol logic, or fabricate data. It acts as a transparent, protocol-aligned interface to Flash Trade.
-
-**Core principles:**
-
-- **Protocol parameters** come from on-chain `CustodyAccount` state
-- **Liquidation math** uses the Flash SDK `getLiquidationPriceContractHelper()`
-- **Fees and leverage** are read from `CustodyAccount.fees` and `CustodyAccount.pricing`
-- **Oracle prices** come from [Pyth Hermes](https://hermes.pyth.network) — the same feeds used by the Flash protocol on-chain
-- **Trade execution** delegates entirely to Flash SDK `PerpetualsClient` — no custom instruction building
+All protocol parameters — fees, leverage limits, maintenance margins, liquidation math — are derived from on-chain state. Prices come from Pyth Hermes, the same oracle feeds used by the protocol. Flash Terminal does not fabricate data, generate predictions, or modify protocol logic.
 
 ---
 
-## Terminal Preview
+## Key Features
+
+| Feature | Description |
+|:--------|:------------|
+| **Live Trading** | Open, close, and manage leveraged positions on Flash Trade via Solana mainnet |
+| **Simulation Mode** | Paper trading with real oracle prices — no on-chain transactions |
+| **TP/SL Automation** | Set take-profit and stop-loss targets with spike protection |
+| **Real-Time Monitoring** | Live market tables with Pyth oracle prices refreshed every 5 seconds |
+| **Risk Monitor** | Background liquidation monitoring with tiered alerts (SAFE / WARNING / CRITICAL) |
+| **Protocol Inspection** | Inspect pools, markets, fees, open interest, and protocol parameters directly from chain |
+| **Multi-Pool Support** | Trade across Flash Trade pools including Crypto, Virtual, Governance, and Community |
+| **AI Command Parser** | Natural language command interpretation with deterministic regex fallback |
+| **Safety Systems** | Signing guard, circuit breaker, kill switch, crash recovery, and RPC failover |
+
+---
+
+## Architecture
+
+Flash Terminal uses a layered architecture where each layer communicates only with its adjacent layers.
+
+```
+CLI Interface ─── AI Interpreter ─── Tool Engine ─── Flash Client ─── Solana
+```
+
+```
+┌────────────────────────────────────────────────────────────────┐
+│  CLI INTERFACE                                                  │
+│  Interactive REPL · Command registry · Status bar               │
+└────────────────────────┬───────────────────────────────────────┘
+                         │
+┌────────────────────────▼───────────────────────────────────────┐
+│  COMMAND ENGINE                                                 │
+│  Regex parser · NLP fallback · Zod validation · Signing guard   │
+└────────────────────────┬───────────────────────────────────────┘
+                         │
+┌────────────────────────▼───────────────────────────────────────┐
+│  PROTOCOL TOOLS                                                 │
+│  Trading · Wallet · Market data · Dashboard · Risk analysis     │
+└────────────────────────┬───────────────────────────────────────┘
+                         │
+┌────────────────────────▼───────────────────────────────────────┐
+│  DATA INFRASTRUCTURE                                            │
+│  FlashClient (live) · SimulatedFlashClient (paper)              │
+│  Pyth Hermes · fstats API · Solana RPC                          │
+└────────────────────────┬───────────────────────────────────────┘
+                         │
+┌────────────────────────▼───────────────────────────────────────┐
+│  FLASH TRADE PROTOCOL                                           │
+│  On-chain program · CustodyAccount · PositionAccount · Pools    │
+└────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Installation
+
+```bash
+git clone https://github.com/Abdr007/flash-terminal.git
+cd flash-terminal
+npm install
+npm run build
+```
+
+Configure your environment:
+
+```bash
+cp .env.example .env
+```
+
+Set the required variables in `.env`:
+
+| Variable | Required | Description |
+|:---------|:---------|:------------|
+| `RPC_URL` | Yes | Solana mainnet RPC endpoint |
+| `WALLET_PATH` | Yes | Path to Solana keypair file |
+| `SIMULATION_MODE` | No | `true` (default) for paper trading, `false` for live |
+| `ANTHROPIC_API_KEY` | No | Enables AI-powered natural language commands |
+
+**Requirements:** Node.js >= 20 · Solana RPC endpoint (mainnet-beta)
+
+---
+
+## Running the Terminal
+
+```bash
+npm start
+```
+
+Or in development mode:
+
+```bash
+npm run dev
+```
+
+On startup, the terminal presents a mode selection:
 
 ```
 $ flash
 
-  ⚡ FLASH TERMINAL
+  ⚡ FLASH TERMINAL v1.0.0
   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
   Trading Interface for Flash Trade
@@ -65,273 +149,268 @@ $ flash
 
 > 2
 
-flash [sim] > open 5x long SOL $500
-flash [sim] > positions
-flash [sim] > protocol verify
-flash [sim] > monitor
-flash [sim] > exit
+flash [sim] >
 ```
+
+Simulation mode is selected by default. Live trading requires a configured wallet and RPC endpoint.
 
 ---
 
-## Key Features
+## CLI Overview
 
-| Feature | Description |
+Flash Terminal is an interactive REPL. Type commands directly at the prompt. The built-in regex parser handles all commands deterministically. When an AI key is configured, natural language input is also supported as a fallback.
+
+The prompt indicates the current mode:
+
+```
+flash [sim] >     # Simulation mode
+flash [live] >    # Live trading mode
+```
+
+Run `help` at any time to see available commands. Run `doctor` to verify system health.
+
+---
+
+## Basic Commands
+
+| Command | Description |
 |:--------|:------------|
-| **Deterministic Protocol Interface** | All calculations derived from Flash SDK and on-chain `CustodyAccount` state |
-| **CLI Trading** | Open, close, and manage leveraged positions with deterministic command parsing |
-| **Protocol Inspection** | Inspect pools, markets, fees, OI, and protocol parameters directly from chain |
-| **Real-Time Monitoring** | Live market monitoring with Pyth Hermes oracle prices (5s refresh) |
-| **Risk Analysis** | Liquidation monitoring with hysteresis alerts (SAFE / WARNING / CRITICAL) |
-| **Protocol Verification** | Built-in `protocol verify` command performs a 6-check alignment audit |
-| **Infrastructure Telemetry** | RPC health, oracle latency, slot lag, divergence status in status bar |
-| **Simulation Mode** | Paper trading with real oracle prices — no on-chain transactions |
-| **Multi-Pool Support** | Trades across 8 Flash Trade pools (Crypto, Virtual, Governance, Community) |
+| `help` | Show all available commands |
+| `dashboard` | Portfolio overview with risk metrics |
+| `positions` | View all open positions |
+| `markets` | List available trading markets |
+| `monitor` | Live market table (refreshes every 5s) |
+| `wallet` | Wallet address and SOL balance |
+| `wallet tokens` | Token balances (USDC, USDT, etc.) |
+| `trade history` | View recent trade journal |
+| `fees` | Protocol fee rates |
+| `system status` | System health overview |
+| `doctor` | Full system diagnostics |
+| `exit` | Shut down the terminal |
 
 ---
 
-## System Architecture
+## Trading Commands
 
-Flash Terminal follows a layered architecture. Each layer has a single responsibility and communicates only with adjacent layers.
+Open a leveraged position:
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│  USER                                                           │
-│  CLI input / Interactive REPL                                   │
-└──────────────────────────┬──────────────────────────────────────┘
-                           │
-┌──────────────────────────▼──────────────────────────────────────┐
-│  CLI INTERFACE                                                  │
-│  Regex parser · FAST_DISPATCH · NLP fallback · Command registry │
-└──────────────────────────┬──────────────────────────────────────┘
-                           │
-┌──────────────────────────▼──────────────────────────────────────┐
-│  COMMAND ENGINE                                                 │
-│  Tool engine · Market resolver · Execution middleware            │
-│  Signing guard · Rate limiter · Confirmation gate               │
-└──────────────────────────┬──────────────────────────────────────┘
-                           │
-┌──────────────────────────▼──────────────────────────────────────┐
-│  PROTOCOL TOOLS                                                 │
-│  flash-tools (trading, wallet, market data)                     │
-│  agent-tools (analysis, dashboard, observability)               │
-│  plugin-tools (dynamically loaded at startup)                   │
-└──────────────────────────┬──────────────────────────────────────┘
-                           │
-┌──────────────────────────▼──────────────────────────────────────┐
-│  DATA INFRASTRUCTURE                                            │
-│  IFlashClient interface                                         │
-│    ├── FlashClient ────── Flash SDK → Solana RPC → Flash Trade  │
-│    └── SimulatedFlashClient ── Paper trading (in-memory)        │
-│                                                                 │
-│  Pyth Hermes ── Oracle prices (same feeds as protocol)          │
-│  fstats API ─── OI, volume, leaderboards, whale positions       │
-│  Solana RPC ─── Wallet balances, transaction broadcast          │
-└──────────────────────────┬──────────────────────────────────────┘
-                           │
-┌──────────────────────────▼──────────────────────────────────────┐
-│  FLASH TRADE PROTOCOL                                           │
-│  On-chain program · CustodyAccount · PositionAccount · Pools    │
-└─────────────────────────────────────────────────────────────────┘
+open 2x long SOL $100
+open 5x short BTC $500
+open 10x long ETH $250
 ```
 
-| Layer | Responsibility |
-|:------|:---------------|
-| **CLI Interface** | Parses user input into structured `ParsedIntent` objects using deterministic regex |
-| **Command Engine** | Routes intents through validation, rate limiting, signing guards, and confirmation |
-| **Protocol Tools** | Implements 50+ commands for trading, analysis, and protocol inspection |
-| **Data Infrastructure** | Fetches live data from Flash SDK, Pyth, Solana RPC, and fstats |
-| **Flash Trade Protocol** | On-chain program — the source of truth for all protocol state |
+Close a position:
+
+```
+close SOL long
+close BTC short
+```
+
+Manage collateral:
+
+```
+add $50 to SOL long
+remove $20 from ETH long
+```
+
+Preview a trade without executing:
+
+```
+dryrun open 5x long SOL $100
+```
+
+**Parameters:**
+
+- **Leverage** — multiplier (e.g. `2x`, `5x`, `10x`). Per-market limits enforced from protocol config.
+- **Side** — `long` or `short`.
+- **Market** — asset symbol (`SOL`, `BTC`, `ETH`, `XAU`, `NVDA`, etc.).
+- **Collateral** — USD amount (e.g. `$100`, `$500`).
+
+---
+
+## TP/SL Automation
+
+Set take-profit and stop-loss targets inline when opening a position:
+
+```
+open 2x long SOL $100 tp $160 sl $120
+```
+
+Or set targets on an existing position:
+
+```
+set tp SOL long $160
+set sl SOL long $120
+```
+
+Remove targets:
+
+```
+remove tp SOL long
+remove sl SOL long
+```
+
+View active targets:
+
+```
+tp status
+```
+
+The TP/SL engine evaluates targets every 5 seconds using live Pyth oracle prices. Spike protection requires 2 consecutive confirmation ticks before triggering a close — preventing false triggers on momentary price wicks. The circuit breaker and kill switch override TP/SL execution if active.
+
+---
+
+## Safety Systems
+
+| Layer | Description |
+|:------|:------------|
+| **Signing Guard** | Pre-sign confirmation gate with full trade summary. Enforces configurable trade limits and rate limiting (default: 10 trades/min, 3s minimum delay). |
+| **Circuit Breaker** | Halts all trading when cumulative session or daily loss exceeds configurable thresholds. Requires manual reset. |
+| **Trading Gate (Kill Switch)** | Master switch to disable all trade execution instantly. Blocks all 4 trade operations when active. |
+| **Transaction Simulation** | On-chain simulation before broadcast catches program errors before any funds are at risk. |
+| **Program Whitelist** | Only approved Solana programs (Flash Trade + system) can be targeted by transaction instructions. |
+| **Instruction Freeze** | `Object.freeze()` on the instruction array after validation prevents mutation before signing. |
+| **Duplicate Detection** | Signature cache (120s TTL) prevents resubmission of recently broadcast transactions. |
+| **Crash Recovery** | Trade journal records pending transactions. On restart, the recovery engine verifies on-chain status and reconciles state. |
+| **State Reconciliation** | Periodic sync with blockchain. On-chain state is always authoritative over local state. |
+| **RPC Failover** | Automatic endpoint switching on slot lag (>50 slots), high latency, or failure. Supports multiple backup endpoints. |
 
 ---
 
 ## Data Sources
 
-| Data | Source | Cache | Validation |
-|:-----|:-------|:------|:-----------|
-| **Prices** | Pyth Hermes oracle | 5s TTL | Staleness <30s, confidence <2%, deviation <50% |
-| **Open Interest** | fstats analytics API | 15s TTL | Response size <2MB, streaming abort |
-| **Fees** | `CustodyAccount.fees` (on-chain) | ~60s (slot-based) | `ProtocolParameterError` on corruption |
-| **Leverage** | `CustodyAccount.pricing.maxLeverage` (on-chain) | ~60s (slot-based) | Invariant validation |
-| **Wallet Balances** | Solana RPC | 30s TTL | Numeric guards |
-| **Liquidation** | Flash SDK `getLiquidationPriceContractHelper()` | Real-time | Divergence detection (0.5% threshold) |
-| **Positions** | Flash SDK `perpClient.getUserPositions()` | Real-time | `Number.isFinite()` on all fields |
+| Data | Source | Details |
+|:-----|:-------|:--------|
+| **Prices** | Pyth Hermes | Same oracle feeds used by Flash Trade on-chain. Validated for staleness (<30s), confidence (<2%), and deviation (<50%). |
+| **Positions** | Flash SDK | Fetched from on-chain `PositionAccount` via `perpClient.getUserPositions()`. |
+| **Wallet Balances** | Solana RPC | `getBalance()` for SOL, `getParsedTokenAccountsByOwner()` for tokens. 30s cache, invalidated post-trade. |
+| **Open Interest** | fstats API | Protocol analytics with response size limits (2MB max) and parameter sanitization. |
+| **Protocol Parameters** | On-chain `CustodyAccount` | Fees, leverage limits, and maintenance margins read from chain. Liquidation math uses Flash SDK helpers. |
 
-Flash Terminal does not generate trading signals, predictions, or synthetic analytics. All data originates from on-chain state, official SDK helpers, or authorized oracle feeds. Unreachable sources degrade gracefully with stale cache fallback.
+No values are fabricated, estimated, or hardcoded. Unreachable sources degrade gracefully with stale cache fallback.
 
 ---
 
-## Protocol Alignment
+## Testing
 
-Flash Terminal ensures correctness through direct protocol integration:
-
-**Fee rates** are read from `CustodyAccount.fees.openPosition` and `CustodyAccount.fees.closePosition`, decoded with `RATE_POWER = 1e9` (Flash SDK `RATE_DECIMALS = 9`).
-
-**Leverage** is read from `CustodyAccount.pricing.maxLeverage`, decoded with `BPS_POWER = 1e4` (Flash SDK `BPS_DECIMALS = 4`).
-
-**Maintenance margin** is derived as `1 / maxLeverage` — matching the Flash protocol definition.
-
-**Liquidation prices** in live mode use the SDK's `getLiquidationPriceContractHelper()`. A divergence check compares CLI calculations against the SDK result with a 0.5% threshold. Optional strict mode (`FLASH_STRICT_PROTOCOL=true`) will reject trades on divergence.
-
-**Protocol invariants** are validated before every trade: fee rates must be finite, non-negative, and below 10%. Maintenance margin must be below 100%. Invalid `CustodyAccount` data throws `ProtocolParameterError` — never silently falls back.
-
-### `protocol verify`
-
-The built-in verification command performs 6 real-time checks against the protocol:
+```bash
+npm test
+```
 
 ```
-flash > protocol verify
+Test Files:  28 passed | 1 skipped (29)
+Tests:       462 passed | 5 skipped (467)
+Duration:    1.26s
+```
 
-  PROTOCOL VERIFICATION
+The test suite covers trading execution, simulation, risk monitoring, security gates (signing guard, circuit breaker, trading gate), TP/SL automation, market resolution, protocol fee validation, event monitoring, and infrastructure. All tests run against strict TypeScript with zero compiler errors.
+
+The 5 skipped tests are devnet smoke tests gated by an environment flag — they do not affect production logic.
+
+---
+
+## Security
+
+**Private keys** are loaded from Solana CLI keypair files with path validation, symlink resolution, and file size limits (1KB max). Keys are never logged, never transmitted, and zeroed from memory on wallet disconnect or session timeout (15 minutes idle).
+
+**Keypair integrity** is verified before every signing operation. If the keypair has been zeroed or corrupted, the transaction is rejected with a clear error.
+
+**Log scrubbing** masks API keys (`sk-ant-*`, `gsk_*`), base58 strings, and query parameters in all log output. Log files are created with `0o600` permissions (owner-only access).
+
+**RPC URLs** are validated on startup. HTTPS is enforced (HTTP only for localhost). Private IP ranges and embedded credentials are rejected.
+
+---
+
+## Logs
+
+| Log | Location | Purpose |
+|:----|:---------|:--------|
+| **Signing audit** | `~/.flash/signing-audit.log` | Records every trade attempt with timestamp, market, side, collateral, leverage, and result. Never logs keys or signatures. |
+| **Application log** | Configured via `LOG_FILE` env var | General application logging with auto-rotation at 10MB. Keeps `.old` and `.old.2` backups. |
+| **Reconciliation** | `~/.flash/logs/reconcile.log` | State sync events between CLI and blockchain. 2MB rotation. |
+
+---
+
+## Configuration
+
+All signing guards and trading limits are configurable via environment variables:
+
+```bash
+# Trade limits (0 = unlimited)
+MAX_COLLATERAL_PER_TRADE=0
+MAX_POSITION_SIZE=0
+MAX_LEVERAGE=0
+
+# Rate limiting
+MAX_TRADES_PER_MINUTE=10
+MIN_DELAY_BETWEEN_TRADES_MS=3000
+
+# RPC failover
+BACKUP_RPC_1=https://your-backup-rpc.example.com
+BACKUP_RPC_2=https://your-second-backup.example.com
+
+# Compute budget
+COMPUTE_UNIT_LIMIT=600000
+COMPUTE_UNIT_PRICE=500000
+
+# Slippage tolerance (basis points)
+DEFAULT_SLIPPAGE_BPS=150
+```
+
+See `.env.example` for the full configuration reference.
+
+---
+
+## Example Session
+
+```
+$ flash
+
+  ⚡ FLASH TERMINAL v1.0.0
+
+  Select Mode
+    1) LIVE TRADING
+    2) SIMULATION
+
+> 2
+
+flash [sim] > markets
+
+  AVAILABLE MARKETS
   ─────────────────────────────
-  ✓ RPC Health         Slot 312847291 · 142ms latency
-  ✓ Oracle Freshness   SOL $148.52 · 2s age
-  ✓ CustodyAccount     SOL/BTC/ETH fees loaded (on-chain)
-  ✓ Fee Engine         Open/close rates match CustodyAccount
-  ✓ Liquidation Engine Long/short symmetry verified
-  ✓ Protocol Params    Leverage, margin, fees within bounds
+  SOL  BTC  ETH  BNB  XAU  XAG
+  JTO  JUP  PYTH  RAY  BONK  WIF
+  NVDA  TSLA  AAPL  AMD  AMZN  ...
 
-  Status: HEALTHY
+flash [sim] > open 2x long SOL $100
+
+  TRADE PREVIEW
+  ─────────────────────────────
+  Market:      SOL-PERP
+  Side:        LONG
+  Leverage:    2x
+  Collateral:  $100.00
+  Size:        $200.00
+  Entry:       $148.52
+
+  Confirm? (yes/no) > yes
+
+  ✓ Position opened
+
+flash [sim] > positions
+
+  OPEN POSITIONS
+  ─────────────────────────────────────────────────
+  Market  Side  Lev  Size     Collateral  Entry    PnL
+  SOL     LONG  2x   $200.00  $100.00     $148.52  $0.34
+
+flash [sim] > close SOL long
+
+  ✓ Position closed — PnL: +$0.34
+
+flash [sim] > exit
 ```
-
-All checks use real protocol data. Zero synthetic validation.
-
----
-
-## Installation
-
-```bash
-# Clone the repository
-git clone https://github.com/Abdr007/flash-terminal.git
-cd flash-terminal
-
-# Install dependencies
-npm install
-
-# Build
-npm run build
-
-# Configure environment
-cp .env.example .env
-# → Set RPC_URL (required — Solana mainnet RPC endpoint)
-# → Set ANTHROPIC_API_KEY or GROQ_API_KEY (optional — enables NLP fallback)
-
-# Run
-npm start
-```
-
-**Requirements:** Node.js >= 20 · Solana RPC endpoint (mainnet-beta)
-
-**Alternative:**
-
-```bash
-# Development mode (no build step)
-npm run dev
-
-# Run diagnostics
-flash doctor
-```
-
----
-
-## Commands
-
-### Trading
-
-```bash
-open 5x long SOL $500          # Open a leveraged position
-close SOL long                  # Close a position
-add $200 to BTC short           # Add collateral to reduce leverage
-remove $100 from ETH long       # Remove excess collateral
-positions                       # View all open positions
-trade history                   # View trade journal
-markets                         # List available markets
-dryrun open 5x long SOL $100   # Preview without executing
-```
-
-### Protocol Inspection
-
-```bash
-protocol verify                 # Run protocol alignment audit
-inspect protocol                # Program ID, pools, OI, volume
-inspect pool Crypto.1           # Pool configuration and markets
-inspect market SOL              # OI breakdown, whale positions
-fees                            # Protocol fee data and distribution
-```
-
-### Monitoring & Analysis
-
-```bash
-monitor                         # Live market table (5s refresh)
-dashboard                       # Portfolio dashboard with risk metrics
-risk report                     # Liquidation risk assessment
-exposure                        # Portfolio exposure breakdown
-scan                            # Market scanner across all assets
-volume                          # Protocol volume data
-open interest                   # OI across markets
-```
-
-### Infrastructure
-
-```bash
-system status                   # System health overview
-rpc status                      # RPC endpoint health and slot lag
-rpc test                        # Latency test across endpoints
-doctor                          # Full system diagnostics
-wallet                          # Wallet info and balances
-wallet tokens                   # Token balances
-```
-
-> **50+ commands** — [Full reference →](https://flash-terminal-docs.vercel.app/reference/trading-commands)
-
----
-
-## Security & Safety
-
-| Layer | Description |
-|:------|:------------|
-| **Deterministic Parsing** | Trade commands parsed with structured regex — no model inference on execution paths |
-| **Zod Schema Validation** | Parameter type and range enforcement at parse boundary (leverage ≤100x, collateral ≤$10M) |
-| **Program ID Whitelist** | Only approved Solana programs (Flash Trade + system) can be targeted by instructions |
-| **Instruction Freeze** | `Object.freeze()` on instruction array after validation — prevents mutation before signing |
-| **Pre-Send Simulation** | On-chain transaction simulation before broadcast catches program errors in ~200ms |
-| **Trade Limits** | Configurable caps: `MAX_COLLATERAL_PER_TRADE`, `MAX_POSITION_SIZE`, `MAX_LEVERAGE` |
-| **Rate Limiter** | Max trades per minute + minimum delay between submissions (default 10/min, 3s gap) |
-| **Confirmation Gate** | Full trade summary with risk preview — requires explicit `yes` before signing |
-| **Signing Audit Log** | Every trade attempt logged to `~/.flash/signing-audit.log` (never logs keys) |
-| **RPC Health Verification** | Latency, slot lag, and reachability verified before signing |
-| **State Reconciliation** | Post-trade on-chain verification — blockchain state is authoritative |
-| **Protocol Parameter Validation** | NaN, Infinity, negative rates, >10% fees → `ProtocolParameterError` (never silently continues) |
-| **Numeric Guardrails** | 122 `Number.isFinite()` checks across the codebase prevent NaN/Infinity propagation |
-
----
-
-## Protocol Alignment Audit
-
-A full 12-section protocol alignment audit has been performed.
-
-**Result: `PROTOCOL ALIGNED`**
-
-| Section | Status |
-|:--------|:-------|
-| SDK Integration (PerpetualsClient, PoolConfig, CustodyAccount) | Aligned |
-| On-Chain Account Parsing (RATE_POWER, BPS_POWER, USD_DECIMALS) | Aligned |
-| Live Data Pipeline (Pyth, fstats, RPC) | Aligned |
-| Fee Engine (CustodyAccount fee extraction and calculation) | Aligned |
-| Leverage & Margin Model (maxLeverage, maintenanceMarginRate) | Aligned |
-| Liquidation Engine (SDK helper + divergence detection) | Aligned |
-| Trade Execution Pipeline (SDK → sign → simulate → broadcast) | Aligned |
-| Telemetry & Infrastructure (real metrics, no synthetic data) | Aligned |
-| Protocol Verify Command (6 real-time checks) | Aligned |
-| Live Update Validation (5s–20s refresh intervals) | Aligned |
-| Error Handling (122 numeric guards, ProtocolParameterError) | Aligned |
-
-**Key findings:**
-- All protocol math flows through Flash SDK — no reimplementation
-- On-chain `CustodyAccount` is the single source of truth for fees, leverage, and margins
-- Liquidation divergence detection with 0.5% threshold and optional strict mode
-- Program ID whitelist + instruction freeze prevents transaction tampering
-- Zero critical silent failures — all corrupted data throws immediately
 
 ---
 
@@ -339,22 +418,25 @@ A full 12-section protocol alignment audit has been performed.
 
 ```
 src/
-├── cli/                 # Terminal REPL, command registry, status bar, renderer
-├── client/              # FlashClient (live) and SimulatedFlashClient (paper trading)
-├── tools/               # Tool engine, flash-tools (trading), doctor diagnostics
-├── agent/               # Agent tools (analysis, dashboard, observability)
-├── config/              # Pool config, market mapping, leverage discovery
-├── data/                # PriceService (Pyth), FStatsClient, market hours
-├── network/             # RPC manager, multi-endpoint failover, slot lag detection
-├── monitor/             # Risk monitor, event monitor
-├── protocol/            # Protocol inspector (pool/market/OI inspection)
-├── security/            # Signing guard, trade limits, rate limiter, audit log
-├── wallet/              # Wallet manager, keypair loading, token balances
-├── risk/                # Exposure analysis, liquidation risk assessment
-├── core/                # Execution middleware, state reconciliation
-├── plugins/             # Dynamic plugin loader
-├── utils/               # Protocol fees, liquidation math, formatting, logger
-└── types/               # All types, enums, Zod schemas, interfaces
+├── cli/           Terminal REPL, command registry, status bar
+├── client/        FlashClient (live) and SimulatedFlashClient (paper)
+├── core/          Transaction engine, state reconciliation, execution middleware
+├── tools/         Tool engine, trading tools, doctor diagnostics
+├── agent/         Agent tools (analysis, dashboard, observability)
+├── ai/            NLP interpreter, intent parsing
+├── config/        Configuration loader, pool mapping, market discovery
+├── data/          PriceService (Pyth Hermes), FStatsClient
+├── network/       RPC manager, multi-endpoint failover
+├── monitor/       Risk monitor, event monitor
+├── risk/          TP/SL engine, exposure analysis, liquidation risk
+├── security/      Signing guard, circuit breaker, trading gate
+├── protocol/      Protocol inspector (pool/market/OI inspection)
+├── wallet/        Wallet manager, keypair loading, token balances
+├── journal/       Trade journal, crash recovery engine
+├── plugins/       Dynamic plugin loader
+├── observability/ Metrics, alert hooks
+├── utils/         Logger, formatting, protocol math
+└── types/         Types, enums, Zod schemas
 ```
 
 ---
@@ -362,12 +444,6 @@ src/
 ## Contributing
 
 Contributions are welcome. See **[CONTRIBUTING.md](CONTRIBUTING.md)** for development setup, code style, and pull request guidelines.
-
-Areas of interest:
-- New protocol inspection tools
-- Additional market analytics
-- Performance improvements
-- Test coverage
 
 ---
 
@@ -381,4 +457,12 @@ Flash Terminal is provided as-is. It is not financial advice. Always verify prot
 
 ## License
 
-MIT — **[LICENSE](LICENSE)**
+MIT — see **[LICENSE](LICENSE)** for details.
+
+---
+
+<p align="center">
+  <strong>Flash Terminal v1.0.0</strong><br/>
+  A production-grade Solana perpetual futures trading CLI.<br/>
+  Built with strict TypeScript. Verified with 462 automated tests. Shipped with zero critical issues.
+</p>
