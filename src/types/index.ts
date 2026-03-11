@@ -87,6 +87,10 @@ export enum ActionType {
 
   // Source Verification
   SourceVerify = 'source_verify',
+
+  // TP/SL Automation
+  SetTpSl = 'set_tp_sl',
+  RemoveTpSl = 'remove_tp_sl',
 }
 
 // ─── Zod Schemas for Intent Parsing ──────────────────────────────────────────
@@ -98,6 +102,8 @@ export const OpenPositionSchema = z.object({
   collateral: z.number().positive().max(10_000_000),
   leverage: z.number().min(1).max(100), // protocol max 100x; per-market limits enforced at tool level
   collateral_token: z.string().max(20).optional(),
+  takeProfit: z.number().positive().optional(),
+  stopLoss: z.number().positive().optional(),
 });
 
 export const ClosePositionSchema = z.object({
@@ -335,6 +341,21 @@ export const SourceVerifySchema = z.object({
   market: z.string().max(20),
 });
 
+export const SetTpSlSchema = z.object({
+  action: z.literal(ActionType.SetTpSl),
+  market: z.string().max(20),
+  side: z.nativeEnum(TradeSide),
+  type: z.enum(['tp', 'sl']),
+  price: z.number().positive(),
+});
+
+export const RemoveTpSlSchema = z.object({
+  action: z.literal(ActionType.RemoveTpSl),
+  market: z.string().max(20),
+  side: z.nativeEnum(TradeSide),
+  type: z.enum(['tp', 'sl']),
+});
+
 export const ParsedIntentSchema = z.discriminatedUnion('action', [
   OpenPositionSchema,
   ClosePositionSchema,
@@ -387,6 +408,8 @@ export const ParsedIntentSchema = z.discriminatedUnion('action', [
   ProtocolStatusSchema,
   DryRunSchema,
   SourceVerifySchema,
+  SetTpSlSchema,
+  RemoveTpSlSchema,
 ]);
 
 export type ParsedIntent = z.infer<typeof ParsedIntentSchema>;
@@ -732,6 +755,8 @@ export interface SessionTrade {
   pnl?: number;
   /** Fee paid at position open (stored for visibility after protocol settles fees) */
   openFeePaid?: number;
+  /** Reason for close (manual, TAKE_PROFIT, STOP_LOSS) */
+  closeReason?: string;
   txSignature?: string;
   timestamp: number;
 }

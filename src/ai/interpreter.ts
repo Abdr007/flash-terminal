@@ -100,6 +100,15 @@ function parseSide(raw: string): TradeSide | null {
   return null;
 }
 
+/** Parse optional "tp $X sl $Y" suffix from an open command. */
+function parseTpSlSuffix(suffix: string, result: Record<string, unknown>): void {
+  if (!suffix) return;
+  const tpMatch = suffix.match(/\btp\s+\$?(\d+(?:\.\d+)?)/);
+  if (tpMatch) result.takeProfit = parseFloat(tpMatch[1]);
+  const slMatch = suffix.match(/\bsl\s+\$?(\d+(?:\.\d+)?)/);
+  if (slMatch) result.stopLoss = parseFloat(slMatch[1]);
+}
+
 // ─── Number Word Normalization ────────────────────────────────────────────
 
 const NUMBER_WORDS: Record<string, number> = {
@@ -275,36 +284,73 @@ export function localParse(input: string): ParsedIntent | null {
     }
   }
 
-  // Open position: "open 5x long SOL $500"
+  // Open position: "open 5x long SOL $500" with optional tp/sl: "open 5x long SOL $500 tp $95 sl $80"
   const openMatch = lower.match(
-    /^(?:open|buy|enter)\s+(?:a\s+)?(\d+(?:\.\d+)?)\s*x?\s*(long|short)\s+(?:position\s+)?(?:on\s+)?([a-z]+)\s+(?:with\s+)?\$?(\d+(?:\.\d+)?)$/
+    /^(?:open|buy|enter)\s+(?:a\s+)?(\d+(?:\.\d+)?)\s*x?\s*(long|short)\s+(?:position\s+)?(?:on\s+)?([a-z]+)\s+(?:with\s+)?\$?(\d+(?:\.\d+)?)(.*)$/
   );
   if (openMatch) {
     const side = parseSide(openMatch[2]);
     if (side) {
-      return {
+      const result: Record<string, unknown> = {
         action: ActionType.OpenPosition,
         market: resolveMarket(openMatch[3]),
         side,
         collateral: parseFloat(openMatch[4]),
         leverage: parseFloat(openMatch[1]),
       };
+      parseTpSlSuffix(openMatch[5], result);
+      return result as ParsedIntent;
     }
   }
 
-  // Alternate: "long SOL $500 5x"
+  // Alternate: "long SOL $500 5x" with optional tp/sl
   const openMatch2 = lower.match(
-    /^(long|short)\s+([a-z]+)\s+\$?(\d+(?:\.\d+)?)\s+(\d+(?:\.\d+)?)\s*x$/
+    /^(long|short)\s+([a-z]+)\s+\$?(\d+(?:\.\d+)?)\s+(\d+(?:\.\d+)?)\s*x(.*)$/
   );
   if (openMatch2) {
     const side = parseSide(openMatch2[1]);
     if (side) {
-      return {
+      const result: Record<string, unknown> = {
         action: ActionType.OpenPosition,
         market: resolveMarket(openMatch2[2]),
         side,
         collateral: parseFloat(openMatch2[3]),
         leverage: parseFloat(openMatch2[4]),
+      };
+      parseTpSlSuffix(openMatch2[5], result);
+      return result as ParsedIntent;
+    }
+  }
+
+  // Set TP/SL: "set tp SOL long $95", "set sl SOL long $80"
+  const setTpSlMatch = lower.match(
+    /^set\s+(tp|sl)\s+([a-z]+)\s+(long|short)\s+\$?(\d+(?:\.\d+)?)$/
+  );
+  if (setTpSlMatch) {
+    const side = parseSide(setTpSlMatch[3]);
+    if (side) {
+      return {
+        action: ActionType.SetTpSl,
+        market: resolveMarket(setTpSlMatch[2]),
+        side,
+        type: setTpSlMatch[1] as 'tp' | 'sl',
+        price: parseFloat(setTpSlMatch[4]),
+      };
+    }
+  }
+
+  // Remove TP/SL: "remove tp SOL long", "remove sl SOL long"
+  const removeTpSlMatch = lower.match(
+    /^remove\s+(tp|sl)\s+([a-z]+)\s+(long|short)$/
+  );
+  if (removeTpSlMatch) {
+    const side = parseSide(removeTpSlMatch[3]);
+    if (side) {
+      return {
+        action: ActionType.RemoveTpSl,
+        market: resolveMarket(removeTpSlMatch[2]),
+        side,
+        type: removeTpSlMatch[1] as 'tp' | 'sl',
       };
     }
   }

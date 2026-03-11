@@ -72,6 +72,8 @@ export class ToolEngine {
             collateral: intent.collateral,
             leverage: intent.leverage,
             collateral_token: intent.collateral_token,
+            takeProfit: intent.takeProfit,
+            stopLoss: intent.stopLoss,
           },
         };
 
@@ -271,6 +273,18 @@ export class ToolEngine {
 
       case ActionType.TradeHistory:
         return { toolName: 'trade_history', params: {} };
+
+      case ActionType.SetTpSl:
+        return {
+          toolName: 'set_tp_sl',
+          params: { market: intent.market, side: intent.side, type: intent.type, price: intent.price },
+        };
+
+      case ActionType.RemoveTpSl:
+        return {
+          toolName: 'remove_tp_sl',
+          params: { market: intent.market, side: intent.side, type: intent.type },
+        };
 
       default:
         return null;

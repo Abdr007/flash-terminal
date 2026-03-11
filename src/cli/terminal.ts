@@ -320,6 +320,48 @@ export class FlashTerminal {
     // Initialize system diagnostics
     initSystemDiagnostics(this.rpcManager, this.context);
 
+    // Initialize TP/SL engine with close executor
+    try {
+      const { getTpSlEngine } = await import('../risk/tp-sl-engine.js');
+      const tpSlEngine = getTpSlEngine();
+      tpSlEngine.setClient(this.flashClient);
+      tpSlEngine.setCloseExecutor(async (market, side, reason) => {
+        try {
+          const result = await this.flashClient.closePosition(market, side);
+          // Record session trade with close reason
+          if (sessionTrades) {
+            if (sessionTrades.length >= 500) sessionTrades.shift();
+            sessionTrades.push({
+              action: 'close', market, side,
+              exitPrice: result.exitPrice, pnl: result.pnl,
+              closeReason: reason,
+              txSignature: result.txSignature, timestamp: Date.now(),
+            });
+          }
+          // Record PnL in circuit breaker
+          if (Number.isFinite(result.pnl)) {
+            const { getCircuitBreaker } = await import('../security/circuit-breaker.js');
+            getCircuitBreaker().recordTrade(result.pnl);
+          }
+          const txLink = this.config.simulationMode
+            ? result.txSignature
+            : `https://solscan.io/tx/${result.txSignature}`;
+          const pnlStr = result.pnl !== undefined
+            ? `  PnL: ${result.pnl >= 0 ? chalk.green(`+$${result.pnl.toFixed(2)}`) : chalk.red(`-$${Math.abs(result.pnl).toFixed(2)}`)}`
+            : '';
+          process.stdout.write([
+            chalk.green(`\n  [TP/SL] Position closed — ${reason}`),
+            `  Exit: $${result.exitPrice.toFixed(4)}`,
+            pnlStr,
+            chalk.dim(`  TX: ${txLink}\n`),
+          ].filter(Boolean).join('\n') + '\n');
+        } catch (err) {
+          process.stdout.write(chalk.red(`\n  [TP/SL] Close failed: ${getErrorMessage(err)}\n`));
+          throw err;
+        }
+      });
+    } catch { /* TP/SL init is non-critical */ }
+
     // Wire RPC failover to auto-update FlashClient connection
     if (!this.config.simulationMode) {
       this.rpcManager.setConnectionChangeCallback((newConn, ep) => {
@@ -1397,6 +1439,12 @@ export class FlashTerminal {
     }
     try {
       if (this.maintenance) this.maintenance.stop();
+    } catch {
+      // Best-effort cleanup
+    }
+    try {
+      // TP/SL engine uses .unref() timers, but stop explicitly for cleanliness
+      import('../risk/tp-sl-engine.js').then(m => m.resetTpSlEngine()).catch(() => {});
     } catch {
       // Best-effort cleanup
     }

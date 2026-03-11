@@ -242,6 +242,17 @@ export class RiskMonitor {
       // Emit alerts for positions that changed risk level
       this.emitAlerts(assessed);
 
+      // Evaluate TP/SL targets against current positions
+      try {
+        const { getTpSlEngine } = await import('../risk/tp-sl-engine.js');
+        const tpSlEngine = getTpSlEngine();
+        if (tpSlEngine.hasActiveTargets()) {
+          await tpSlEngine.evaluate(positions);
+        }
+      } catch {
+        // TP/SL evaluation must never crash the risk monitor
+      }
+
       // Periodic heartbeat so user knows monitor is alive
       const now2 = Date.now();
       if (this.tickCount === 1 || now2 - this.lastHeartbeat >= RiskMonitor.HEARTBEAT_INTERVAL_MS) {

@@ -65,14 +65,18 @@ export const flashOpenPosition: ToolDefinition = {
     collateral: z.number().positive().max(10_000_000),
     leverage: z.number().min(1).max(1000), // Absolute protocol max; per-market limits enforced below
     collateral_token: z.string().optional(),
+    takeProfit: z.number().positive().optional(),
+    stopLoss: z.number().positive().optional(),
   }),
   execute: async (params, context): Promise<ToolResult> => {
-    const { market, side, collateral, leverage, collateral_token } = params as {
+    const { market, side, collateral, leverage, collateral_token, takeProfit, stopLoss } = params as {
       market: string;
       side: TradeSide;
       collateral: number;
       leverage: number;
       collateral_token?: string;
+      takeProfit?: number;
+      stopLoss?: number;
     };
 
     // Pre-trade validation for live mode
@@ -333,6 +337,18 @@ export const flashOpenPosition: ToolDefinition = {
               if (shadowResult) logShadowTrade(shadowResult);
             } catch { /* shadow must never affect live pipeline */ }
 
+            // Auto-set TP/SL targets if provided inline
+            const tpSlLines: string[] = [];
+            if (takeProfit !== undefined || stopLoss !== undefined) {
+              try {
+                const { getTpSlEngine } = await import('../risk/tp-sl-engine.js');
+                const engine = getTpSlEngine();
+                engine.setTarget(market, side, takeProfit, stopLoss);
+                if (takeProfit !== undefined) tpSlLines.push(`  Take Profit:       ${chalk.green('$' + takeProfit.toFixed(2))}`);
+                if (stopLoss !== undefined) tpSlLines.push(`  Stop Loss:         ${chalk.red('$' + stopLoss.toFixed(2))}`);
+              } catch { /* TP/SL is non-critical */ }
+            }
+
             return {
               success: true,
               message: [
@@ -344,6 +360,7 @@ export const flashOpenPosition: ToolDefinition = {
                 `  Collateral:        ${formatUsd(actualCollateral)}`,
                 `  Liquidation Price: ${actualLiq && actualLiq > 0 ? chalk.yellow(formatPrice(actualLiq)) : chalk.dim('N/A')}`,
                 `  Est. Fee:          ${chalk.dim('$' + executionFee.toFixed(4))}`,
+                ...tpSlLines,
                 `  TX: ${chalk.dim(txLink)}`,
                 '',
               ].join('\n'),
@@ -2018,6 +2035,7 @@ interface AggregatedTrade {
   collateral: number;
   pnl?: number;
   closed: boolean;
+  closeReason?: string;
 }
 
 /**
@@ -2037,6 +2055,7 @@ function aggregateTradeEvents(events: Array<{
   exitPrice?: number;
   price?: number;
   pnl?: number;
+  closeReason?: string;
   timestamp: number;
 }>): AggregatedTrade[] {
   const active = new Map<string, AggregatedTrade>();
@@ -2082,6 +2101,7 @@ function aggregateTradeEvents(events: Array<{
       if (trade) {
         trade.exitPrice = ev.exitPrice ?? ev.price;
         trade.pnl = ev.pnl;
+        trade.closeReason = ev.closeReason;
         trade.closed = true;
         completed.push(trade);
         active.delete(key);
@@ -2097,6 +2117,7 @@ function aggregateTradeEvents(events: Array<{
           sizeUsd: ev.sizeUsd ?? 0,
           collateral: ev.collateral ?? ev.collateralUsd ?? 0,
           pnl: ev.pnl,
+          closeReason: ev.closeReason,
           closed: true,
         });
       }
@@ -2127,8 +2148,11 @@ function renderAggregatedRows(trades: AggregatedTrade[]): string[] {
     const pnl = t.pnl !== undefined
       ? (t.pnl >= 0 ? theme.positive(`+${formatUsd(t.pnl)}`) : theme.negative(formatUsd(t.pnl)))
       : padVisibleStart(theme.dim('—'), 5);
+    const reason = t.closeReason
+      ? (t.closeReason === 'TAKE_PROFIT' ? theme.positive(t.closeReason) : theme.negative(t.closeReason))
+      : '';
 
-    rows.push(`  ${time}  ${market}  ${side}  ${lev}  ${entryStr}  ${exitStr}  ${sizeStr}  ${coll}  ${pnl}`);
+    rows.push(`  ${time}  ${market}  ${side}  ${lev}  ${entryStr}  ${exitStr}  ${sizeStr}  ${coll}  ${pnl}  ${reason}`);
   }
   return rows;
 }
@@ -2159,8 +2183,8 @@ const tradeHistoryTool: ToolDefinition = {
       const lines: string[] = [
         theme.titleBlock('TRADE HISTORY'),
         '',
-        theme.dim('  Time       Market  Side   Lev    Entry       Exit       Size     Collateral  PnL'),
-        `  ${theme.separator(90)}`,
+        theme.dim('  Time       Market  Side   Lev    Entry       Exit       Size     Collateral  PnL     Reason'),
+        `  ${theme.separator(104)}`,
         ...renderAggregatedRows(recent),
         '',
         theme.dim(`  Showing ${recent.length} of ${aggregated.length} trade(s)`),
@@ -2195,8 +2219,8 @@ const tradeHistoryTool: ToolDefinition = {
     const lines: string[] = [
       theme.titleBlock('SESSION TRADE HISTORY'),
       '',
-      theme.dim('  Time       Market  Side   Lev    Entry       Exit       Size     Collateral  PnL'),
-      `  ${theme.separator(90)}`,
+      theme.dim('  Time       Market  Side   Lev    Entry       Exit       Size     Collateral  PnL     Reason'),
+      `  ${theme.separator(104)}`,
       ...renderAggregatedRows(recent),
       '',
       theme.dim(`  ${recent.length} trade(s) this session`),
@@ -2804,6 +2828,47 @@ const txMetricsTool: ToolDefinition = {
   },
 };
 
+// ─── TP/SL Tools ──────────────────────────────────────────────────────────────
+
+const setTpSlTool: ToolDefinition = {
+  name: 'set_tp_sl',
+  description: 'Set take-profit or stop-loss for a position',
+  parameters: z.object({
+    market: z.string(),
+    side: z.nativeEnum(TradeSide),
+    type: z.enum(['tp', 'sl']),
+    price: z.number().positive(),
+  }),
+  async execute(params: Record<string, unknown>): Promise<ToolResult> {
+    const { market, side, type, price } = params as {
+      market: string; side: TradeSide; type: 'tp' | 'sl'; price: number;
+    };
+    const { getTpSlEngine } = await import('../risk/tp-sl-engine.js');
+    const engine = getTpSlEngine();
+    const tp = type === 'tp' ? price : undefined;
+    const sl = type === 'sl' ? price : undefined;
+    return { success: true, message: engine.setTarget(market, side, tp, sl) };
+  },
+};
+
+const removeTpSlTool: ToolDefinition = {
+  name: 'remove_tp_sl',
+  description: 'Remove take-profit or stop-loss from a position',
+  parameters: z.object({
+    market: z.string(),
+    side: z.nativeEnum(TradeSide),
+    type: z.enum(['tp', 'sl']),
+  }),
+  async execute(params: Record<string, unknown>): Promise<ToolResult> {
+    const { market, side, type } = params as {
+      market: string; side: TradeSide; type: 'tp' | 'sl';
+    };
+    const { getTpSlEngine } = await import('../risk/tp-sl-engine.js');
+    const engine = getTpSlEngine();
+    return { success: true, message: engine.removeTarget(market, side, type) };
+  },
+};
+
 export const allFlashTools: ToolDefinition[] = [
   flashOpenPosition,
   flashClosePosition,
@@ -2844,4 +2909,6 @@ export const allFlashTools: ToolDefinition[] = [
   tradeHistoryTool,
   systemAuditTool,
   txMetricsTool,
+  setTpSlTool,
+  removeTpSlTool,
 ];
