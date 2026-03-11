@@ -348,6 +348,23 @@ export function localParse(input: string): ParsedIntent | null {
     }
   }
 
+  // Set TP/SL alternate: "set tp 95 for SOL long", "set sl 80 for SOL long"
+  const setTpSlAltMatch = lower.match(
+    /^set\s+(tp|sl)\s+\$?(\d+(?:\.\d+)?)\s+(?:for\s+)?([a-z]+)\s+(long|short)$/
+  );
+  if (setTpSlAltMatch) {
+    const side = parseSide(setTpSlAltMatch[4]);
+    if (side) {
+      return {
+        action: ActionType.SetTpSl,
+        market: resolveMarket(setTpSlAltMatch[3]),
+        side,
+        type: setTpSlAltMatch[1] as 'tp' | 'sl',
+        price: parseFloat(setTpSlAltMatch[2]),
+      };
+    }
+  }
+
   // Remove TP/SL: "remove tp SOL long", "remove sl SOL long"
   const removeTpSlMatch = lower.match(
     /^remove\s+(tp|sl)\s+([a-z]+)\s+(long|short)$/
