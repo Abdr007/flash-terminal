@@ -664,6 +664,8 @@ export class FlashClient implements IFlashClient {
       logger.info('CLIENT', `Ultra-TX: ${result.signature} (${result.metrics.totalLatencyMs}ms, ${result.metrics.confirmedViaWs ? 'WS' : 'HTTP'}, ${result.broadcastEndpoints} endpoints)`);
       // Reset session idle timer on successful trade
       this.walletMgr.resetIdleTimer();
+      // Invalidate balance cache — balances changed after trade
+      this.walletMgr.clearBalanceCache();
       return result.signature;
     }
 
@@ -783,6 +785,8 @@ export class FlashClient implements IFlashClient {
             logger.info('CLIENT', `Tx confirmed: ${signatureStr}`);
             // [H-3] Reset session idle timer on successful trade
             this.walletMgr.resetIdleTimer();
+            // Invalidate balance cache — balances changed after trade
+            this.walletMgr.clearBalanceCache();
             return signatureStr;
           }
           // Resend every other poll to improve delivery
@@ -801,6 +805,7 @@ export class FlashClient implements IFlashClient {
               (finalStatus.confirmationStatus === 'confirmed' || finalStatus.confirmationStatus === 'finalized')) {
             process.stdout.write('                              \r');
             logger.info('CLIENT', `Tx confirmed (late detection): ${signatureStr}`);
+            this.walletMgr.clearBalanceCache();
             return signatureStr;
           }
         } catch {

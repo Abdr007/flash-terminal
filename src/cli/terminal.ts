@@ -96,6 +96,8 @@ export class FlashTerminal {
   private processing = false;
   /** Suppress repeated "Please wait" messages during a single command */
   private processingWarnShown = false;
+  /** Prevent trade execution during wallet rebuild */
+  private walletRebuilding = false;
   /** Buffer for input received while processing (e.g. pre-typed "y" for confirmation) */
   private bufferedLine: string | null = null;
   /** RPC manager for failover support */
@@ -150,6 +152,20 @@ export class FlashTerminal {
     });
 
     this.loadHistory();
+
+    // ─── Early Config Validation ──────────────────────────────────────
+    // Run before mode selection so operators see warnings immediately
+    try {
+      const { validateAndLogConfig } = await import('../config/config-validator.js');
+      const earlyWarnings = validateAndLogConfig();
+      if (earlyWarnings.length > 0) {
+        console.log('');
+        for (const w of earlyWarnings) {
+          console.log(chalk.yellow(`  ⚠ [${w.code}] ${w.message}`));
+        }
+        console.log('');
+      }
+    } catch { /* config validation is non-critical */ }
 
     // ─── Welcome Screen & Mode Selection ──────────────────────────────
     const mode = await this.showModeSelection();
@@ -345,6 +361,8 @@ export class FlashTerminal {
 
     // Set prompt based on mode
     this.updatePrompt();
+
+    // Config validation already ran before mode selection (early startup)
 
     // Log startup readiness (structured, for operational visibility)
     {
@@ -1222,6 +1240,9 @@ export class FlashTerminal {
     // Only relevant in live mode — rebuild client with new wallet
     if (this.config.simulationMode) return;
 
+    // Mutex: prevent trade execution during wallet rebuild
+    this.walletRebuilding = true;
+
     const connection = this.rpcManager.connection;
 
     try {
@@ -1234,6 +1255,9 @@ export class FlashTerminal {
       console.log(chalk.red(`  Failed to reinitialize live client: ${getErrorMessage(error)}`));
       console.log(chalk.dim('  Trading commands may fail until a wallet is reconnected.'));
       return;
+    } finally {
+      // Always release mutex even on failure
+      this.walletRebuilding = false;
     }
 
     // Update reconciler with new client
@@ -1731,6 +1755,12 @@ export class FlashTerminal {
     if (result.requiresConfirmation && result.data?.executeAction) {
       const confirmed = await this.confirm(result.confirmationPrompt ?? 'Confirm?');
       if (confirmed) {
+        // Prevent trade execution during wallet rebuild
+        if (this.walletRebuilding) {
+          console.log(chalk.red('  Wallet switch in progress — trade cancelled for safety.'));
+          return;
+        }
+
         console.log(chalk.dim('  Submitting transaction...'));
 
         try {

@@ -29,6 +29,11 @@ export class WalletManager {
     this.tokenBalancesCache = null;
   }
 
+  /** Invalidate the token balance cache. Called post-trade to prevent stale reads. */
+  clearBalanceCache(): void {
+    this.tokenBalancesCache = null;
+  }
+
   /** Reset the idle session timer (call on every signed operation). */
   resetIdleTimer(): void {
     if (this.idleTimer) clearTimeout(this.idleTimer);

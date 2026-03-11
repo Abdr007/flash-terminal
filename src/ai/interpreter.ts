@@ -522,9 +522,9 @@ export class AIInterpreter {
   private context: CommandContext = { updatedAt: 0 };
 
   constructor(apiKey: string, groqApiKey?: string) {
-    this.anthropic = apiKey ? new Anthropic({ apiKey }) : null;
+    this.anthropic = apiKey ? new Anthropic({ apiKey, timeout: 30_000 }) : null;
     this.groq = groqApiKey
-      ? new OpenAI({ apiKey: groqApiKey, baseURL: 'https://api.groq.com/openai/v1' })
+      ? new OpenAI({ apiKey: groqApiKey, baseURL: 'https://api.groq.com/openai/v1', timeout: 30_000 })
       : null;
   }
 

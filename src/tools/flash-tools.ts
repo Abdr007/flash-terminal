@@ -9,7 +9,6 @@ import {
   MarketOI,
   DailyVolume,
   LeaderboardEntry,
-  getLeverageLimits,
 } from '../types/index.js';
 import {
   formatUsd,
@@ -26,174 +25,33 @@ import {
 import { getErrorMessage } from '../utils/retry.js';
 import { getProtocolFeeRates, calcFeeUsd, ProtocolParameterError } from '../utils/protocol-fees.js';
 import { DATA_STALENESS_WARNING_SECONDS } from '../core/risk-config.js';
-import { computeSimulationLiquidationPrice } from '../utils/protocol-liq.js';
 import { filterValidPositions } from '../core/invariants.js';
 import { getSigningGuard, SigningAuditEntry } from '../security/signing-guard.js';
+import { getTradingGate } from '../security/trading-gate.js';
+import { getCircuitBreaker } from '../security/circuit-breaker.js';
+import {
+  logKillSwitchBlock,
+  logExposureBlock,
+  logCircuitBreakerBlock,
+  logTradeStart,
+  logTradeSuccess,
+  logTradeFailure,
+} from '../observability/trade-events.js';
 import { updateLastWallet, clearLastWallet } from '../wallet/session.js';
+import { getShadowEngine } from '../shadow/shadow-engine.js';
+import { logShadowTrade } from '../observability/shadow-events.js';
 import chalk from 'chalk';
 import { theme } from '../cli/theme.js';
 import { resolveMarket } from '../utils/market-resolver.js';
 
-// ─── Risk Preview Helpers ───────────────────────────────────────────────────
+// ─── Trade Helpers (extracted to trade-helpers.ts) ──────────────────────────
 
-type RiskLevel = 'LOW' | 'MEDIUM' | 'HIGH';
-
-function classifyRisk(distancePct: number): RiskLevel {
-  if (distancePct > 60) return 'LOW';
-  if (distancePct > 30) return 'MEDIUM';
-  return 'HIGH';
-}
-
-function colorRisk(level: RiskLevel): string {
-  switch (level) {
-    case 'LOW': return chalk.green(level);
-    case 'MEDIUM': return chalk.yellow(level);
-    case 'HIGH': return chalk.red(level);
-  }
-}
-
-/**
- * Compute pre-trade liquidation estimate using the same formula as
- * Flash SDK's getLiquidationPriceContractHelper().
- *
- * Uses protocol fee rates from CustodyAccount when available,
- * falls back to SDK defaults when on-chain fetch is unavailable.
- */
-async function estimateLiqPrice(entryPrice: number, leverage: number, side: TradeSide, market: string, perpClient: unknown | null): Promise<number> {
-  if (!Number.isFinite(entryPrice) || !Number.isFinite(leverage) || entryPrice <= 0 || leverage <= 0) return 0;
-  const feeRates = await getProtocolFeeRates(market, perpClient);
-  const sizeUsd = 1; // normalized
-  const collateralUsd = sizeUsd / leverage;
-  return computeSimulationLiquidationPrice(entryPrice, sizeUsd, collateralUsd, side, feeRates.maintenanceMarginRate, feeRates.closeFeeRate);
-}
-
-/** Timeout helper — resolves to fallback if promise takes too long. */
-function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
-  return Promise.race([
-    promise,
-    new Promise<T>(resolve => setTimeout(() => resolve(fallback), ms)),
-  ]);
-}
-
-const PREVIEW_TIMEOUT_MS = 3_000;
-
-/** Build risk preview lines for the open position confirmation panel. */
-async function buildRiskPreview(
-  context: ToolContext,
-  market: string,
-  side: TradeSide,
-  leverage: number,
-  sizeUsd: number,
-): Promise<string[]> {
-  return withTimeout(_buildRiskPreview(context, market, side, leverage, sizeUsd), PREVIEW_TIMEOUT_MS, []);
-}
-
-async function _buildRiskPreview(
-  context: ToolContext,
-  market: string,
-  side: TradeSide,
-  leverage: number,
-  sizeUsd: number,
-): Promise<string[]> {
-  const lines: string[] = [];
-  try {
-    // Get current market price (uses cached data — no extra RPC call)
-    const marketData = await context.flashClient.getMarketData(market);
-    const md = marketData.find(m => m.symbol.toUpperCase() === market.toUpperCase());
-    if (!md || !Number.isFinite(md.price) || md.price <= 0) return lines;
-
-    const entryEst = md.price;
-    const perpClient = context.simulationMode ? null : (context.flashClient as any).perpClient ?? null;
-    const liqEst = await estimateLiqPrice(entryEst, leverage, side, market, perpClient);
-    if (liqEst <= 0) return lines;
-    const distancePct = Math.abs(entryEst - liqEst) / entryEst * 100;
-    const risk = classifyRisk(distancePct);
-
-    lines.push('');
-    lines.push(chalk.dim('  Risk Preview:'));
-    lines.push(`    Est. Entry:   ${formatPrice(entryEst)}`);
-    lines.push(`    Est. Liq:     ${chalk.yellow(formatPrice(liqEst))}`);
-    lines.push(`    Distance:     ${distancePct.toFixed(1)}%`);
-    lines.push(`    Risk:         ${colorRisk(risk)}`);
-
-    // Portfolio impact — exposure before/after
-    const positions = await context.flashClient.getPositions();
-    const currentExposure = positions.reduce((sum, p) =>
-      sum + (Number.isFinite(p.sizeUsd) ? p.sizeUsd : 0), 0);
-    const newExposure = currentExposure + sizeUsd;
-
-    lines.push(`    Exposure:     ${formatUsd(currentExposure)} → ${chalk.bold(formatUsd(newExposure))}`);
-  } catch {
-    // Best effort — don't block trade if preview fails
-  }
-  return lines;
-}
-
-/** Build position details for close/modify confirmations. */
-async function buildPositionPreview(
-  context: ToolContext,
-  market: string,
-  side: TradeSide,
-): Promise<string[]> {
-  return withTimeout(_buildPositionPreview(context, market, side), PREVIEW_TIMEOUT_MS, []);
-}
-
-async function _buildPositionPreview(
-  context: ToolContext,
-  market: string,
-  side: TradeSide,
-): Promise<string[]> {
-  const lines: string[] = [];
-  try {
-    const positions = await context.flashClient.getPositions();
-    const pos = positions.find(p =>
-      p.market.toUpperCase() === market.toUpperCase() && p.side === side
-    );
-    if (!pos) return lines;
-
-    lines.push(`  Size:    ${formatUsd(pos.sizeUsd)}`);
-    lines.push(`  Entry:   ${formatPrice(pos.entryPrice)}`);
-    lines.push(`  PnL:     ${colorPnl(pos.unrealizedPnl)}`);
-    if (Number.isFinite(pos.liquidationPrice) && pos.liquidationPrice > 0) {
-      lines.push(`  Liq:     ${chalk.yellow(formatPrice(pos.liquidationPrice))}`);
-    }
-  } catch {
-    // Best effort
-  }
-  return lines;
-}
-
-// ─── Pre-Trade Validation ───────────────────────────────────────────────────
-
-function validateLiveTradeContext(context: ToolContext): string | null {
-  if (context.simulationMode) return null;
-  if (!context.walletManager || !context.walletManager.isConnected) {
-    return 'No wallet connected. Use "wallet import <name> <path>" or "wallet connect <path>".';
-  }
-  return null;
-}
-
-function buildLiveTradeWarnings(market: string, leverage: number, collateral?: number): string[] {
-  const warnings: string[] = [];
-  const limits = getLeverageLimits(market);
-
-  if (leverage < limits.min) warnings.push(`Leverage ${leverage}x is below minimum ${limits.min}x for ${market}`);
-  if (leverage > limits.max) warnings.push(`Leverage ${leverage}x exceeds maximum ${limits.max}x for ${market}`);
-  if (leverage >= 20) warnings.push(`High leverage (${leverage}x) — liquidation risk is significant`);
-  if (leverage >= 50) warnings.push('Extreme leverage — small price moves can liquidate');
-
-  // Rough pre-trade estimate — actual liq distance computed by SDK post-trade
-  const liqDistance = (1 / leverage) * 100;
-  if (liqDistance < 5) {
-    warnings.push(`Liquidation within ${liqDistance.toFixed(1)}% price move`);
-  }
-
-  if (collateral !== undefined && collateral > 1000) {
-    warnings.push(`Large collateral amount: ${formatUsd(collateral)}`);
-  }
-
-  return warnings;
-}
+import {
+  buildRiskPreview,
+  buildPositionPreview,
+  validateLiveTradeContext,
+  buildLiveTradeWarnings,
+} from './trade-helpers.js';
 
 // ─── flash_open_position ─────────────────────────────────────────────────────
 
@@ -270,6 +128,30 @@ export const flashOpenPosition: ToolDefinition = {
 
     const sizeUsd = collateral * leverage;
     const isLive = !context.simulationMode;
+
+    // ── Trading Gate: Kill Switch ──
+    const gate = getTradingGate();
+    const killCheck = gate.checkKillSwitch();
+    if (!killCheck.allowed) {
+      logKillSwitchBlock(market, side);
+      return { success: false, message: chalk.red(`  ${killCheck.reason}`) };
+    }
+
+    // ── Trading Gate: Exposure Check ──
+    const exposureCheck = await gate.checkExposure(sizeUsd, context.flashClient);
+    if (!exposureCheck.allowed) {
+      logExposureBlock(market, side, sizeUsd, 0, gate.maxPortfolioExposure);
+      return { success: false, message: chalk.red(`  ${exposureCheck.reason}`) };
+    }
+
+    // ── Circuit Breaker ──
+    const breaker = getCircuitBreaker();
+    const breakerCheck = breaker.check();
+    if (!breakerCheck.allowed) {
+      logCircuitBreakerBlock(market, side, breakerCheck.reason ?? 'unknown');
+      return { success: false, message: chalk.red(`  ${breakerCheck.reason}`) };
+    }
+
     const guard = getSigningGuard();
     const walletAddr = context.walletAddress ?? 'unknown';
 
@@ -371,10 +253,14 @@ export const flashOpenPosition: ToolDefinition = {
       confirmationPrompt: isLive ? 'Type "yes" to sign or "no" to cancel' : 'Execute trade?',
       data: {
         executeAction: async (): Promise<ToolResult> => {
+          logTradeStart('open', market, side, { collateral, leverage, sizeUsd });
           try {
             const result = await context.flashClient.openPosition(
               market, side, collateral, leverage, collateral_token
             );
+
+            // Record trade open in circuit breaker
+            getCircuitBreaker().recordOpen();
 
             // Record signing AFTER successful confirmation (not before)
             guard.recordSigning();
@@ -430,6 +316,14 @@ export const flashOpenPosition: ToolDefinition = {
               }
             }
 
+            logTradeSuccess('open', market, side, { txSignature: result.txSignature, entryPrice: result.entryPrice, sizeUsd: actualSize });
+
+            // Shadow trade — fire-and-forget, completely isolated
+            try {
+              const shadowResult = await getShadowEngine().shadowOpen(market, side, collateral, leverage);
+              if (shadowResult) logShadowTrade(shadowResult);
+            } catch { /* shadow must never affect live pipeline */ }
+
             return {
               success: true,
               message: [
@@ -447,6 +341,7 @@ export const flashOpenPosition: ToolDefinition = {
               txSignature: result.txSignature,
             };
           } catch (error: unknown) {
+            logTradeFailure('open', market, side, getErrorMessage(error));
             // Audit log — failed
             guard.logAudit({
               timestamp: new Date().toISOString(),
@@ -495,6 +390,23 @@ export const flashClosePosition: ToolDefinition = {
     }
 
     const isLive = !context.simulationMode;
+
+    // ── Trading Gate: Kill Switch ──
+    const gate = getTradingGate();
+    const killCheck = gate.checkKillSwitch();
+    if (!killCheck.allowed) {
+      logKillSwitchBlock(market, side);
+      return { success: false, message: chalk.red(`  ${killCheck.reason}`) };
+    }
+
+    // ── Circuit Breaker ──
+    const breaker = getCircuitBreaker();
+    const breakerCheck = breaker.check();
+    if (!breakerCheck.allowed) {
+      logCircuitBreakerBlock(market, side, breakerCheck.reason ?? 'unknown');
+      return { success: false, message: chalk.red(`  ${breakerCheck.reason}`) };
+    }
+
     const guard = getSigningGuard();
     const walletAddr = context.walletAddress ?? 'unknown';
 
@@ -544,8 +456,14 @@ export const flashClosePosition: ToolDefinition = {
       confirmationPrompt: isLive ? 'Type "yes" to sign or "no" to cancel' : 'Confirm close?',
       data: {
         executeAction: async (): Promise<ToolResult> => {
+          logTradeStart('close', market, side);
           try {
             const result = await context.flashClient.closePosition(market, side);
+
+            // Record PnL in circuit breaker
+            if (Number.isFinite(result.pnl)) {
+              getCircuitBreaker().recordTrade(result.pnl);
+            }
 
             guard.recordSigning();
             guard.logAudit({
@@ -570,6 +488,14 @@ export const flashClosePosition: ToolDefinition = {
             const txLink = context.simulationMode
               ? result.txSignature
               : `https://solscan.io/tx/${result.txSignature}`;
+            logTradeSuccess('close', market, side, { txSignature: result.txSignature, exitPrice: result.exitPrice, pnl: result.pnl });
+
+            // Shadow trade — fire-and-forget, completely isolated
+            try {
+              const shadowResult = await getShadowEngine().shadowClose(market, side);
+              if (shadowResult) logShadowTrade(shadowResult);
+            } catch { /* shadow must never affect live pipeline */ }
+
             return {
               success: true,
               message: [
@@ -584,6 +510,7 @@ export const flashClosePosition: ToolDefinition = {
               txSignature: result.txSignature,
             };
           } catch (error: unknown) {
+            logTradeFailure('close', market, side, getErrorMessage(error));
             guard.logAudit({
               timestamp: new Date().toISOString(),
               type: 'close', market, side,
@@ -634,6 +561,23 @@ export const flashAddCollateral: ToolDefinition = {
     }
 
     const isLive = !context.simulationMode;
+
+    // ── Trading Gate: Kill Switch ──
+    const gate = getTradingGate();
+    const killCheck = gate.checkKillSwitch();
+    if (!killCheck.allowed) {
+      logKillSwitchBlock(market, side);
+      return { success: false, message: chalk.red(`  ${killCheck.reason}`) };
+    }
+
+    // ── Circuit Breaker ──
+    const breaker = getCircuitBreaker();
+    const breakerCheck = breaker.check();
+    if (!breakerCheck.allowed) {
+      logCircuitBreakerBlock(market, side, breakerCheck.reason ?? 'unknown');
+      return { success: false, message: chalk.red(`  ${breakerCheck.reason}`) };
+    }
+
     const guard = getSigningGuard();
     const walletAddr = context.walletAddress ?? 'unknown';
 
@@ -697,6 +641,12 @@ export const flashAddCollateral: ToolDefinition = {
               });
             }
 
+            // Shadow trade — fire-and-forget, completely isolated
+            try {
+              const shadowResult = await getShadowEngine().shadowAddCollateral(market, side, amount);
+              if (shadowResult) logShadowTrade(shadowResult);
+            } catch { /* shadow must never affect live pipeline */ }
+
             const txDisplay = context.simulationMode
               ? result.txSignature
               : `https://solscan.io/tx/${result.txSignature}`;
@@ -756,6 +706,23 @@ export const flashRemoveCollateral: ToolDefinition = {
     }
 
     const isLive = !context.simulationMode;
+
+    // ── Trading Gate: Kill Switch ──
+    const gate = getTradingGate();
+    const killCheck = gate.checkKillSwitch();
+    if (!killCheck.allowed) {
+      logKillSwitchBlock(market, side);
+      return { success: false, message: chalk.red(`  ${killCheck.reason}`) };
+    }
+
+    // ── Circuit Breaker ──
+    const breaker = getCircuitBreaker();
+    const breakerCheck = breaker.check();
+    if (!breakerCheck.allowed) {
+      logCircuitBreakerBlock(market, side, breakerCheck.reason ?? 'unknown');
+      return { success: false, message: chalk.red(`  ${breakerCheck.reason}`) };
+    }
+
     const guard = getSigningGuard();
     const walletAddr = context.walletAddress ?? 'unknown';
 
@@ -823,6 +790,12 @@ export const flashRemoveCollateral: ToolDefinition = {
                 txSignature: result.txSignature, timestamp: Date.now(),
               });
             }
+
+            // Shadow trade — fire-and-forget, completely isolated
+            try {
+              const shadowResult = await getShadowEngine().shadowRemoveCollateral(market, side, amount);
+              if (shadowResult) logShadowTrade(shadowResult);
+            } catch { /* shadow must never affect live pipeline */ }
 
             const txDisplay = context.simulationMode
               ? result.txSignature
