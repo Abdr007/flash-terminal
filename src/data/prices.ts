@@ -53,6 +53,12 @@ const PYTH_FEED_IDS: Record<string, string> = {
   PLTR: '0x3a4c922ec7e8cd86a6fa4005827e723a134a16f4ffe836eac91e7820c61f75a1',
 };
 
+// Non-crypto markets — cannot get 24h change from DexScreener
+const NON_CRYPTO_MARKETS = new Set([
+  'XAU', 'XAG', 'CRUDEOIL', 'EUR', 'GBP', 'USDJPY', 'USDCNH',
+  'SPY', 'NVDA', 'TSLA', 'AAPL', 'AMD', 'AMZN', 'PLTR',
+]);
+
 const FETCH_TIMEOUT_MS = 8_000;
 const MAX_PRICE_CACHE_ENTRIES = 100;
 const MAX_RESPONSE_BYTES = 1024 * 1024; // 1MB max
@@ -90,6 +96,11 @@ const _sharedHistory: Map<string, PriceSnapshot[]> = new Map();
 let _lastHistoryRecord = 0;
 let _lastDiskSave = 0;
 let _historyLoaded = false;
+
+/** Check if a market is non-crypto (commodities, forex, equities) — no DexScreener data available. */
+export function isNonCryptoMarket(symbol: string): boolean {
+  return NON_CRYPTO_MARKETS.has(symbol.toUpperCase());
+}
 
 /** Get the Pyth feed ID for a market symbol (for diagnostics). */
 export function getPythFeedId(symbol: string): string | null {
@@ -323,10 +334,18 @@ export class PriceService {
       return dexChange.change;
     }
 
-    // Trigger async DexScreener fetch (non-blocking, results available next cycle)
-    this.triggerDexScreenerFetch();
+    // Non-crypto markets have no DexScreener data — return NaN so callers can show "N/A"
+    if (NON_CRYPTO_MARKETS.has(symbol)) {
+      return NaN;
+    }
 
-    return 0;
+    // Trigger async DexScreener fetch (non-blocking, results available next cycle)
+    if (DEXSCREENER_TOKEN_ADDRESSES[symbol]) {
+      this.triggerDexScreenerFetch();
+    }
+
+    // No data available yet — return NaN (callers should show "N/A" not "+0.00%")
+    return NaN;
   }
 
   // ─── Disk Persistence ──────────────────────────────────────────────────────

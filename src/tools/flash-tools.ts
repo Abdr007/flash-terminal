@@ -2688,25 +2688,26 @@ const txMetricsTool: ToolDefinition = {
       return { success: true, message: theme.titleBlock('TX ENGINE METRICS') + '\n\n  No transactions recorded yet.\n' };
     }
 
+    const w = 26; // label width for alignment
     const lines = [
       theme.titleBlock('TX ENGINE METRICS'),
       '',
-      theme.pair('Transactions', String(s.totalTxs)),
-      theme.pair('Avg Total Latency', `${s.avgTotalLatencyMs}ms`),
-      theme.pair('Avg Confirm Time', `${s.avgConfirmLatencyMs}ms`),
-      theme.pair('P50 Confirm', `${s.p50ConfirmMs}ms`),
-      theme.pair('P95 Confirm', `${s.p95ConfirmMs}ms`),
-      theme.pair('Avg Blockhash Fetch', s.avgBlockhashLatencyMs === 0 ? 'pre-cached' : `${s.avgBlockhashLatencyMs}ms`),
-      theme.pair('Avg Build Time', `${s.avgBuildTimeMs}ms`),
-      theme.pair('WS Confirmation', `${s.wsConfirmPct}%`),
-      theme.pair('Avg Broadcast Endpoints', `${s.avgBroadcastCount}`),
-      theme.pair('Avg Rebroadcasts', `${s.avgRebroadcastCount}`),
+      theme.pair('Transactions', String(s.totalTxs), w),
+      theme.pair('Avg Total Latency', `${s.avgTotalLatencyMs}ms`, w),
+      theme.pair('Avg Confirm Time', `${s.avgConfirmLatencyMs}ms`, w),
+      theme.pair('P50 Confirm', `${s.p50ConfirmMs}ms`, w),
+      theme.pair('P95 Confirm', `${s.p95ConfirmMs}ms`, w),
+      theme.pair('Avg Blockhash Fetch', s.avgBlockhashLatencyMs === 0 ? 'pre-cached' : `${s.avgBlockhashLatencyMs}ms`, w),
+      theme.pair('Avg Build Time', `${s.avgBuildTimeMs}ms`, w),
+      theme.pair('WS Confirmation', `${s.wsConfirmPct}%`, w),
+      theme.pair('Avg Broadcast Endpoints', `${s.avgBroadcastCount}`, w),
+      theme.pair('Avg Rebroadcasts', `${s.avgRebroadcastCount}`, w),
       '',
       theme.titleBlock('LEADER ROUTING'),
       '',
-      theme.pair('Leader Routed', `${s.leaderRoutedPct}%`),
-      theme.pair('Avg Slot Delay', s.avgSlotDelay > 0 ? `${s.avgSlotDelay} slots` : 'n/a'),
-      theme.pair('Fastest Endpoint', s.fastestEndpoint ?? 'n/a'),
+      theme.pair('Leader Routed', `${s.leaderRoutedPct}%`, w),
+      theme.pair('Avg Slot Delay', s.avgSlotDelay > 0 ? `${s.avgSlotDelay} slots` : 'n/a', w),
+      theme.pair('Fastest Endpoint', s.fastestEndpoint ?? 'n/a', w),
       '',
     ];
 

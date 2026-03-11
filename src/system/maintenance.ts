@@ -15,8 +15,8 @@ import { getLogger } from '../utils/logger.js';
 const CACHE_SWEEP_INTERVAL_MS = 5 * 60_000;    // 5 minutes
 const MEMORY_CHECK_INTERVAL_MS = 5 * 60_000;   // 5 minutes
 const ORACLE_CHECK_INTERVAL_MS = 10_000;        // 10 seconds
-const RSS_WARNING_THRESHOLD = 1024 * 1024 * 1024;       // 1 GB
-const RSS_CRITICAL_THRESHOLD = 1.5 * 1024 * 1024 * 1024; // 1.5 GB
+const RSS_WARNING_THRESHOLD = 800 * 1024 * 1024;         // 800 MB
+const RSS_CRITICAL_THRESHOLD = 1.2 * 1024 * 1024 * 1024; // 1.2 GB
 
 export interface MaintenanceHandle {
   stop(): void;
@@ -32,6 +32,11 @@ export function startMaintenance(): MaintenanceHandle {
       // Sweep protocol fee cache
       try {
         sweepFeeCacheSync();
+      } catch { /* non-critical */ }
+
+      // Sweep expired price history entries (>24h old)
+      try {
+        sweepPriceHistorySync();
       } catch { /* non-critical */ }
 
       logger.debug('MAINTENANCE', 'Cache sweep completed');
@@ -118,5 +123,15 @@ function sweepFeeCacheSync(): void {
     if (typeof mod.sweepExpiredCache === 'function') {
       mod.sweepExpiredCache();
     }
+  }).catch(() => {});
+}
+
+/** Trim price history to keep only 24h of data per symbol, bounded. */
+function sweepPriceHistorySync(): void {
+  import('../data/prices.js').then(mod => {
+    // PriceService already trims history on recordPriceHistory(), but
+    // this explicit sweep handles idle periods where no prices are fetched.
+    const svc = new mod.PriceService();
+    svc.flushHistory();
   }).catch(() => {});
 }

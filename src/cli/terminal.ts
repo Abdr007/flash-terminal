@@ -1557,11 +1557,17 @@ export class FlashTerminal {
       }
       await this.handleProtocolFees(market);
       return;
-    } else if (lower.startsWith('source verify ') || lower.startsWith('verify source ')) {
-      const prefix = lower.startsWith('source verify ') ? 'source verify ' : 'verify source ';
+    } else if (lower === 'source verify' || lower === 'verify source' || lower.startsWith('source verify ') || lower.startsWith('verify source ')) {
+      const prefix = lower.startsWith('source verify') ? (lower.startsWith('source verify ') ? 'source verify ' : 'source verify') : (lower.startsWith('verify source ') ? 'verify source ' : 'verify source');
       const rawMarket = input.slice(prefix.length).trim();
       if (!rawMarket) {
-        console.log(chalk.yellow('  Usage: source verify <asset>  (e.g. source verify sol)'));
+        console.log('');
+        console.log(chalk.yellow('  Usage: source verify <asset>'));
+        console.log('');
+        console.log(chalk.dim('  Example:'));
+        console.log(chalk.dim('    source verify SOL'));
+        console.log(chalk.dim('    source verify BTC'));
+        console.log('');
         return;
       }
       const market = resolveMarketAlias(rawMarket);
@@ -2313,8 +2319,11 @@ export class FlashTerminal {
           : r.priceDirection === 'down'
             ? chalk.red(priceStr)
             : priceStr;
-        const changeRaw = formatPercent(r.change).padStart(12);
-        const change = r.change > 0 ? theme.positive(changeRaw) : r.change < 0 ? theme.negative(changeRaw) : theme.dim(changeRaw);
+        const changeRaw = !Number.isFinite(r.change) ? 'N/A'.padStart(12)
+          : r.change === 0 ? '+0.00%'.padStart(12)
+          : formatPercent(r.change).padStart(12);
+        const change = !Number.isFinite(r.change) ? theme.dim(changeRaw)
+          : r.change > 0 ? theme.positive(changeRaw) : r.change < 0 ? theme.negative(changeRaw) : theme.dim(changeRaw);
         const oiStr = formatUsd(r.totalOi).padStart(16);
         const ratio = `${r.longPct} / ${r.shortPct}`.padStart(14);
         const ratioColored = r.longPct > 60 ? theme.positive(ratio) : r.shortPct > 60 ? theme.negative(ratio) : theme.dim(ratio);
@@ -3449,12 +3458,12 @@ export class FlashTerminal {
    * SAFETY: No transaction is ever signed or sent.
    */
   private async handleDryRun(innerCommand: string): Promise<void> {
-    // Normalize: if inner command doesn't start with an action keyword, prepend "open"
-    // This handles natural language like "dryrun sol 2x long $500"
-    const lowerInner = innerCommand.toLowerCase().trim();
-    const actionKeywords = ['open', 'close', 'add', 'remove', 'long', 'short'];
-    const hasAction = actionKeywords.some(k => lowerInner.startsWith(k));
-    const normalizedCommand = hasAction ? innerCommand : `open ${innerCommand}`;
+    // Pre-normalize natural language patterns into structured format:
+    //   "sol long 5x $100"           → "open 5x long SOL $100"
+    //   "sol short 3x 200"           → "open 3x short SOL $200"
+    //   "open sol long 10x for $50"  → "open 10x long SOL $50"
+    //   "btc short 5x 100 dollars"   → "open 5x short BTC $100"
+    const normalizedCommand = this.normalizeDryRunCommand(innerCommand);
 
     // Parse the inner command using the interpreter
     process.stdout.write(chalk.dim('  Parsing inner command...\r'));
@@ -3479,6 +3488,8 @@ export class FlashTerminal {
       console.log(chalk.dim('  Usage:'));
       console.log(chalk.dim('    dryrun open 2x long SOL $10'));
       console.log(chalk.dim('    dryrun open 5x short BTC $100'));
+      console.log(chalk.dim('    dryrun sol long 5x $100'));
+      console.log(chalk.dim('    dryrun btc short 3x 200 dollars'));
       console.log('');
       return;
     }
@@ -3538,6 +3549,59 @@ export class FlashTerminal {
       const humanized = humanizeSdkError(errMsg, collateral, leverage);
       console.log(chalk.red(`  Dry run failed: ${humanized}`));
     }
+  }
+
+  /**
+   * Normalize natural language dryrun input into structured command.
+   * Accepts patterns like:
+   *   "sol long 5x $100"  "btc short 3x 200 dollars"  "open sol long 10x for $50"
+   * Normalizes to: "open <leverage>x <side> <asset> $<amount>"
+   */
+  private normalizeDryRunCommand(raw: string): string {
+    const lower = raw.toLowerCase().trim();
+
+    // Strip leading "open" if present — we'll re-add it
+    const stripped = lower.replace(/^open\s+/, '');
+
+    // Extract components using flexible regex
+    // Side: long or short
+    const sideMatch = stripped.match(/\b(long|short)\b/);
+    // Leverage: NNx or NNX
+    const levMatch = stripped.match(/\b(\d+(?:\.\d+)?)\s*x\b/i);
+    // Amount: $NN, NN dollars, NN bucks, for NN, or bare number at end
+    const amountMatch = stripped.match(/\$\s*(\d+(?:\.\d+)?)/) ||
+      stripped.match(/(\d+(?:\.\d+)?)\s*(?:dollars?|bucks?|usd)\b/) ||
+      stripped.match(/(?:for|with)\s+\$?\s*(\d+(?:\.\d+)?)/) ||
+      stripped.match(/\b(\d+(?:\.\d+)?)\s*$/);
+    // Asset: first word that isn't a known keyword
+    const keywords = new Set(['open', 'long', 'short', 'for', 'with', 'lev', 'leverage', 'dollars', 'dollar', 'bucks', 'buck', 'usd', 'x']);
+    const words = stripped.split(/\s+/);
+    let asset = '';
+    for (const w of words) {
+      const clean = w.replace(/[^a-z0-9]/gi, '');
+      if (!clean) continue;
+      if (keywords.has(clean)) continue;
+      if (/^\d/.test(clean)) continue; // skip numbers
+      if (/^\$/.test(w)) continue; // skip dollar amounts
+      asset = clean;
+      break;
+    }
+
+    // If we have all components, build structured command
+    if (sideMatch && asset) {
+      const side = sideMatch[1];
+      const lev = levMatch ? levMatch[1] : '1';
+      const amount = amountMatch ? amountMatch[1] : '';
+
+      if (amount) {
+        return `open ${lev}x ${side} ${asset.toUpperCase()} $${amount}`;
+      }
+    }
+
+    // Fallback: prepend "open" if missing action keyword
+    const actionKeywords = ['open', 'close', 'add', 'remove', 'long', 'short'];
+    const hasAction = actionKeywords.some(k => lower.startsWith(k));
+    return hasAction ? raw : `open ${raw}`;
   }
 
   /** Render a dry-run transaction preview. */
