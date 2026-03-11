@@ -2005,6 +2005,134 @@ export const txDebugTool: ToolDefinition = {
 
 // ─── Trade History / Journal ──────────────────────────────────────────────────
 
+// ─── Trade Lifecycle Aggregation ─────────────────────────────────────────────
+
+interface AggregatedTrade {
+  timestamp: number;
+  market: string;
+  side: string;
+  leverage: number;
+  entryPrice: number;
+  exitPrice?: number;
+  sizeUsd: number;
+  collateral: number;
+  pnl?: number;
+  closed: boolean;
+}
+
+/**
+ * Aggregate raw trade events into lifecycle trade records.
+ * Events are processed chronologically; OPEN creates a record,
+ * ADD/REMOVE_COLLATERAL adjusts it, CLOSE finalizes it.
+ */
+function aggregateTradeEvents(events: Array<{
+  action: string;
+  market: string;
+  side: string;
+  leverage?: number;
+  collateral?: number;
+  collateralUsd?: number;
+  sizeUsd?: number;
+  entryPrice?: number;
+  exitPrice?: number;
+  price?: number;
+  pnl?: number;
+  timestamp: number;
+}>): AggregatedTrade[] {
+  const active = new Map<string, AggregatedTrade>();
+  const completed: AggregatedTrade[] = [];
+
+  // Process in chronological order
+  const sorted = [...events].sort((a, b) => a.timestamp - b.timestamp);
+
+  for (const ev of sorted) {
+    const market = (ev.market ?? '').toUpperCase();
+    const side = (ev.side ?? '').toLowerCase();
+    const key = `${market}-${side}`;
+
+    if (ev.action === 'open') {
+      // If there's already an active trade for this key, push it as-is (orphaned open)
+      const existing = active.get(key);
+      if (existing) completed.push(existing);
+
+      active.set(key, {
+        timestamp: ev.timestamp,
+        market,
+        side,
+        leverage: ev.leverage ?? (ev.collateralUsd && ev.sizeUsd ? ev.sizeUsd / ev.collateralUsd : 0),
+        entryPrice: ev.entryPrice ?? ev.price ?? 0,
+        sizeUsd: ev.sizeUsd ?? 0,
+        collateral: ev.collateral ?? ev.collateralUsd ?? 0,
+        closed: false,
+      });
+    } else if (ev.action === 'add_collateral') {
+      const trade = active.get(key);
+      if (trade) {
+        trade.collateral += ev.collateral ?? ev.collateralUsd ?? 0;
+        if (trade.collateral > 0) trade.leverage = trade.sizeUsd / trade.collateral;
+      }
+    } else if (ev.action === 'remove_collateral') {
+      const trade = active.get(key);
+      if (trade) {
+        trade.collateral -= ev.collateral ?? ev.collateralUsd ?? 0;
+        if (trade.collateral > 0) trade.leverage = trade.sizeUsd / trade.collateral;
+      }
+    } else if (ev.action === 'close') {
+      const trade = active.get(key);
+      if (trade) {
+        trade.exitPrice = ev.exitPrice ?? ev.price;
+        trade.pnl = ev.pnl;
+        trade.closed = true;
+        completed.push(trade);
+        active.delete(key);
+      } else {
+        // Close without matching open (position opened before session)
+        completed.push({
+          timestamp: ev.timestamp,
+          market,
+          side,
+          leverage: 0,
+          entryPrice: ev.entryPrice ?? 0,
+          exitPrice: ev.exitPrice ?? ev.price,
+          sizeUsd: ev.sizeUsd ?? 0,
+          collateral: ev.collateral ?? ev.collateralUsd ?? 0,
+          pnl: ev.pnl,
+          closed: true,
+        });
+      }
+    }
+  }
+
+  // Remaining active trades (still open)
+  for (const trade of active.values()) {
+    completed.push(trade);
+  }
+
+  // Sort by open timestamp (most recent first for display)
+  return completed.sort((a, b) => b.timestamp - a.timestamp);
+}
+
+/** Render aggregated trade rows into formatted table lines. */
+function renderAggregatedRows(trades: AggregatedTrade[]): string[] {
+  const rows: string[] = [];
+  for (const t of trades) {
+    const time = new Date(t.timestamp).toLocaleTimeString('en-US', { hour12: false });
+    const market = t.market.padEnd(6);
+    const side = t.side === 'long' ? theme.long('LONG ') : theme.short('SHORT');
+    const lev = t.leverage > 0 ? `${Math.round(t.leverage)}x`.padEnd(5) : padVisibleStart(theme.dim('—'), 5);
+    const entryStr = t.entryPrice > 0 ? formatPrice(t.entryPrice).padStart(10) : padVisibleStart(theme.dim('—'), 10);
+    const exitStr = t.exitPrice !== undefined ? formatPrice(t.exitPrice).padStart(10) : padVisibleStart(theme.dim('—'), 10);
+    const sizeStr = t.sizeUsd > 0 ? formatUsd(t.sizeUsd).padStart(9) : padVisibleStart(theme.dim('—'), 9);
+    const coll = t.collateral > 0 ? formatUsd(t.collateral).padStart(10) : padVisibleStart(theme.dim('—'), 10);
+    const pnl = t.pnl !== undefined
+      ? (t.pnl >= 0 ? theme.positive(`+${formatUsd(t.pnl)}`) : theme.negative(formatUsd(t.pnl)))
+      : padVisibleStart(theme.dim('—'), 5);
+
+    rows.push(`  ${time}  ${market}  ${side}  ${lev}  ${entryStr}  ${exitStr}  ${sizeStr}  ${coll}  ${pnl}`);
+  }
+  return rows;
+}
+
 const tradeHistoryTool: ToolDefinition = {
   name: 'trade_history',
   description: 'Show recent trade history',
@@ -2026,37 +2154,18 @@ const tradeHistoryTool: ToolDefinition = {
         };
       }
 
-      const recent = trades.slice(-20).reverse();
+      const aggregated = aggregateTradeEvents(trades);
+      const recent = aggregated.slice(0, 20);
       const lines: string[] = [
         theme.titleBlock('TRADE HISTORY'),
         '',
-        theme.dim('  Time       Action  Market  Side    Entry       Exit        Collateral  PnL'),
-        `  ${theme.separator(82)}`,
+        theme.dim('  Time       Market  Side   Lev    Entry       Exit       Size     Collateral  PnL'),
+        `  ${theme.separator(90)}`,
+        ...renderAggregatedRows(recent),
+        '',
+        theme.dim(`  Showing ${recent.length} of ${aggregated.length} trade(s)`),
+        '',
       ];
-
-      for (const t of recent) {
-        const time = new Date(t.timestamp).toLocaleTimeString('en-US', { hour12: false });
-        const action = t.action === 'open' ? theme.command('OPEN ') : theme.warning('CLOSE');
-        const market = t.market.padEnd(6);
-        const side = t.side === 'long' ? theme.long('LONG ') : theme.short('SHORT');
-        const isClose = t.action === 'close';
-        const entryStr = isClose
-          ? formatPrice(t.entryPrice ?? 0).padStart(10)
-          : formatPrice(t.price).padStart(10);
-        const exitStr = isClose
-          ? formatPrice(t.price).padStart(10)
-          : padVisibleStart(theme.dim('—'), 10);
-        const coll = formatUsd(t.collateralUsd).padStart(10);
-        const pnl = t.pnl !== undefined
-          ? (t.pnl >= 0 ? theme.positive(`+${formatUsd(t.pnl)}`) : theme.negative(formatUsd(t.pnl)))
-          : padVisibleStart(theme.dim('—'), 5);
-
-        lines.push(`  ${time}  ${action}   ${market}  ${side}  ${entryStr}  ${exitStr}  ${coll}  ${pnl}`);
-      }
-
-      lines.push('');
-      lines.push(theme.dim(`  Showing ${recent.length} of ${trades.length} total trades`));
-      lines.push('');
 
       return { success: true, message: lines.join('\n') };
     }
@@ -2081,39 +2190,19 @@ const tradeHistoryTool: ToolDefinition = {
       };
     }
 
-    const recent = sessionTrades.slice(-20).reverse();
+    const aggregated = aggregateTradeEvents(sessionTrades);
+    const recent = aggregated.slice(0, 20);
     const lines: string[] = [
       theme.titleBlock('SESSION TRADE HISTORY'),
       '',
-      theme.dim('  Time       Action       Market    Side    Entry       Exit        Collateral  PnL'),
-      `  ${theme.separator(88)}`,
+      theme.dim('  Time       Market  Side   Lev    Entry       Exit       Size     Collateral  PnL'),
+      `  ${theme.separator(90)}`,
+      ...renderAggregatedRows(recent),
+      '',
+      theme.dim(`  ${recent.length} trade(s) this session`),
+      theme.dim('  Full history: https://solscan.io'),
+      '',
     ];
-
-    for (const t of recent) {
-      const time = new Date(t.timestamp).toLocaleTimeString('en-US', { hour12: false });
-      const actionLabels: Record<string, string> = {
-        open: 'OPEN',
-        close: 'CLOSE',
-        add_collateral: 'ADD COLL',
-        remove_collateral: 'RM COLL',
-      };
-      const actionStr = theme.command((actionLabels[t.action] ?? t.action).padEnd(10));
-      const market = (t.market ?? '').padEnd(9);
-      const side = (t.side ?? '').toUpperCase() === 'LONG' ? theme.long('LONG ') : theme.short('SHORT');
-      const entryStr = t.entryPrice !== undefined ? formatPrice(t.entryPrice).padStart(10) : padVisibleStart(theme.dim('—'), 10);
-      const exitStr = t.exitPrice !== undefined ? formatPrice(t.exitPrice).padStart(10) : padVisibleStart(theme.dim('—'), 10);
-      const coll = t.collateral !== undefined ? formatUsd(t.collateral).padStart(10) : padVisibleStart(theme.dim('—'), 10);
-      const pnl = t.pnl !== undefined
-        ? (t.pnl >= 0 ? theme.positive(`+${formatUsd(t.pnl)}`) : theme.negative(formatUsd(t.pnl)))
-        : padVisibleStart(theme.dim('—'), 5);
-
-      lines.push(`  ${time}  ${actionStr} ${market} ${side}  ${entryStr}  ${exitStr}  ${coll}  ${pnl}`);
-    }
-
-    lines.push('');
-    lines.push(theme.dim(`  ${recent.length} trade(s) this session`));
-    lines.push(theme.dim('  Full history: https://solscan.io'));
-    lines.push('');
 
     return { success: true, message: lines.join('\n') };
   },

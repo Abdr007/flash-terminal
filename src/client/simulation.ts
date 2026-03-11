@@ -325,6 +325,18 @@ export class SimulatedFlashClient implements IFlashClient {
     pos.leverage = Number.isFinite(newLev) ? newLev : 0;
 
     getLogger().trade('ADD_COLLATERAL', { market, side, amount, newLeverage: pos.leverage });
+    this.state.tradeHistory.push({
+      id: pos.id,
+      action: 'add_collateral',
+      market: pos.market,
+      side,
+      sizeUsd: pos.sizeUsd,
+      collateralUsd: amount,
+      leverage: pos.leverage,
+      price: this.livePrices.get(pos.market) ?? pos.entryPrice,
+      timestamp: Date.now(),
+    });
+    this.trimHistory();
     return { txSignature: `SIM_ADD_${pos.id}`, newLeverage: pos.leverage };
   }
 
@@ -365,6 +377,18 @@ export class SimulatedFlashClient implements IFlashClient {
     this.state.balance += amount;
 
     getLogger().trade('REMOVE_COLLATERAL', { market, side, amount, newLeverage: pos.leverage });
+    this.state.tradeHistory.push({
+      id: pos.id,
+      action: 'remove_collateral',
+      market: pos.market,
+      side,
+      sizeUsd: pos.sizeUsd,
+      collateralUsd: amount,
+      leverage: pos.leverage,
+      price: this.livePrices.get(pos.market) ?? pos.entryPrice,
+      timestamp: Date.now(),
+    });
+    this.trimHistory();
     return { txSignature: `SIM_RM_${pos.id}`, newLeverage: pos.leverage };
   }
 
