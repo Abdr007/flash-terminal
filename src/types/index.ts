@@ -91,6 +91,7 @@ export enum ActionType {
   // TP/SL Automation
   SetTpSl = 'set_tp_sl',
   RemoveTpSl = 'remove_tp_sl',
+  TpSlStatus = 'tp_sl_status',
 }
 
 // ─── Zod Schemas for Intent Parsing ──────────────────────────────────────────
@@ -356,6 +357,10 @@ export const RemoveTpSlSchema = z.object({
   type: z.enum(['tp', 'sl']),
 });
 
+export const TpSlStatusSchema = z.object({
+  action: z.literal(ActionType.TpSlStatus),
+});
+
 export const ParsedIntentSchema = z.discriminatedUnion('action', [
   OpenPositionSchema,
   ClosePositionSchema,
@@ -410,6 +415,7 @@ export const ParsedIntentSchema = z.discriminatedUnion('action', [
   SourceVerifySchema,
   SetTpSlSchema,
   RemoveTpSlSchema,
+  TpSlStatusSchema,
 ]);
 
 export type ParsedIntent = z.infer<typeof ParsedIntentSchema>;

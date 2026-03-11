@@ -2935,6 +2935,48 @@ const removeTpSlTool: ToolDefinition = {
   },
 };
 
+const tpSlStatusTool: ToolDefinition = {
+  name: 'tp_sl_status',
+  description: 'Show all active TP/SL targets',
+  parameters: z.object({}),
+  async execute(): Promise<ToolResult> {
+    const { getTpSlEngine } = await import('../risk/tp-sl-engine.js');
+    const engine = getTpSlEngine();
+    const targets = engine.getTargets();
+
+    if (targets.size === 0) {
+      return {
+        success: true,
+        message: [
+          '',
+          chalk.dim('  No active TP/SL targets.'),
+          chalk.dim('  Use "set tp <market> <side> $<price>" to add one.'),
+          '',
+        ].join('\n'),
+      };
+    }
+
+    const lines = [
+      '',
+      `  ${chalk.bold('ACTIVE TP/SL TARGETS')}`,
+      chalk.dim(`  ${'─'.repeat(44)}`),
+      '',
+    ];
+
+    for (const [key, target] of targets) {
+      const [market, side] = key.split('-');
+      const status = target.triggered ? chalk.red(' (triggered)') : '';
+      const tp = target.tp !== undefined ? `TP: $${target.tp.toFixed(2)}` : chalk.dim('TP: —');
+      const sl = target.sl !== undefined ? `SL: $${target.sl.toFixed(2)}` : chalk.dim('SL: —');
+      lines.push(`  ${chalk.bold(`${market} ${side!.toUpperCase()}`)}${status}`);
+      lines.push(`    ${tp}  |  ${sl}`);
+      lines.push('');
+    }
+
+    return { success: true, message: lines.join('\n') };
+  },
+};
+
 export const allFlashTools: ToolDefinition[] = [
   flashOpenPosition,
   flashClosePosition,
@@ -2977,4 +3019,5 @@ export const allFlashTools: ToolDefinition[] = [
   txMetricsTool,
   setTpSlTool,
   removeTpSlTool,
+  tpSlStatusTool,
 ];

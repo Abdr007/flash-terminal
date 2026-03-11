@@ -338,6 +338,13 @@ export const COMMAND_REGISTRY: CommandEntry[] = [
 
   // ── Utilities ───────────────────────────────────────────────────────────
   {
+    name: 'tp status',
+    action: ActionType.TpSlStatus,
+    category: 'Trading',
+    description: 'View active TP/SL targets',
+    aliases: ['tpsl status', 'tpsl'],
+  },
+  {
     name: 'dryrun',
     action: null,
     category: 'Utilities',

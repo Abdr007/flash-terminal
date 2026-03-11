@@ -286,6 +286,9 @@ export class ToolEngine {
           params: { market: intent.market, side: intent.side, type: intent.type },
         };
 
+      case ActionType.TpSlStatus:
+        return { toolName: 'tp_sl_status', params: {} };
+
       default:
         return null;
     }
