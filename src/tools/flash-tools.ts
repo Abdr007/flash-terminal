@@ -1287,9 +1287,54 @@ import { homedir } from 'os';
 
 const walletStore = new WalletStore();
 
+/** Read private key from stdin with hidden input (no echo). */
+async function readHiddenInput(prompt: string): Promise<string> {
+  return new Promise((resolve) => {
+    process.stdout.write(prompt);
+    const stdin = process.stdin;
+    const wasRaw = stdin.isRaw;
+    if (stdin.isTTY) stdin.setRawMode(true);
+    stdin.resume();
+
+    let input = '';
+    const onData = (data: Buffer) => {
+      const ch = data.toString();
+      // Enter key
+      if (ch === '\r' || ch === '\n') {
+        stdin.removeListener('data', onData);
+        if (stdin.isTTY && wasRaw !== undefined) stdin.setRawMode(wasRaw);
+        stdin.pause();
+        process.stdout.write('\n');
+        resolve(input);
+        return;
+      }
+      // Ctrl+C
+      if (ch === '\u0003') {
+        stdin.removeListener('data', onData);
+        if (stdin.isTTY && wasRaw !== undefined) stdin.setRawMode(wasRaw);
+        stdin.pause();
+        process.stdout.write('\n');
+        resolve('');
+        return;
+      }
+      // Backspace
+      if (ch === '\u007F' || ch === '\b') {
+        if (input.length > 0) {
+          input = input.slice(0, -1);
+          process.stdout.write('\b \b');
+        }
+        return;
+      }
+      input += ch;
+      process.stdout.write('*');
+    };
+    stdin.on('data', onData);
+  });
+}
+
 export const walletImport: ToolDefinition = {
   name: 'wallet_import',
-  description: 'Import a wallet from a keypair JSON file and store it locally',
+  description: 'Import a wallet from a keypair JSON file or base58 private key',
   parameters: z.object({
     name: z.string(),
     path: z.string(),
@@ -1305,9 +1350,13 @@ export const walletImport: ToolDefinition = {
           chalk.bold('  Import Wallet'),
           chalk.dim('  ─────────────────'),
           '',
-          `  Usage: ${chalk.cyan('wallet import <name> <path>')}`,
+          chalk.bold('  From file:'),
+          `  ${chalk.cyan('wallet import <name> <path>')}`,
+          chalk.dim('  wallet import main ~/.config/solana/id.json'),
           '',
-          `  Example: ${chalk.dim('wallet import main ~/.config/solana/id.json')}`,
+          chalk.bold('  From private key (Phantom / Solflare):'),
+          `  ${chalk.cyan('wallet import-key <name>')}`,
+          chalk.dim('  Prompts securely for your private key (hidden input)'),
           '',
         ].join('\n'),
       };
@@ -1315,31 +1364,48 @@ export const walletImport: ToolDefinition = {
 
     let secretKey: number[] | undefined;
     try {
-      // Path validation: restrict to home directory, resolve symlinks
-      const resolvedPath = resolve(path);
-      const home = homedir();
-      const homePrefix = home.endsWith('/') ? home : home + '/';
-      if (resolvedPath !== home && !resolvedPath.startsWith(homePrefix)) {
-        return { success: false, message: chalk.red(`  Wallet path must be within home directory (${home}).`) };
-      }
-      let realPath: string;
-      try {
-        realPath = realpathSync(resolvedPath);
-      } catch {
-        return { success: false, message: chalk.red(`  Wallet file not found: ${resolvedPath}`) };
-      }
-      if (realPath !== home && !realPath.startsWith(homePrefix)) {
-        return { success: false, message: chalk.red('  Wallet path resolves outside home directory (symlink?).') };
+      // Check if this is an import-key flow (path === '__prompt__')
+      if (path === '__prompt__') {
+        // Secure hidden input — key never appears in terminal or shell history
+        const key = await readHiddenInput(chalk.dim('  Enter private key: '));
+        if (!key) {
+          return { success: false, message: chalk.yellow('  Import cancelled.') };
+        }
+        try {
+          const bs58 = await import('bs58');
+          const decoded = bs58.default.decode(key);
+          secretKey = Array.from(decoded);
+        } catch {
+          return { success: false, message: chalk.red('  Invalid base58 private key. Check the key and try again.') };
+        }
+      } else {
+        // Import from JSON file
+        const resolvedPath = resolve(path);
+        const home = homedir();
+        const homePrefix = home.endsWith('/') ? home : home + '/';
+        if (resolvedPath !== home && !resolvedPath.startsWith(homePrefix)) {
+          return { success: false, message: chalk.red(`  Wallet path must be within home directory (${home}).`) };
+        }
+        let realPath: string;
+        try {
+          realPath = realpathSync(resolvedPath);
+        } catch {
+          return { success: false, message: chalk.red(`  Wallet file not found: ${resolvedPath}`) };
+        }
+        if (realPath !== home && !realPath.startsWith(homePrefix)) {
+          return { success: false, message: chalk.red('  Wallet path resolves outside home directory (symlink?).') };
+        }
+
+        // Reject suspiciously large files (keypair JSON should be < 1KB)
+        const fileSize = statSync(realPath).size;
+        if (fileSize > 1024) {
+          return { success: false, message: chalk.red(`  File too large (${fileSize} bytes). Expected a 64-byte keypair JSON.`) };
+        }
+        let raw = readFileSync(realPath, 'utf-8');
+        secretKey = JSON.parse(raw);
+        raw = ''; // Clear raw secret key material from memory
       }
 
-      // Reject suspiciously large files (keypair JSON should be < 1KB)
-      const fileSize = statSync(realPath).size;
-      if (fileSize > 1024) {
-        return { success: false, message: chalk.red(`  File too large (${fileSize} bytes). Expected a 64-byte keypair JSON.`) };
-      }
-      let raw = readFileSync(realPath, 'utf-8');
-      secretKey = JSON.parse(raw);
-      raw = ''; // Clear raw secret key material from memory
       const result = walletStore.importWallet(name, secretKey!);
 
       // Auto-set as default
