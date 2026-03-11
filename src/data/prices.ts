@@ -59,12 +59,12 @@ const MAX_RESPONSE_BYTES = 1024 * 1024; // 1MB max
 
 // 24h price history: record Pyth price snapshots, compute 24h change from oracle data.
 // This is the ONLY source of 24h price change — no external APIs.
-const HISTORY_INTERVAL_MS = 5 * 60_000; // record every 5 minutes
+const HISTORY_INTERVAL_MS = 60_000; // record every 1 minute
 const HISTORY_WINDOW_MS = 24 * 60 * 60_000; // 24 hours
-const MAX_HISTORY_PER_SYMBOL = 300; // ~25h at 5min intervals
-const DISK_SAVE_INTERVAL_MS = 5 * 60_000; // persist to disk every 5 minutes
+const MAX_HISTORY_PER_SYMBOL = 1440; // 24h at 1min intervals
+const DISK_SAVE_INTERVAL_MS = 2 * 60_000; // persist to disk every 2 minutes
 const HISTORY_FILE = join(homedir(), '.flash', 'price-history.json');
-const MAX_HISTORY_FILE_BYTES = 2 * 1024 * 1024; // 2MB max file size
+const MAX_HISTORY_FILE_BYTES = 5 * 1024 * 1024; // 5MB max file size
 
 interface PythParsedPrice {
   id: string;
@@ -323,8 +323,8 @@ export class PriceService {
     const oldestTimestamp = history[0].timestamp;
     const historyAgeMs = Date.now() - oldestTimestamp;
 
-    // Require at least 1 hour of accumulated history before reporting change
-    if (historyAgeMs < 60 * 60_000) {
+    // Require at least 10 minutes of accumulated history before reporting change
+    if (historyAgeMs < 10 * 60_000) {
       return NaN;
     }
 
