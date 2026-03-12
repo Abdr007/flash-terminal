@@ -237,6 +237,13 @@ export const flashOpenPosition: ToolDefinition = {
       if (limits.maxLeverage > 0) lines.push(chalk.dim(`    Max Leverage:   ${limits.maxLeverage}x`));
     }
 
+    // Show TP/SL targets in confirmation summary if provided inline
+    if (takeProfit !== undefined || stopLoss !== undefined) {
+      lines.push('');
+      if (takeProfit !== undefined) lines.push(`  Take Profit: ${chalk.green('$' + takeProfit.toFixed(2))}`);
+      if (stopLoss !== undefined) lines.push(`  Stop Loss:   ${chalk.red('$' + stopLoss.toFixed(2))}`);
+    }
+
     if (isLive) {
       const warnings = buildLiveTradeWarnings(market, leverage, collateral);
       if (warnings.length > 0) {
