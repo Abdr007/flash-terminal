@@ -450,9 +450,13 @@ export function localParse(input: string): ParsedIntent | null {
   //   leverage: 2x / 2 x
   //   collateral: $100 / 100 / 100 dollars / for $100 / for 100 / with $100
   //   price: @ $82 / at $82 / at 82 / @ 82
-  const limitParsed = parseLimitOrder(lower);
-  if (limitParsed) {
-    return limitParsed;
+  // Limit order — if input starts with "limit", it must be a limit order.
+  // Never fall through to open command parser or AI interpreter.
+  if (/^limit\b/.test(lower)) {
+    const limitParsed = parseLimitOrder(lower);
+    if (limitParsed) return limitParsed;
+    // Failed to parse — return help instead of falling through
+    return { action: ActionType.Help } as ParsedIntent;
   }
 
   // Cancel order: "cancel order order-1", "cancel order-1"

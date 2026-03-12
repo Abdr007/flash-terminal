@@ -3,7 +3,7 @@ import { readFileSync, writeFileSync, existsSync } from 'fs';
 import { homedir } from 'os';
 import { join, resolve } from 'path';
 import chalk from 'chalk';
-import { AIInterpreter, OfflineInterpreter } from '../ai/interpreter.js';
+import { AIInterpreter, OfflineInterpreter, localParse } from '../ai/interpreter.js';
 import { ToolEngine } from '../tools/engine.js';
 import { ToolContext, ToolResult, FlashConfig, IFlashClient, ActionType, ParsedIntent, DryRunPreview, TradeSide, Position } from '../types/index.js';
 import { SimulatedFlashClient } from '../client/simulation.js';
@@ -1589,6 +1589,24 @@ export class FlashTerminal {
       intent = fastIntent;
     } else if (this.showUsageHint(lower)) {
       return;
+    } else if (lower.startsWith('limit')) {
+      // Limit order — parse via interpreter, show usage on failure
+      const parsed = localParse(input);
+      if (parsed && parsed.action === ActionType.LimitOrder) {
+        intent = parsed;
+      } else {
+        console.log('');
+        console.log(chalk.yellow('  Invalid limit order syntax.'));
+        console.log('');
+        console.log(chalk.dim('  Usage:'));
+        console.log(`    ${chalk.bold('limit long SOL 2x $100 @ $82')}`);
+        console.log(`    ${chalk.bold('limit short BTC 3x $200 at $72000')}`);
+        console.log(`    ${chalk.bold('limit order sol 2x for 10 dollars long at 82')}`);
+        console.log('');
+        console.log(chalk.dim('  Required: side (long/short), market, leverage (Nx), collateral ($), price (@ or at)'));
+        console.log('');
+        return;
+      }
     } else if (lower.startsWith('position debug ') || lower.startsWith('pos debug ')) {
       const prefix = lower.startsWith('position debug ') ? 'position debug ' : 'pos debug ';
       const rawMarket = input.slice(prefix.length).trim();
