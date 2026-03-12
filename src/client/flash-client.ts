@@ -22,7 +22,10 @@ import {
   uiDecimalsToNative,
   BN_ZERO,
   OraclePrice,
+  ContractOraclePrice,
+  OrderAccount,
 } from 'flash-sdk';
+import type { LimitOrder as SdkLimitOrder, TriggerOrder as SdkTriggerOrder } from 'flash-sdk';
 import {
   Position,
   TradeSide,
@@ -34,6 +37,10 @@ import {
   ClosePositionResult,
   CollateralResult,
   DryRunPreview,
+  PlaceLimitOrderResult,
+  PlaceTriggerOrderResult,
+  CancelOrderResult,
+  OnChainOrder,
   getLeverageLimits,
 } from '../types/index.js';
 import { PythHttpClient, getPythProgramKeyForCluster, PriceData } from '@pythnetwork/client';
@@ -1797,5 +1804,400 @@ export class FlashClient implements IFlashClient {
 
   getBalance(): number {
     return this.cachedSolBalance;
+  }
+
+  // ─── On-Chain Order Methods ──────────────────────────────────────────────
+
+  /**
+   * Convert a UI price to ContractOraclePrice { price: BN, exponent: number }.
+   * Flash protocol uses exponent = -9, price = floor(uiPrice * 10^9).
+   */
+  private toContractOraclePrice(uiPrice: number): ContractOraclePrice {
+    const exponent = -9;
+    const price = new BN(Math.floor(uiPrice * 1e9));
+    return { price, exponent };
+  }
+
+  /** Zero price for optional TP/SL fields */
+  private zeroContractPrice(): ContractOraclePrice {
+    return { price: BN_ZERO, exponent: -9 };
+  }
+
+  /**
+   * Resolve the market's collateral symbol and receiveSymbol from poolConfig.markets.
+   * For longs, collateral is often the target token itself (SOL, BTC) or a base token (JUP for virtual).
+   * For shorts, collateral is USDC.
+   * receiveSymbol = USDC for shorts or the market's collateral for longs.
+   */
+  private resolveOrderTokens(poolConfig: PoolConfig, market: string, sdkSide: typeof Side.Long | typeof Side.Short) {
+    const targetToken = this.findToken(poolConfig, market);
+    const poolMarkets = poolConfig.markets as unknown as Array<{
+      targetMint: PublicKey; collateralMint: PublicKey;
+      side: typeof Side.Long | typeof Side.Short;
+    }>;
+    const matchedMarket = poolMarkets.find(
+      m => m.targetMint.equals(targetToken.mintKey) && m.side === sdkSide
+    );
+    let collateralSymbol: string;
+    if (matchedMarket) {
+      collateralSymbol = this.resolveTokenSymbol(poolConfig, matchedMarket.collateralMint);
+    } else {
+      collateralSymbol = targetToken.symbol;
+    }
+    return { targetSymbol: targetToken.symbol, collateralSymbol, targetToken };
+  }
+
+  async placeLimitOrder(
+    market: string,
+    side: TradeSide,
+    collateral: number,
+    leverage: number,
+    limitPrice: number,
+    stopLoss?: number,
+    takeProfit?: number,
+  ): Promise<PlaceLimitOrderResult> {
+    const logger = getLogger();
+    this.validateLeverage(market, leverage);
+
+    if (collateral < 10) {
+      throw new Error(`Minimum collateral is $10 (got $${collateral})`);
+    }
+
+    this.acquireTradeLock(market, side);
+    try {
+      const poolConfig = this.getPoolConfigForMarket(market);
+      const sdkSide = toSdkSide(side);
+      const { targetSymbol, collateralSymbol, targetToken } = this.resolveOrderTokens(poolConfig, market, sdkSide);
+
+      // Reserve symbol = what user deposits as collateral for the order
+      const reserveSymbol = DEFAULT_COLLATERAL_TOKEN;
+      const receiveSymbol = DEFAULT_COLLATERAL_TOKEN;
+
+      // Get price map and custody for size calculation
+      const priceMap = await this.getPriceMap(poolConfig);
+      const inputToken = this.findToken(poolConfig, reserveSymbol);
+      const targetPrice = priceMap.get(targetSymbol);
+      const inputPrice = priceMap.get(inputToken.symbol);
+      if (!targetPrice) throw new Error(`Oracle unavailable for ${targetSymbol}`);
+      if (!inputPrice) throw new Error(`Oracle unavailable for ${inputToken.symbol}`);
+
+      const inputCustody = this.findCustody(poolConfig, inputToken.symbol);
+      const outputCustody = this.findCustody(poolConfig, targetSymbol);
+      const custodyAccounts = await withRetry(
+        () => this.perpClient.program.account.custody.fetchMultiple([
+          inputCustody.custodyAccount, outputCustody.custodyAccount,
+        ]),
+        'custody-fetch', { maxAttempts: 2 },
+      );
+      if (!custodyAccounts[0] || !custodyAccounts[1]) {
+        throw new Error('Failed to fetch custody accounts from chain');
+      }
+
+      const collateralNative = uiDecimalsToNative(collateral.toString(), inputToken.decimals);
+      const sizeAmount = this.perpClient.getSizeAmountFromLeverageAndCollateral(
+        collateralNative, leverage.toString(), targetToken as unknown as Token, inputToken as unknown as Token, sdkSide,
+        targetPrice.price, targetPrice.emaPrice,
+        CustodyAccount.from(outputCustody.custodyAccount, custodyAccounts[1]),
+        inputPrice.price, inputPrice.emaPrice,
+        CustodyAccount.from(inputCustody.custodyAccount, custodyAccounts[0]),
+        BN_ZERO
+      );
+
+      const limitPriceContract = this.toContractOraclePrice(limitPrice);
+      const slPrice = stopLoss ? this.toContractOraclePrice(stopLoss) : this.zeroContractPrice();
+      const tpPrice = takeProfit ? this.toContractOraclePrice(takeProfit) : this.zeroContractPrice();
+
+      const result = await this.perpClient.placeLimitOrder(
+        targetSymbol, collateralSymbol, reserveSymbol, receiveSymbol,
+        sdkSide, limitPriceContract, collateralNative, sizeAmount,
+        slPrice, tpPrice, poolConfig
+      );
+
+      const txSignature = await this.sendTx(result.instructions, result.additionalSigners, poolConfig);
+
+      logger.trade('LIMIT_ORDER', {
+        market, side, collateral, leverage, limitPrice, tx: txSignature,
+      });
+
+      return {
+        txSignature,
+        market: market.toUpperCase(),
+        side,
+        limitPrice,
+        collateral,
+        leverage,
+        sizeUsd: collateral * leverage,
+      };
+    } finally {
+      this.releaseTradeLock(market, side);
+    }
+  }
+
+  async placeTriggerOrder(
+    market: string,
+    side: TradeSide,
+    triggerPrice: number,
+    isStopLoss: boolean,
+  ): Promise<PlaceTriggerOrderResult> {
+    const logger = getLogger();
+
+    this.acquireTradeLock(market, side);
+    try {
+      const poolConfig = this.getPoolConfigForMarket(market);
+      const sdkSide = toSdkSide(side);
+      const { targetSymbol, collateralSymbol } = this.resolveOrderTokens(poolConfig, market, sdkSide);
+      const receiveSymbol = DEFAULT_COLLATERAL_TOKEN;
+
+      // Get the existing position to determine size
+      const { position } = await this.findUserPosition(poolConfig, market, side);
+      const positionData = await this.perpClient.program.account.position.fetch(position.pubkey);
+      const posData = positionData as unknown as { sizeAmount: BN };
+      if (!posData.sizeAmount || posData.sizeAmount.isZero()) {
+        throw new Error(`No open ${side} position on ${market} to set ${isStopLoss ? 'stop-loss' : 'take-profit'} on`);
+      }
+
+      const triggerPriceContract = this.toContractOraclePrice(triggerPrice);
+
+      const result = await this.perpClient.placeTriggerOrder(
+        targetSymbol, collateralSymbol, receiveSymbol,
+        sdkSide, triggerPriceContract, posData.sizeAmount,
+        isStopLoss, poolConfig
+      );
+
+      const txSignature = await this.sendTx(result.instructions, result.additionalSigners, poolConfig);
+
+      logger.trade(isStopLoss ? 'SET_SL' : 'SET_TP', {
+        market, side, triggerPrice, tx: txSignature,
+      });
+
+      return {
+        txSignature,
+        market: market.toUpperCase(),
+        side,
+        triggerPrice,
+        isStopLoss,
+      };
+    } finally {
+      this.releaseTradeLock(market, side);
+    }
+  }
+
+  async cancelTriggerOrder(
+    market: string,
+    side: TradeSide,
+    orderId: number,
+    isStopLoss: boolean,
+  ): Promise<CancelOrderResult> {
+    const logger = getLogger();
+
+    const poolConfig = this.getPoolConfigForMarket(market);
+    const sdkSide = toSdkSide(side);
+    const { targetSymbol, collateralSymbol } = this.resolveOrderTokens(poolConfig, market, sdkSide);
+
+    const result = await this.perpClient.cancelTriggerOrder(
+      targetSymbol, collateralSymbol, sdkSide, orderId, isStopLoss, poolConfig
+    );
+
+    const txSignature = await this.sendTx(result.instructions, result.additionalSigners, poolConfig);
+
+    logger.trade(isStopLoss ? 'CANCEL_SL' : 'CANCEL_TP', {
+      market, side, orderId, tx: txSignature,
+    });
+
+    return { txSignature };
+  }
+
+  async cancelAllTriggerOrders(
+    market: string,
+    side: TradeSide,
+  ): Promise<CancelOrderResult> {
+    const logger = getLogger();
+
+    const poolConfig = this.getPoolConfigForMarket(market);
+    const sdkSide = toSdkSide(side);
+    const { targetSymbol, collateralSymbol } = this.resolveOrderTokens(poolConfig, market, sdkSide);
+
+    const result = await this.perpClient.cancelAllTriggerOrders(
+      targetSymbol, collateralSymbol, sdkSide, poolConfig
+    );
+
+    const txSignature = await this.sendTx(result.instructions, result.additionalSigners, poolConfig);
+
+    logger.trade('CANCEL_ALL_TRIGGERS', { market, side, tx: txSignature });
+
+    return { txSignature };
+  }
+
+  async cancelLimitOrder(
+    market: string,
+    side: TradeSide,
+    orderId: number,
+  ): Promise<CancelOrderResult> {
+    const logger = getLogger();
+
+    const poolConfig = this.getPoolConfigForMarket(market);
+    const sdkSide = toSdkSide(side);
+    const { targetSymbol, collateralSymbol } = this.resolveOrderTokens(poolConfig, market, sdkSide);
+    const reserveSymbol = DEFAULT_COLLATERAL_TOKEN;
+    const receiveSymbol = DEFAULT_COLLATERAL_TOKEN;
+
+    // Use editLimitOrder with zero size to cancel (or use program.methods directly)
+    // The SDK doesn't expose cancelLimitOrder directly, but the Anchor program does.
+    // We'll use the program.methods approach since CancelLimitOrderParams exists.
+    try {
+      const targetToken = this.findToken(poolConfig, market);
+      const collateralToken = this.findToken(poolConfig, collateralSymbol);
+      const reserveToken = this.findToken(poolConfig, reserveSymbol);
+      const receiveToken = this.findToken(poolConfig, receiveSymbol);
+
+      // Edit with zero size effectively cancels
+      const result = await this.perpClient.editLimitOrder(
+        targetToken.symbol, collateralToken.symbol, reserveToken.symbol, receiveToken.symbol,
+        sdkSide, orderId, this.zeroContractPrice(), BN_ZERO,
+        this.zeroContractPrice(), this.zeroContractPrice(),
+        poolConfig
+      );
+
+      const txSignature = await this.sendTx(result.instructions, result.additionalSigners, poolConfig);
+      logger.trade('CANCEL_LIMIT', { market, side, orderId, tx: txSignature });
+      return { txSignature };
+    } catch (err: unknown) {
+      const msg = getErrorMessage(err);
+      logger.warn('CLIENT', `cancelLimitOrder via editLimitOrder failed: ${msg}`);
+      throw new Error(`Failed to cancel limit order #${orderId}: ${msg}`);
+    }
+  }
+
+  async editLimitOrder(
+    market: string,
+    side: TradeSide,
+    orderId: number,
+    newLimitPrice: number,
+  ): Promise<CancelOrderResult> {
+    const logger = getLogger();
+
+    const poolConfig = this.getPoolConfigForMarket(market);
+    const sdkSide = toSdkSide(side);
+    const { targetSymbol, collateralSymbol } = this.resolveOrderTokens(poolConfig, market, sdkSide);
+    const reserveSymbol = DEFAULT_COLLATERAL_TOKEN;
+    const receiveSymbol = DEFAULT_COLLATERAL_TOKEN;
+
+    // Fetch current order to preserve size and TP/SL
+    const orders = await this.perpClient.getUserOrderAccounts(this.wallet.publicKey, poolConfig);
+    const targetToken = this.findToken(poolConfig, market);
+    const matchedOrder = orders.find(o => {
+      const poolMarkets = poolConfig.markets as unknown as Array<{
+        marketAccount: PublicKey; targetMint: PublicKey; side: typeof Side.Long | typeof Side.Short;
+      }>;
+      const marketConfig = poolMarkets.find(m => m.targetMint.equals(targetToken.mintKey) && m.side === sdkSide);
+      return marketConfig && o.market.equals(marketConfig.marketAccount);
+    });
+    if (!matchedOrder) throw new Error(`No order account found for ${market} ${side}`);
+    if (orderId >= matchedOrder.limitOrders.length) {
+      throw new Error(`Limit order #${orderId} not found (${matchedOrder.limitOrders.length} orders exist)`);
+    }
+    const existingOrder = matchedOrder.limitOrders[orderId];
+
+    const result = await this.perpClient.editLimitOrder(
+      targetSymbol, collateralSymbol, reserveSymbol, receiveSymbol,
+      sdkSide, orderId, this.toContractOraclePrice(newLimitPrice),
+      existingOrder.sizeAmount,
+      existingOrder.stopLossPrice, existingOrder.takeProfitPrice,
+      poolConfig
+    );
+
+    const txSignature = await this.sendTx(result.instructions, result.additionalSigners, poolConfig);
+
+    logger.trade('EDIT_LIMIT', { market, side, orderId, newLimitPrice, tx: txSignature });
+
+    return { txSignature };
+  }
+
+  async getUserOrders(): Promise<OnChainOrder[]> {
+    const logger = getLogger();
+    const result: OnChainOrder[] = [];
+
+    // Iterate all pools to find orders
+    for (const poolName of POOL_NAMES) {
+      if (!isTradeablePool(poolName)) continue;
+      try {
+        const pc = PoolConfig.fromIdsByName(poolName, this.config.network);
+        const orderAccounts = await this.perpClient.getUserOrderAccounts(this.wallet.publicKey, pc);
+
+        for (const oa of orderAccounts) {
+          if (!oa.isActive) continue;
+
+          // Resolve market symbol from the market account
+          const poolMarkets = pc.markets as unknown as Array<{
+            marketAccount: PublicKey; targetMint: PublicKey;
+            side: typeof Side.Long | typeof Side.Short;
+          }>;
+          const matchedMarket = poolMarkets.find(m => m.marketAccount.equals(oa.market));
+          if (!matchedMarket) continue;
+
+          const tokens = pc.tokens as Array<{ symbol: string; mintKey: PublicKey }>;
+          const targetToken = tokens.find(t => t.mintKey.equals(matchedMarket.targetMint));
+          if (!targetToken) continue;
+
+          const marketSymbol = targetToken.symbol;
+          const sideVal = matchedMarket.side === Side.Long ? TradeSide.Long : TradeSide.Short;
+
+          // Limit orders
+          for (let i = 0; i < oa.limitOrders.length; i++) {
+            const lo = oa.limitOrders[i];
+            if (lo.reserveAmount.isZero() && lo.sizeAmount.isZero()) continue;
+            const price = this.contractPriceToUi(lo.limitPrice);
+            if (price <= 0) continue;
+            result.push({
+              market: marketSymbol,
+              side: sideVal,
+              type: 'limit',
+              orderId: i,
+              price,
+            });
+          }
+
+          // Take profit orders
+          for (let i = 0; i < oa.takeProfitOrders.length; i++) {
+            const tp = oa.takeProfitOrders[i];
+            if (tp.triggerSize.isZero()) continue;
+            const price = this.contractPriceToUi(tp.triggerPrice);
+            if (price <= 0) continue;
+            result.push({
+              market: marketSymbol,
+              side: sideVal,
+              type: 'take_profit',
+              orderId: i,
+              price,
+            });
+          }
+
+          // Stop loss orders
+          for (let i = 0; i < oa.stopLossOrders.length; i++) {
+            const sl = oa.stopLossOrders[i];
+            if (sl.triggerSize.isZero()) continue;
+            const price = this.contractPriceToUi(sl.triggerPrice);
+            if (price <= 0) continue;
+            result.push({
+              market: marketSymbol,
+              side: sideVal,
+              type: 'stop_loss',
+              orderId: i,
+              price,
+            });
+          }
+        }
+      } catch (err: unknown) {
+        logger.debug('CLIENT', `Order fetch for pool ${poolName} failed: ${getErrorMessage(err)}`);
+      }
+    }
+
+    return result;
+  }
+
+  private contractPriceToUi(cp: ContractOraclePrice): number {
+    if (!cp || cp.price.isZero()) return 0;
+    const price = cp.price.toNumber() * Math.pow(10, cp.exponent);
+    return Number.isFinite(price) ? price : 0;
   }
 }

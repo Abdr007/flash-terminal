@@ -97,6 +97,7 @@ export enum ActionType {
   LimitOrder = 'limit_order',
   CancelOrder = 'cancel_order',
   ListOrders = 'list_orders',
+  EditLimitOrder = 'edit_limit_order',
 }
 
 // ─── Zod Schemas for Intent Parsing ──────────────────────────────────────────
@@ -379,10 +380,20 @@ export const LimitOrderSchema = z.object({
 export const CancelOrderSchema = z.object({
   action: z.literal(ActionType.CancelOrder),
   orderId: z.string().max(20),
+  market: z.string().max(20).optional(),
+  side: z.nativeEnum(TradeSide).optional(),
 });
 
 export const ListOrdersSchema = z.object({
   action: z.literal(ActionType.ListOrders),
+});
+
+export const EditLimitOrderSchema = z.object({
+  action: z.literal(ActionType.EditLimitOrder),
+  orderId: z.number().int().min(0),
+  market: z.string().max(20),
+  side: z.nativeEnum(TradeSide),
+  limitPrice: z.number().positive().optional(),
 });
 
 export const ParsedIntentSchema = z.discriminatedUnion('action', [
@@ -443,6 +454,7 @@ export const ParsedIntentSchema = z.discriminatedUnion('action', [
   LimitOrderSchema,
   CancelOrderSchema,
   ListOrdersSchema,
+  EditLimitOrderSchema,
 ]);
 
 export type ParsedIntent = z.infer<typeof ParsedIntentSchema>;
@@ -469,6 +481,40 @@ export interface ClosePositionResult {
 export interface CollateralResult {
   txSignature: string;
   newLeverage?: number;
+}
+
+// ─── Order Result Types ──────────────────────────────────────────────────────
+
+export interface PlaceLimitOrderResult {
+  txSignature: string;
+  market: string;
+  side: TradeSide;
+  limitPrice: number;
+  collateral: number;
+  leverage: number;
+  sizeUsd: number;
+}
+
+export interface PlaceTriggerOrderResult {
+  txSignature: string;
+  market: string;
+  side: TradeSide;
+  triggerPrice: number;
+  isStopLoss: boolean;
+}
+
+export interface CancelOrderResult {
+  txSignature: string;
+}
+
+export interface OnChainOrder {
+  market: string;
+  side: TradeSide;
+  type: 'limit' | 'take_profit' | 'stop_loss';
+  orderId: number;
+  price: number;
+  size?: number;
+  collateral?: number;
 }
 
 // ─── Domain Types ────────────────────────────────────────────────────────────
@@ -721,6 +767,59 @@ export interface IFlashClient {
     leverage: number,
     collateralToken?: string,
   ): Promise<DryRunPreview>;
+
+  // ─── On-Chain Order Methods ─────────────────────────────────────────────
+
+  /** Place an on-chain limit order via Flash SDK */
+  placeLimitOrder?(
+    market: string,
+    side: TradeSide,
+    collateral: number,
+    leverage: number,
+    limitPrice: number,
+    stopLoss?: number,
+    takeProfit?: number,
+  ): Promise<PlaceLimitOrderResult>;
+
+  /** Place an on-chain trigger order (TP or SL) via Flash SDK */
+  placeTriggerOrder?(
+    market: string,
+    side: TradeSide,
+    triggerPrice: number,
+    isStopLoss: boolean,
+  ): Promise<PlaceTriggerOrderResult>;
+
+  /** Cancel an on-chain trigger order */
+  cancelTriggerOrder?(
+    market: string,
+    side: TradeSide,
+    orderId: number,
+    isStopLoss: boolean,
+  ): Promise<CancelOrderResult>;
+
+  /** Cancel all trigger orders for a position */
+  cancelAllTriggerOrders?(
+    market: string,
+    side: TradeSide,
+  ): Promise<CancelOrderResult>;
+
+  /** Cancel an on-chain limit order */
+  cancelLimitOrder?(
+    market: string,
+    side: TradeSide,
+    orderId: number,
+  ): Promise<CancelOrderResult>;
+
+  /** Edit an on-chain limit order price */
+  editLimitOrder?(
+    market: string,
+    side: TradeSide,
+    orderId: number,
+    newLimitPrice: number,
+  ): Promise<CancelOrderResult>;
+
+  /** Get all on-chain orders for the current wallet */
+  getUserOrders?(): Promise<OnChainOrder[]>;
 }
 
 export interface IDataClient {

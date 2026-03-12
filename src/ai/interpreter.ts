@@ -459,9 +459,29 @@ export function localParse(input: string): ParsedIntent | null {
     return { action: ActionType.Help } as ParsedIntent;
   }
 
-  // Cancel order: "cancel order order-1", "cancel order-1"
+  // Edit limit order: "edit limit 0 price $85", "edit limit #0 sol long $85"
+  const editMatch = lower.match(
+    /^edit\s+limit\s+(?:order\s+)?#?(\d+)\s+(?:([a-z]+)\s+(long|short)\s+)?(?:price\s+)?\$?([\d.]+)$/
+  );
+  if (editMatch) {
+    const orderId = parseInt(editMatch[1], 10);
+    const market = editMatch[2] ? resolveMarket(editMatch[2]) : '';
+    const side = editMatch[3] ? parseSide(editMatch[3]) : undefined;
+    const limitPrice = parseFloat(editMatch[4]);
+    if (Number.isFinite(orderId) && Number.isFinite(limitPrice)) {
+      return {
+        action: ActionType.EditLimitOrder,
+        orderId,
+        market: market || 'SOL', // default — will be resolved from order if needed
+        side: side || TradeSide.Long,
+        limitPrice,
+      };
+    }
+  }
+
+  // Cancel order: "cancel order order-1", "cancel order-1", "cancel order 1", "cancel order #1"
   const cancelMatch = lower.match(
-    /^cancel\s+(?:order\s+)?(order-\d+)$/
+    /^cancel\s+(?:order\s+)?#?(?:order-)?(\d+)$/
   );
   if (cancelMatch) {
     return {

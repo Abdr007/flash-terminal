@@ -304,11 +304,17 @@ export class ToolEngine {
       case ActionType.CancelOrder:
         return {
           toolName: 'limit_order_cancel',
-          params: { orderId: intent.orderId },
+          params: { orderId: intent.orderId, market: intent.market, side: intent.side },
         };
 
       case ActionType.ListOrders:
         return { toolName: 'limit_order_list', params: {} };
+
+      case ActionType.EditLimitOrder:
+        return {
+          toolName: 'limit_order_edit',
+          params: { orderId: intent.orderId, market: intent.market, side: intent.side, limitPrice: intent.limitPrice },
+        };
 
       default:
         return null;

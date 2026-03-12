@@ -320,84 +320,9 @@ export class FlashTerminal {
     // Initialize system diagnostics
     initSystemDiagnostics(this.rpcManager, this.context);
 
-    // Initialize TP/SL engine with close executor
-    try {
-      const { getTpSlEngine } = await import('../risk/tp-sl-engine.js');
-      const tpSlEngine = getTpSlEngine();
-      tpSlEngine.setClient(this.flashClient);
-      tpSlEngine.setCloseExecutor(async (market, side, reason) => {
-        try {
-          const result = await this.flashClient.closePosition(market, side);
-          // Record session trade with close reason
-          if (sessionTrades) {
-            if (sessionTrades.length >= 500) sessionTrades.shift();
-            sessionTrades.push({
-              action: 'close', market, side,
-              exitPrice: result.exitPrice, pnl: result.pnl,
-              closeReason: reason,
-              txSignature: result.txSignature, timestamp: Date.now(),
-            });
-          }
-          // Record PnL in circuit breaker
-          if (Number.isFinite(result.pnl)) {
-            const { getCircuitBreaker } = await import('../security/circuit-breaker.js');
-            getCircuitBreaker().recordTrade(result.pnl);
-          }
-          const txLink = this.config.simulationMode
-            ? result.txSignature
-            : `https://solscan.io/tx/${result.txSignature}`;
-          const pnlStr = result.pnl !== undefined
-            ? `  PnL: ${result.pnl >= 0 ? chalk.green(`+$${result.pnl.toFixed(2)}`) : chalk.red(`-$${Math.abs(result.pnl).toFixed(2)}`)}`
-            : '';
-          process.stdout.write([
-            chalk.green(`\n  [TP/SL] Position closed — ${reason}`),
-            `  Exit: $${result.exitPrice.toFixed(4)}`,
-            pnlStr,
-            chalk.dim(`  TX: ${txLink}\n`),
-          ].filter(Boolean).join('\n') + '\n');
-        } catch (err) {
-          process.stdout.write(chalk.red(`\n  [TP/SL] Close failed: ${getErrorMessage(err)}\n`));
-          throw err;
-        }
-      });
-    } catch { /* TP/SL init is non-critical */ }
-
-    // Initialize limit order engine with open executor
-    try {
-      const { getLimitOrderEngine } = await import('../orders/limit-order-engine.js');
-      const limitEngine = getLimitOrderEngine();
-      limitEngine.setClient(this.flashClient);
-      limitEngine.setOpenExecutor(async (market, side, leverage, collateralUsd) => {
-        try {
-          const result = await this.flashClient.openPosition(market, side, collateralUsd, leverage);
-          // Record session trade
-          if (sessionTrades) {
-            if (sessionTrades.length >= 500) sessionTrades.shift();
-            sessionTrades.push({
-              action: 'open', market, side, leverage, collateral: collateralUsd,
-              sizeUsd: result.sizeUsd, entryPrice: result.entryPrice,
-              txSignature: result.txSignature, timestamp: Date.now(),
-            });
-          }
-          // Record in circuit breaker
-          const { getCircuitBreaker } = await import('../security/circuit-breaker.js');
-          getCircuitBreaker().recordOpen();
-
-          const txLink = this.config.simulationMode
-            ? result.txSignature
-            : `https://solscan.io/tx/${result.txSignature}`;
-          process.stdout.write([
-            chalk.green(`\n  [LIMIT] Position opened — ${market} ${side.toUpperCase()} ${leverage}x`),
-            `  Entry: $${result.entryPrice.toFixed(4)}`,
-            `  Size:  $${result.sizeUsd.toFixed(2)}`,
-            chalk.dim(`  TX: ${txLink}\n`),
-          ].join('\n') + '\n');
-        } catch (err) {
-          process.stdout.write(chalk.red(`\n  [LIMIT] Open failed: ${getErrorMessage(err)}\n`));
-          throw err;
-        }
-      });
-    } catch { /* Limit order init is non-critical */ }
+    // TP/SL and limit orders are now on-chain via Flash SDK.
+    // No local engine initialization needed — orders are managed via
+    // placeTriggerOrder/placeLimitOrder SDK methods in flash-client.ts.
 
     // Wire RPC failover to auto-update FlashClient connection
     if (!this.config.simulationMode) {
@@ -1495,14 +1420,7 @@ export class FlashTerminal {
     } catch {
       // Best-effort cleanup
     }
-    try {
-      // TP/SL engine uses .unref() timers, but stop explicitly for cleanliness
-      import('../risk/tp-sl-engine.js').then(m => m.resetTpSlEngine()).catch(() => {});
-      // Limit order engine cleanup
-      import('../orders/limit-order-engine.js').then(m => m.resetLimitOrderEngine()).catch(() => {});
-    } catch {
-      // Best-effort cleanup
-    }
+    // TP/SL and limit orders are on-chain — no local engine cleanup needed.
     try {
       if (this.flashClient && 'stopBlockhashRefresh' in this.flashClient) {
         (this.flashClient as { stopBlockhashRefresh: () => void }).stopBlockhashRefresh();
@@ -1589,6 +1507,19 @@ export class FlashTerminal {
       intent = fastIntent;
     } else if (this.showUsageHint(lower)) {
       return;
+    } else if (lower.startsWith('edit limit')) {
+      // Edit limit order — parse via interpreter
+      const parsed = localParse(input);
+      if (parsed && parsed.action === ActionType.EditLimitOrder) {
+        intent = parsed;
+      } else {
+        console.log('');
+        console.log(chalk.yellow('  Invalid edit limit syntax.'));
+        console.log(chalk.dim('  Usage: edit limit <id> $<price>'));
+        console.log(chalk.dim('  Example: edit limit 0 $85'));
+        console.log('');
+        return;
+      }
     } else if (lower.startsWith('limit')) {
       // Limit order — parse via interpreter, show usage on failure
       const parsed = localParse(input);

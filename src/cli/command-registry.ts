@@ -361,10 +361,18 @@ export const COMMAND_REGISTRY: CommandEntry[] = [
     parameterized: true,
   },
   {
+    name: 'edit limit',
+    action: null,
+    category: 'Trading',
+    description: 'Edit a limit order price',
+    helpFormat: 'edit limit <id> $<price>',
+    parameterized: true,
+  },
+  {
     name: 'orders',
     action: ActionType.ListOrders,
     category: 'Trading',
-    description: 'View active limit orders',
+    description: 'View active orders (on-chain)',
     aliases: ['order list', 'limit orders'],
   },
   {

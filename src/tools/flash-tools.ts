@@ -344,16 +344,25 @@ export const flashOpenPosition: ToolDefinition = {
               if (shadowResult) logShadowTrade(shadowResult);
             } catch { /* shadow must never affect live pipeline */ }
 
-            // Auto-set TP/SL targets if provided inline
+            // Auto-set TP/SL targets if provided inline (on-chain via Flash SDK)
             const tpSlLines: string[] = [];
             if (takeProfit !== undefined || stopLoss !== undefined) {
-              try {
-                const { getTpSlEngine } = await import('../risk/tp-sl-engine.js');
-                const engine = getTpSlEngine();
-                engine.setTarget(market, side, takeProfit, stopLoss);
-                if (takeProfit !== undefined) tpSlLines.push(`  Take Profit:       ${chalk.green('$' + takeProfit.toFixed(2))}`);
-                if (stopLoss !== undefined) tpSlLines.push(`  Stop Loss:         ${chalk.red('$' + stopLoss.toFixed(2))}`);
-              } catch { /* TP/SL is non-critical */ }
+              const client = context.flashClient;
+              if (client.placeTriggerOrder && !context.simulationMode) {
+                // Place on-chain trigger orders
+                if (takeProfit !== undefined) {
+                  try {
+                    await client.placeTriggerOrder(market, side, takeProfit, false);
+                    tpSlLines.push(`  Take Profit:       ${chalk.green('$' + takeProfit.toFixed(2))} ${chalk.dim('(on-chain)')}`);
+                  } catch { /* TP is non-critical */ }
+                }
+                if (stopLoss !== undefined) {
+                  try {
+                    await client.placeTriggerOrder(market, side, stopLoss, true);
+                    tpSlLines.push(`  Stop Loss:         ${chalk.red('$' + stopLoss.toFixed(2))} ${chalk.dim('(on-chain)')}`);
+                  } catch { /* SL is non-critical */ }
+                }
+              }
             }
 
             return {
@@ -2901,94 +2910,188 @@ const txMetricsTool: ToolDefinition = {
   },
 };
 
-// ─── TP/SL Tools ──────────────────────────────────────────────────────────────
+// ─── TP/SL Tools (On-Chain via Flash SDK) ─────────────────────────────────────
 
 const setTpSlTool: ToolDefinition = {
   name: 'set_tp_sl',
-  description: 'Set take-profit or stop-loss for a position',
+  description: 'Set take-profit or stop-loss for a position (on-chain)',
   parameters: z.object({
     market: z.string(),
     side: z.nativeEnum(TradeSide),
     type: z.enum(['tp', 'sl']),
     price: z.number().positive(),
   }),
-  async execute(params: Record<string, unknown>): Promise<ToolResult> {
+  async execute(params: Record<string, unknown>, context: ToolContext): Promise<ToolResult> {
     const { market, side, type, price } = params as {
       market: string; side: TradeSide; type: 'tp' | 'sl'; price: number;
     };
-    const { getTpSlEngine } = await import('../risk/tp-sl-engine.js');
-    const engine = getTpSlEngine();
-    const tp = type === 'tp' ? price : undefined;
-    const sl = type === 'sl' ? price : undefined;
-    return { success: true, message: engine.setTarget(market, side, tp, sl) };
+
+    if (context.simulationMode) {
+      return {
+        success: false,
+        message: '  On-chain TP/SL requires live mode. TP/SL orders are placed on the Flash Trade protocol and require a real wallet.',
+      };
+    }
+
+    const client = context.flashClient;
+    if (!client.placeTriggerOrder) {
+      return { success: false, message: '  TP/SL orders are not supported by the current client.' };
+    }
+
+    try {
+      const isStopLoss = type === 'sl';
+      const result = await client.placeTriggerOrder(market, side, price, isStopLoss);
+      const label = isStopLoss ? 'Stop-Loss' : 'Take-Profit';
+      const txLink = `https://solscan.io/tx/${result.txSignature}`;
+      return {
+        success: true,
+        message: [
+          '',
+          chalk.green(`  ${label} Set (On-Chain)`),
+          chalk.dim('  ─────────────────'),
+          `  Market:    ${result.market} ${result.side.toUpperCase()}`,
+          `  Price:     $${price.toFixed(2)}`,
+          chalk.dim(`  TX: ${txLink}`),
+          '',
+        ].join('\n'),
+      };
+    } catch (err: unknown) {
+      return { success: false, message: `  Failed to set ${type.toUpperCase()}: ${getErrorMessage(err)}` };
+    }
   },
 };
 
 const removeTpSlTool: ToolDefinition = {
   name: 'remove_tp_sl',
-  description: 'Remove take-profit or stop-loss from a position',
+  description: 'Remove take-profit or stop-loss from a position (on-chain)',
   parameters: z.object({
     market: z.string(),
     side: z.nativeEnum(TradeSide),
     type: z.enum(['tp', 'sl']),
   }),
-  async execute(params: Record<string, unknown>): Promise<ToolResult> {
+  async execute(params: Record<string, unknown>, context: ToolContext): Promise<ToolResult> {
     const { market, side, type } = params as {
       market: string; side: TradeSide; type: 'tp' | 'sl';
     };
-    const { getTpSlEngine } = await import('../risk/tp-sl-engine.js');
-    const engine = getTpSlEngine();
-    return { success: true, message: engine.removeTarget(market, side, type) };
+
+    if (context.simulationMode) {
+      return {
+        success: false,
+        message: '  On-chain TP/SL requires live mode.',
+      };
+    }
+
+    const client = context.flashClient;
+    if (!client.getUserOrders || !client.cancelTriggerOrder) {
+      return { success: false, message: '  Cancel trigger orders not supported by the current client.' };
+    }
+
+    try {
+      const isStopLoss = type === 'sl';
+      // Find the order to cancel
+      const orders = await client.getUserOrders();
+      const targetType = isStopLoss ? 'stop_loss' : 'take_profit';
+      const order = orders.find(
+        o => o.market === market.toUpperCase() && o.side === side && o.type === targetType
+      );
+      if (!order) {
+        return { success: false, message: `  No ${type.toUpperCase()} order found for ${market} ${side}.` };
+      }
+
+      const result = await client.cancelTriggerOrder(market, side, order.orderId, isStopLoss);
+      const label = isStopLoss ? 'Stop-Loss' : 'Take-Profit';
+      const txLink = `https://solscan.io/tx/${result.txSignature}`;
+      return {
+        success: true,
+        message: [
+          '',
+          chalk.green(`  ${label} Removed (On-Chain)`),
+          chalk.dim(`  TX: ${txLink}`),
+          '',
+        ].join('\n'),
+      };
+    } catch (err: unknown) {
+      return { success: false, message: `  Failed to remove ${type.toUpperCase()}: ${getErrorMessage(err)}` };
+    }
   },
 };
 
 const tpSlStatusTool: ToolDefinition = {
   name: 'tp_sl_status',
-  description: 'Show all active TP/SL targets',
+  description: 'Show all active TP/SL targets (on-chain)',
   parameters: z.object({}),
-  async execute(): Promise<ToolResult> {
-    const { getTpSlEngine } = await import('../risk/tp-sl-engine.js');
-    const engine = getTpSlEngine();
-    const targets = engine.getTargets();
-
-    if (targets.size === 0) {
+  async execute(_params: Record<string, unknown>, context: ToolContext): Promise<ToolResult> {
+    if (context.simulationMode) {
       return {
         success: true,
         message: [
           '',
-          chalk.dim('  No active TP/SL targets.'),
-          chalk.dim('  Use "set tp <market> <side> $<price>" to add one.'),
+          chalk.dim('  On-chain TP/SL requires live mode.'),
+          chalk.dim('  In simulation, TP/SL orders are not available.'),
           '',
         ].join('\n'),
       };
     }
 
-    const lines = [
-      '',
-      `  ${chalk.bold('ACTIVE TP/SL TARGETS')}`,
-      chalk.dim(`  ${'─'.repeat(44)}`),
-      '',
-    ];
-
-    for (const [key, target] of targets) {
-      const [market, side] = key.split('-');
-      const status = target.triggered ? chalk.red(' (triggered)') : '';
-      const tp = target.tp !== undefined ? `TP: $${target.tp.toFixed(2)}` : chalk.dim('TP: —');
-      const sl = target.sl !== undefined ? `SL: $${target.sl.toFixed(2)}` : chalk.dim('SL: —');
-      lines.push(`  ${chalk.bold(`${market} ${side!.toUpperCase()}`)}${status}`);
-      lines.push(`    ${tp}  |  ${sl}`);
-      lines.push('');
+    const client = context.flashClient;
+    if (!client.getUserOrders) {
+      return { success: false, message: '  Order fetching not supported by the current client.' };
     }
 
-    return { success: true, message: lines.join('\n') };
+    try {
+      const orders = await client.getUserOrders();
+      const triggerOrders = orders.filter(o => o.type === 'take_profit' || o.type === 'stop_loss');
+
+      if (triggerOrders.length === 0) {
+        return {
+          success: true,
+          message: [
+            '',
+            chalk.dim('  No active TP/SL targets on-chain.'),
+            chalk.dim('  Use "set tp <market> <side> $<price>" to add one.'),
+            '',
+          ].join('\n'),
+        };
+      }
+
+      const lines = [
+        '',
+        `  ${chalk.bold('ON-CHAIN TP/SL TARGETS')}`,
+        chalk.dim(`  ${'─'.repeat(44)}`),
+        '',
+      ];
+
+      // Group by market-side
+      const grouped = new Map<string, typeof triggerOrders>();
+      for (const o of triggerOrders) {
+        const key = `${o.market}-${o.side}`;
+        if (!grouped.has(key)) grouped.set(key, []);
+        grouped.get(key)!.push(o);
+      }
+
+      for (const [key, ords] of grouped) {
+        const [market, side] = key.split('-');
+        const tp = ords.find(o => o.type === 'take_profit');
+        const sl = ords.find(o => o.type === 'stop_loss');
+        const tpStr = tp ? `TP: $${tp.price.toFixed(2)}` : chalk.dim('TP: —');
+        const slStr = sl ? `SL: $${sl.price.toFixed(2)}` : chalk.dim('SL: —');
+        lines.push(`  ${chalk.bold(`${market} ${side!.toUpperCase()}`)}`);
+        lines.push(`    ${tpStr}  |  ${slStr}`);
+        lines.push('');
+      }
+
+      return { success: true, message: lines.join('\n') };
+    } catch (err: unknown) {
+      return { success: false, message: `  Failed to fetch TP/SL targets: ${getErrorMessage(err)}` };
+    }
   },
 };
 
-// ─── Limit Order Tools ───────────────────────────────────────────────────────
+// ─── Limit Order Tools (On-Chain via Flash SDK) ─────────────────────────────
 
 const limitOrderPlaceTool: ToolDefinition = {
   name: 'limit_order_place',
-  description: 'Place a limit order',
+  description: 'Place a limit order (on-chain)',
   parameters: z.object({
     market: z.string(),
     side: z.nativeEnum(TradeSide),
@@ -2996,38 +3099,229 @@ const limitOrderPlaceTool: ToolDefinition = {
     collateral: z.number().positive(),
     limitPrice: z.number().positive(),
   }),
-  async execute(params: Record<string, unknown>): Promise<ToolResult> {
+  async execute(params: Record<string, unknown>, context: ToolContext): Promise<ToolResult> {
     const { market, side, leverage, collateral, limitPrice } = params as {
       market: string; side: TradeSide; leverage: number; collateral: number; limitPrice: number;
     };
-    const { getLimitOrderEngine } = await import('../orders/limit-order-engine.js');
-    const engine = getLimitOrderEngine();
-    return { success: true, message: engine.placeOrder(market, side, leverage, collateral, limitPrice) };
+
+    if (context.simulationMode) {
+      return {
+        success: false,
+        message: '  On-chain limit orders require live mode. Limit orders are placed on the Flash Trade protocol and require a real wallet.',
+      };
+    }
+
+    const client = context.flashClient;
+    if (!client.placeLimitOrder) {
+      return { success: false, message: '  Limit orders are not supported by the current client.' };
+    }
+
+    try {
+      const result = await client.placeLimitOrder(market, side, collateral, leverage, limitPrice);
+      const txLink = `https://solscan.io/tx/${result.txSignature}`;
+      return {
+        success: true,
+        message: [
+          '',
+          chalk.green('  Limit Order Placed (On-Chain)'),
+          chalk.dim('  ─────────────────────────────'),
+          `  Market:       ${result.market} ${result.side.toUpperCase()}`,
+          `  Leverage:     ${leverage}x`,
+          `  Collateral:   $${collateral.toFixed(2)}`,
+          `  Size:         $${result.sizeUsd.toFixed(2)}`,
+          `  Limit Price:  $${limitPrice.toFixed(2)}`,
+          chalk.dim(`  TX: ${txLink}`),
+          '',
+          chalk.dim('  This order is on-chain and visible on flash.trade'),
+          '',
+        ].join('\n'),
+      };
+    } catch (err: unknown) {
+      return { success: false, message: `  Failed to place limit order: ${getErrorMessage(err)}` };
+    }
   },
 };
 
 const limitOrderCancelTool: ToolDefinition = {
   name: 'limit_order_cancel',
-  description: 'Cancel a limit order',
+  description: 'Cancel a limit order (on-chain)',
   parameters: z.object({
     orderId: z.string(),
+    market: z.string().optional(),
+    side: z.nativeEnum(TradeSide).optional(),
   }),
-  async execute(params: Record<string, unknown>): Promise<ToolResult> {
-    const { orderId } = params as { orderId: string };
-    const { getLimitOrderEngine } = await import('../orders/limit-order-engine.js');
-    const engine = getLimitOrderEngine();
-    return { success: true, message: engine.cancelOrder(orderId) };
+  async execute(params: Record<string, unknown>, context: ToolContext): Promise<ToolResult> {
+    const { orderId, market, side } = params as {
+      orderId: string; market?: string; side?: TradeSide;
+    };
+
+    if (context.simulationMode) {
+      return { success: false, message: '  On-chain limit orders require live mode.' };
+    }
+
+    const client = context.flashClient;
+    if (!client.cancelLimitOrder || !client.getUserOrders) {
+      return { success: false, message: '  Cancel limit orders not supported by the current client.' };
+    }
+
+    try {
+      // Parse orderId — accept "order-1", "1", "#1", etc.
+      const idNum = parseInt(orderId.replace(/[^0-9]/g, ''), 10);
+      if (!Number.isFinite(idNum) || idNum < 0) {
+        return { success: false, message: `  Invalid order ID: ${orderId}` };
+      }
+
+      // If market/side not provided, find from orders
+      let cancelMarket = market;
+      let cancelSide = side;
+      if (!cancelMarket || !cancelSide) {
+        const orders = await client.getUserOrders();
+        const limitOrders = orders.filter(o => o.type === 'limit');
+        // Find by orderId across all markets
+        const target = limitOrders.find(o => o.orderId === idNum);
+        if (!target) {
+          return { success: false, message: `  Limit order #${idNum} not found. Use "orders" to see active orders.` };
+        }
+        cancelMarket = target.market;
+        cancelSide = target.side;
+      }
+
+      const result = await client.cancelLimitOrder(cancelMarket, cancelSide, idNum);
+      const txLink = `https://solscan.io/tx/${result.txSignature}`;
+      return {
+        success: true,
+        message: [
+          '',
+          chalk.green(`  Limit Order #${idNum} Cancelled`),
+          chalk.dim(`  TX: ${txLink}`),
+          '',
+        ].join('\n'),
+      };
+    } catch (err: unknown) {
+      return { success: false, message: `  Failed to cancel limit order: ${getErrorMessage(err)}` };
+    }
+  },
+};
+
+const limitOrderEditTool: ToolDefinition = {
+  name: 'limit_order_edit',
+  description: 'Edit a limit order price (on-chain)',
+  parameters: z.object({
+    orderId: z.number().int().min(0),
+    market: z.string(),
+    side: z.nativeEnum(TradeSide),
+    limitPrice: z.number().positive().optional(),
+  }),
+  async execute(params: Record<string, unknown>, context: ToolContext): Promise<ToolResult> {
+    const { orderId, market, side, limitPrice } = params as {
+      orderId: number; market: string; side: TradeSide; limitPrice?: number;
+    };
+
+    if (context.simulationMode) {
+      return { success: false, message: '  On-chain limit orders require live mode.' };
+    }
+
+    if (!limitPrice) {
+      return { success: false, message: '  New limit price is required.' };
+    }
+
+    const client = context.flashClient;
+    if (!client.editLimitOrder) {
+      return { success: false, message: '  Edit limit order not supported by the current client.' };
+    }
+
+    try {
+      const result = await client.editLimitOrder(market, side, orderId, limitPrice);
+      const txLink = `https://solscan.io/tx/${result.txSignature}`;
+      return {
+        success: true,
+        message: [
+          '',
+          chalk.green(`  Limit Order #${orderId} Updated`),
+          `  New Price: $${limitPrice.toFixed(2)}`,
+          chalk.dim(`  TX: ${txLink}`),
+          '',
+        ].join('\n'),
+      };
+    } catch (err: unknown) {
+      return { success: false, message: `  Failed to edit limit order: ${getErrorMessage(err)}` };
+    }
   },
 };
 
 const limitOrderListTool: ToolDefinition = {
   name: 'limit_order_list',
-  description: 'List all active limit orders',
+  description: 'List all active orders (on-chain)',
   parameters: z.object({}),
-  async execute(): Promise<ToolResult> {
-    const { getLimitOrderEngine } = await import('../orders/limit-order-engine.js');
-    const engine = getLimitOrderEngine();
-    return { success: true, message: engine.formatOrderList() };
+  async execute(_params: Record<string, unknown>, context: ToolContext): Promise<ToolResult> {
+    if (context.simulationMode) {
+      return {
+        success: true,
+        message: [
+          '',
+          chalk.dim('  On-chain orders require live mode.'),
+          chalk.dim('  Orders are placed on the Flash Trade protocol.'),
+          '',
+        ].join('\n'),
+      };
+    }
+
+    const client = context.flashClient;
+    if (!client.getUserOrders) {
+      return { success: false, message: '  Order fetching not supported by the current client.' };
+    }
+
+    try {
+      const orders = await client.getUserOrders();
+
+      if (orders.length === 0) {
+        return {
+          success: true,
+          message: [
+            '',
+            chalk.dim('  No active orders on-chain.'),
+            chalk.dim('  Use "limit <long|short> <market> <lev>x $<collateral> @ $<price>" to place one.'),
+            '',
+          ].join('\n'),
+        };
+      }
+
+      const lines = [
+        '',
+        `  ${chalk.bold('ON-CHAIN ORDERS')}`,
+        chalk.dim(`  ${'─'.repeat(60)}`),
+        '',
+      ];
+
+      // Separate by type
+      const limitOrders = orders.filter(o => o.type === 'limit');
+      const tpOrders = orders.filter(o => o.type === 'take_profit');
+      const slOrders = orders.filter(o => o.type === 'stop_loss');
+
+      if (limitOrders.length > 0) {
+        lines.push(`  ${chalk.bold('Limit Orders')}`);
+        for (const o of limitOrders) {
+          lines.push(`    #${o.orderId}  ${o.market} ${o.side.toUpperCase()}  @ $${o.price.toFixed(2)}`);
+        }
+        lines.push('');
+      }
+
+      if (tpOrders.length > 0 || slOrders.length > 0) {
+        lines.push(`  ${chalk.bold('Trigger Orders (TP/SL)')}`);
+        for (const o of [...tpOrders, ...slOrders]) {
+          const label = o.type === 'take_profit' ? chalk.green('TP') : chalk.red('SL');
+          lines.push(`    #${o.orderId}  ${o.market} ${o.side.toUpperCase()}  ${label} @ $${o.price.toFixed(2)}`);
+        }
+        lines.push('');
+      }
+
+      lines.push(chalk.dim('  Orders are on-chain and visible on flash.trade'));
+      lines.push('');
+
+      return { success: true, message: lines.join('\n') };
+    } catch (err: unknown) {
+      return { success: false, message: `  Failed to fetch orders: ${getErrorMessage(err)}` };
+    }
   },
 };
 
@@ -3076,5 +3370,6 @@ export const allFlashTools: ToolDefinition[] = [
   tpSlStatusTool,
   limitOrderPlaceTool,
   limitOrderCancelTool,
+  limitOrderEditTool,
   limitOrderListTool,
 ];
