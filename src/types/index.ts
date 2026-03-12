@@ -92,6 +92,11 @@ export enum ActionType {
   SetTpSl = 'set_tp_sl',
   RemoveTpSl = 'remove_tp_sl',
   TpSlStatus = 'tp_sl_status',
+
+  // Limit Orders
+  LimitOrder = 'limit_order',
+  CancelOrder = 'cancel_order',
+  ListOrders = 'list_orders',
 }
 
 // ─── Zod Schemas for Intent Parsing ──────────────────────────────────────────
@@ -361,6 +366,25 @@ export const TpSlStatusSchema = z.object({
   action: z.literal(ActionType.TpSlStatus),
 });
 
+// Limit Order Schemas
+export const LimitOrderSchema = z.object({
+  action: z.literal(ActionType.LimitOrder),
+  market: z.string().max(20),
+  side: z.nativeEnum(TradeSide),
+  leverage: z.number().min(1).max(100),
+  collateral: z.number().positive().max(10_000_000),
+  limitPrice: z.number().positive(),
+});
+
+export const CancelOrderSchema = z.object({
+  action: z.literal(ActionType.CancelOrder),
+  orderId: z.string().max(20),
+});
+
+export const ListOrdersSchema = z.object({
+  action: z.literal(ActionType.ListOrders),
+});
+
 export const ParsedIntentSchema = z.discriminatedUnion('action', [
   OpenPositionSchema,
   ClosePositionSchema,
@@ -416,6 +440,9 @@ export const ParsedIntentSchema = z.discriminatedUnion('action', [
   SetTpSlSchema,
   RemoveTpSlSchema,
   TpSlStatusSchema,
+  LimitOrderSchema,
+  CancelOrderSchema,
+  ListOrdersSchema,
 ]);
 
 export type ParsedIntent = z.infer<typeof ParsedIntentSchema>;

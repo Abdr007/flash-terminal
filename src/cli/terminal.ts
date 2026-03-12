@@ -362,6 +362,43 @@ export class FlashTerminal {
       });
     } catch { /* TP/SL init is non-critical */ }
 
+    // Initialize limit order engine with open executor
+    try {
+      const { getLimitOrderEngine } = await import('../orders/limit-order-engine.js');
+      const limitEngine = getLimitOrderEngine();
+      limitEngine.setClient(this.flashClient);
+      limitEngine.setOpenExecutor(async (market, side, leverage, collateralUsd) => {
+        try {
+          const result = await this.flashClient.openPosition(market, side, collateralUsd, leverage);
+          // Record session trade
+          if (sessionTrades) {
+            if (sessionTrades.length >= 500) sessionTrades.shift();
+            sessionTrades.push({
+              action: 'open', market, side, leverage, collateral: collateralUsd,
+              sizeUsd: result.sizeUsd, entryPrice: result.entryPrice,
+              txSignature: result.txSignature, timestamp: Date.now(),
+            });
+          }
+          // Record in circuit breaker
+          const { getCircuitBreaker } = await import('../security/circuit-breaker.js');
+          getCircuitBreaker().recordOpen();
+
+          const txLink = this.config.simulationMode
+            ? result.txSignature
+            : `https://solscan.io/tx/${result.txSignature}`;
+          process.stdout.write([
+            chalk.green(`\n  [LIMIT] Position opened — ${market} ${side.toUpperCase()} ${leverage}x`),
+            `  Entry: $${result.entryPrice.toFixed(4)}`,
+            `  Size:  $${result.sizeUsd.toFixed(2)}`,
+            chalk.dim(`  TX: ${txLink}\n`),
+          ].join('\n') + '\n');
+        } catch (err) {
+          process.stdout.write(chalk.red(`\n  [LIMIT] Open failed: ${getErrorMessage(err)}\n`));
+          throw err;
+        }
+      });
+    } catch { /* Limit order init is non-critical */ }
+
     // Wire RPC failover to auto-update FlashClient connection
     if (!this.config.simulationMode) {
       this.rpcManager.setConnectionChangeCallback((newConn, ep) => {
@@ -1461,6 +1498,8 @@ export class FlashTerminal {
     try {
       // TP/SL engine uses .unref() timers, but stop explicitly for cleanliness
       import('../risk/tp-sl-engine.js').then(m => m.resetTpSlEngine()).catch(() => {});
+      // Limit order engine cleanup
+      import('../orders/limit-order-engine.js').then(m => m.resetLimitOrderEngine()).catch(() => {});
     } catch {
       // Best-effort cleanup
     }

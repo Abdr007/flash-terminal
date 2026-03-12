@@ -253,6 +253,38 @@ export class RiskMonitor {
         // TP/SL evaluation must never crash the risk monitor
       }
 
+      // Evaluate limit orders against current prices
+      try {
+        const { getLimitOrderEngine } = await import('../orders/limit-order-engine.js');
+        const limitEngine = getLimitOrderEngine();
+        if (limitEngine.hasActiveOrders()) {
+          // Build price map from positions (same valuation price used by PnL/liq/TP-SL)
+          const priceMap = new Map<string, number>();
+          for (const pos of positions) {
+            const vp = pos.markPrice > 0 ? pos.markPrice : pos.currentPrice;
+            if (Number.isFinite(vp) && vp > 0) {
+              priceMap.set(pos.market.toUpperCase(), vp);
+            }
+          }
+          // Also fetch market data for markets not in current positions
+          if (priceMap.size === 0 || limitEngine.getOrders().size > priceMap.size) {
+            try {
+              const marketData = await this.client.getMarketData();
+              for (const md of marketData) {
+                if (!priceMap.has(md.symbol.toUpperCase()) && Number.isFinite(md.price) && md.price > 0) {
+                  priceMap.set(md.symbol.toUpperCase(), md.price);
+                }
+              }
+            } catch {
+              // Non-critical: use whatever prices we have from positions
+            }
+          }
+          await limitEngine.evaluate(priceMap);
+        }
+      } catch {
+        // Limit order evaluation must never crash the risk monitor
+      }
+
       // Periodic heartbeat so user knows monitor is alive
       const now2 = Date.now();
       if (this.tickCount === 1 || now2 - this.lastHeartbeat >= RiskMonitor.HEARTBEAT_INTERVAL_MS) {

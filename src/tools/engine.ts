@@ -289,6 +289,27 @@ export class ToolEngine {
       case ActionType.TpSlStatus:
         return { toolName: 'tp_sl_status', params: {} };
 
+      case ActionType.LimitOrder:
+        return {
+          toolName: 'limit_order_place',
+          params: {
+            market: intent.market,
+            side: intent.side,
+            leverage: intent.leverage,
+            collateral: intent.collateral,
+            limitPrice: intent.limitPrice,
+          },
+        };
+
+      case ActionType.CancelOrder:
+        return {
+          toolName: 'limit_order_cancel',
+          params: { orderId: intent.orderId },
+        };
+
+      case ActionType.ListOrders:
+        return { toolName: 'limit_order_list', params: {} };
+
       default:
         return null;
     }

@@ -381,6 +381,35 @@ export function localParse(input: string): ParsedIntent | null {
     }
   }
 
+  // Limit order: "limit long SOL 2x $100 @ $82", "limit short BTC 3x $200 @ $72000"
+  const limitMatch = lower.match(
+    /^limit\s+(long|short)\s+([a-z]+)\s+(\d+(?:\.\d+)?)\s*x\s+\$?(\d+(?:\.\d+)?)\s+@\s+\$?(\d+(?:\.\d+)?)$/
+  );
+  if (limitMatch) {
+    const side = parseSide(limitMatch[1]);
+    if (side) {
+      return {
+        action: ActionType.LimitOrder,
+        market: resolveMarket(limitMatch[2]),
+        side,
+        leverage: parseFloat(limitMatch[3]),
+        collateral: parseFloat(limitMatch[4]),
+        limitPrice: parseFloat(limitMatch[5]),
+      };
+    }
+  }
+
+  // Cancel order: "cancel order order-1", "cancel order-1"
+  const cancelMatch = lower.match(
+    /^cancel\s+(?:order\s+)?(order-\d+)$/
+  );
+  if (cancelMatch) {
+    return {
+      action: ActionType.CancelOrder,
+      orderId: cancelMatch[1],
+    };
+  }
+
   // Close position: "close SOL long", "close my SOL position", "close SOL"
   const closeMatch = lower.match(
     /^(?:close|exit|sell)\s+(?:my\s+)?([a-z]+)\s+(long|short)(?:\s+position)?$/

@@ -2977,6 +2977,53 @@ const tpSlStatusTool: ToolDefinition = {
   },
 };
 
+// ─── Limit Order Tools ───────────────────────────────────────────────────────
+
+const limitOrderPlaceTool: ToolDefinition = {
+  name: 'limit_order_place',
+  description: 'Place a limit order',
+  parameters: z.object({
+    market: z.string(),
+    side: z.nativeEnum(TradeSide),
+    leverage: z.number().min(1).max(100),
+    collateral: z.number().positive(),
+    limitPrice: z.number().positive(),
+  }),
+  async execute(params: Record<string, unknown>): Promise<ToolResult> {
+    const { market, side, leverage, collateral, limitPrice } = params as {
+      market: string; side: TradeSide; leverage: number; collateral: number; limitPrice: number;
+    };
+    const { getLimitOrderEngine } = await import('../orders/limit-order-engine.js');
+    const engine = getLimitOrderEngine();
+    return { success: true, message: engine.placeOrder(market, side, leverage, collateral, limitPrice) };
+  },
+};
+
+const limitOrderCancelTool: ToolDefinition = {
+  name: 'limit_order_cancel',
+  description: 'Cancel a limit order',
+  parameters: z.object({
+    orderId: z.string(),
+  }),
+  async execute(params: Record<string, unknown>): Promise<ToolResult> {
+    const { orderId } = params as { orderId: string };
+    const { getLimitOrderEngine } = await import('../orders/limit-order-engine.js');
+    const engine = getLimitOrderEngine();
+    return { success: true, message: engine.cancelOrder(orderId) };
+  },
+};
+
+const limitOrderListTool: ToolDefinition = {
+  name: 'limit_order_list',
+  description: 'List all active limit orders',
+  parameters: z.object({}),
+  async execute(): Promise<ToolResult> {
+    const { getLimitOrderEngine } = await import('../orders/limit-order-engine.js');
+    const engine = getLimitOrderEngine();
+    return { success: true, message: engine.formatOrderList() };
+  },
+};
+
 export const allFlashTools: ToolDefinition[] = [
   flashOpenPosition,
   flashClosePosition,
@@ -3020,4 +3067,7 @@ export const allFlashTools: ToolDefinition[] = [
   setTpSlTool,
   removeTpSlTool,
   tpSlStatusTool,
+  limitOrderPlaceTool,
+  limitOrderCancelTool,
+  limitOrderListTool,
 ];
