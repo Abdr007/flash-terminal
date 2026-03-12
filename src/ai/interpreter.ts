@@ -382,8 +382,9 @@ export function localParse(input: string): ParsedIntent | null {
   }
 
   // Limit order: "limit long SOL 2x $100 @ $82", "limit short BTC 3x $200 @ $72000"
+  // Also accepts: "limit long sol 2x 100 dollars at 82", "limit long sol 2x 100 at 82"
   const limitMatch = lower.match(
-    /^limit\s+(long|short)\s+([a-z]+)\s+(\d+(?:\.\d+)?)\s*x\s+\$?(\d+(?:\.\d+)?)\s+@\s+\$?(\d+(?:\.\d+)?)$/
+    /^limit\s+(long|short)\s+([a-z]+)\s+(\d+(?:\.\d+)?)\s*x\s+\$?(\d+(?:\.\d+)?)\s*(?:dollars?\s+)?(?:@|at)\s+\$?(\d+(?:\.\d+)?)$/
   );
   if (limitMatch) {
     const side = parseSide(limitMatch[1]);
