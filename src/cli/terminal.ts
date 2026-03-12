@@ -1076,34 +1076,50 @@ export class FlashTerminal {
 
       process.stdout.write(prompt);
 
-      // ANSI escape: hide text (makes any echoed chars invisible)
-      process.stdout.write('\x1B[8m');
+      // Read raw keystrokes — avoids readline race conditions with stdin ownership.
+      // Accumulates characters until Enter, handles Backspace and Ctrl+C.
+      const chunks: string[] = [];
+      const wasRaw = process.stdin.isRaw;
 
-      // Create a temporary readline with no output stream — guarantees no echo
-      const hiddenRl = createInterface({
-        input: process.stdin,
-        output: undefined,
-        terminal: false,
-      });
+      if (process.stdin.isTTY) {
+        process.stdin.setRawMode(true);
+      }
+      process.stdin.resume();
 
-      hiddenRl.once('line', (line) => {
-        hiddenRl.close();
+      const onData = (buf: Buffer) => {
+        for (const byte of buf) {
+          if (byte === 0x0d || byte === 0x0a) {
+            // Enter — done
+            cleanup();
+            process.stdout.write('\n');
+            resolve(chunks.join('').trim());
+            return;
+          }
+          if (byte === 0x03) {
+            // Ctrl+C — cancel
+            cleanup();
+            process.stdout.write('\n');
+            resolve('');
+            return;
+          }
+          if (byte === 0x7f || byte === 0x08) {
+            // Backspace
+            chunks.pop();
+          } else if (byte >= 0x20) {
+            chunks.push(String.fromCharCode(byte));
+          }
+        }
+      };
 
-        // ANSI escape: reveal text (restore normal display)
-        process.stdout.write('\x1B[28m');
-        process.stdout.write('\n');
-
+      const cleanup = () => {
+        process.stdin.removeListener('data', onData);
+        if (process.stdin.isTTY) {
+          process.stdin.setRawMode(wasRaw ?? false);
+        }
         this.rl.resume();
-        resolve(line.trim());
-      });
+      };
 
-      // Handle Ctrl+C / stream close
-      hiddenRl.once('close', () => {
-        process.stdout.write('\x1B[28m');
-        process.stdout.write('\n');
-        this.rl.resume();
-        resolve('');
-      });
+      process.stdin.on('data', onData);
     });
   }
 
