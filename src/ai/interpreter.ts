@@ -109,6 +109,68 @@ function parseTpSlSuffix(suffix: string, result: Record<string, unknown>): void 
   if (slMatch) result.stopLoss = parseFloat(slMatch[1]);
 }
 
+/**
+ * Flexible limit order parser — extracts components regardless of word order.
+ *
+ * Requires "limit" prefix and all of: side, market, leverage, collateral, price.
+ * Accepts many phrasings:
+ *   limit long SOL 2x $100 @ $82
+ *   limit order sol 2x for 10 dollars long at 82
+ *   limit short btc 3x $200 at $72000
+ *   limit order long sol 2x $100 @ $82
+ *   limit sol long 2x $100 at $82
+ *   limit long sol $100 2x at $82
+ */
+function parseLimitOrder(input: string): ParsedIntent | null {
+  // Must start with "limit"
+  if (!input.startsWith('limit')) return null;
+
+  // Strip "limit" or "limit order" prefix
+  let body = input.replace(/^limit\s+(?:order\s+)?/, '');
+
+  // Extract price: "@ $82" or "at $82" or "at 82" — must be present
+  const priceMatch = body.match(/(?:@|at)\s+\$?(\d+(?:\.\d+)?)\s*$/);
+  if (!priceMatch) return null;
+  const limitPrice = parseFloat(priceMatch[1]);
+  body = body.slice(0, priceMatch.index).trim();
+
+  // Extract side: "long" or "short"
+  const sideMatch = body.match(/\b(long|short)\b/);
+  if (!sideMatch) return null;
+  const side = parseSide(sideMatch[1]);
+  if (!side) return null;
+  body = body.replace(/\b(long|short)\b/, ' ').replace(/\s+/g, ' ').trim();
+
+  // Extract leverage: "2x", "2.5x", "2 x"
+  const levMatch = body.match(/\b(\d+(?:\.\d+)?)\s*x\b/);
+  if (!levMatch) return null;
+  const leverage = parseFloat(levMatch[1]);
+  body = body.replace(/\b\d+(?:\.\d+)?\s*x\b/, ' ').replace(/\s+/g, ' ').trim();
+
+  // Extract collateral: "$100", "100", "100 dollars", "for $100", "with $100", "for 100 dollars"
+  const colMatch = body.match(/(?:(?:for|with)\s+)?\$?(\d+(?:\.\d+)?)\s*(?:dollars?|usd|usdc)?/);
+  if (!colMatch) return null;
+  const collateral = parseFloat(colMatch[1]);
+  body = body.replace(colMatch[0], ' ').replace(/\s+/g, ' ').trim();
+
+  // Remaining text should be the market (strip filler words)
+  const market = body.replace(/\b(for|with|on|a|an|the|order|position)\b/g, '').replace(/\s+/g, ' ').trim();
+  if (!market || market.length > 20) return null;
+
+  if (!Number.isFinite(limitPrice) || limitPrice <= 0) return null;
+  if (!Number.isFinite(collateral) || collateral <= 0) return null;
+  if (!Number.isFinite(leverage) || leverage < 1) return null;
+
+  return {
+    action: ActionType.LimitOrder,
+    market: resolveMarket(market),
+    side,
+    leverage,
+    collateral,
+    limitPrice,
+  } as ParsedIntent;
+}
+
 // ─── Number Word Normalization ────────────────────────────────────────────
 
 const NUMBER_WORDS: Record<string, number> = {
@@ -381,23 +443,16 @@ export function localParse(input: string): ParsedIntent | null {
     }
   }
 
-  // Limit order: "limit long SOL 2x $100 @ $82", "limit short BTC 3x $200 @ $72000"
-  // Also accepts: "limit long sol 2x 100 dollars at 82", "limit long sol 2x 100 at 82"
-  const limitMatch = lower.match(
-    /^limit\s+(long|short)\s+([a-z]+)\s+(\d+(?:\.\d+)?)\s*x\s+\$?(\d+(?:\.\d+)?)\s*(?:dollars?\s+)?(?:@|at)\s+\$?(\d+(?:\.\d+)?)$/
-  );
-  if (limitMatch) {
-    const side = parseSide(limitMatch[1]);
-    if (side) {
-      return {
-        action: ActionType.LimitOrder,
-        market: resolveMarket(limitMatch[2]),
-        side,
-        leverage: parseFloat(limitMatch[3]),
-        collateral: parseFloat(limitMatch[4]),
-        limitPrice: parseFloat(limitMatch[5]),
-      };
-    }
+  // Limit order — flexible parser that extracts components from any ordering.
+  // Accepts "limit" or "limit order" prefix, then any combination of:
+  //   side: long/short
+  //   market: sol/btc/eth/...
+  //   leverage: 2x / 2 x
+  //   collateral: $100 / 100 / 100 dollars / for $100 / for 100 / with $100
+  //   price: @ $82 / at $82 / at 82 / @ 82
+  const limitParsed = parseLimitOrder(lower);
+  if (limitParsed) {
+    return limitParsed;
   }
 
   // Cancel order: "cancel order order-1", "cancel order-1"
