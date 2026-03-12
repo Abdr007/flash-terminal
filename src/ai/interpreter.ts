@@ -393,9 +393,9 @@ export function localParse(input: string): ParsedIntent | null {
     }
   }
 
-  // Set TP/SL: "set tp SOL long $95", "set sl SOL long $80"
+  // Set TP/SL: "set tp SOL long $95", "set sl SOL long $80", "set tp btc long to 75000"
   const setTpSlMatch = lower.match(
-    /^set\s+(tp|sl)\s+([a-z]+)\s+(long|short)\s+\$?(\d+(?:\.\d+)?)$/
+    /^set\s+(tp|sl)\s+([a-z]+)\s+(long|short)\s+(?:to\s+|at\s+)?\$?(\d+(?:\.\d+)?)$/
   );
   if (setTpSlMatch) {
     const side = parseSide(setTpSlMatch[3]);
@@ -410,9 +410,9 @@ export function localParse(input: string): ParsedIntent | null {
     }
   }
 
-  // Set TP/SL alternate: "set tp 95 for SOL long", "set sl 80 for SOL long"
+  // Set TP/SL alternate: "set tp 95 for SOL long", "set sl 80 for SOL long", "set tp $95 on SOL long"
   const setTpSlAltMatch = lower.match(
-    /^set\s+(tp|sl)\s+\$?(\d+(?:\.\d+)?)\s+(?:for\s+)?([a-z]+)\s+(long|short)$/
+    /^set\s+(tp|sl)\s+\$?(\d+(?:\.\d+)?)\s+(?:for|on|to)?\s*([a-z]+)\s+(long|short)$/
   );
   if (setTpSlAltMatch) {
     const side = parseSide(setTpSlAltMatch[4]);
@@ -425,6 +425,11 @@ export function localParse(input: string): ParsedIntent | null {
         price: parseFloat(setTpSlAltMatch[2]),
       };
     }
+  }
+
+  // Catch-all: if input starts with "set tp" or "set sl", never fall through
+  if (/^set\s+(tp|sl)\b/.test(lower)) {
+    return { action: ActionType.Help } as ParsedIntent;
   }
 
   // Remove TP/SL: "remove tp SOL long", "remove sl SOL long"

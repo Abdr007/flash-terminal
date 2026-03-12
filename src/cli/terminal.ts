@@ -1507,6 +1507,22 @@ export class FlashTerminal {
       intent = fastIntent;
     } else if (this.showUsageHint(lower)) {
       return;
+    } else if (/^set\s+(tp|sl)\b/.test(lower)) {
+      // Set TP/SL — parse via interpreter, show usage on failure
+      const parsed = localParse(input);
+      if (parsed && parsed.action === ActionType.SetTpSl) {
+        intent = parsed;
+      } else {
+        console.log('');
+        console.log(chalk.yellow('  Invalid TP/SL syntax.'));
+        console.log('');
+        console.log(chalk.dim('  Usage:'));
+        console.log(`    ${chalk.bold('set tp SOL long $95')}`);
+        console.log(`    ${chalk.bold('set sl SOL long $80')}`);
+        console.log(`    ${chalk.bold('set tp btc long to 75000')}`);
+        console.log('');
+        return;
+      }
     } else if (lower.startsWith('edit limit')) {
       // Edit limit order — parse via interpreter
       const parsed = localParse(input);
