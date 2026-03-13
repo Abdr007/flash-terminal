@@ -633,6 +633,7 @@ export class UltraTxEngine {
     instructions: TransactionInstruction[],
     additionalSigners: Signer[] = [],
     addressLookupTableAccounts?: AddressLookupTableAccount[],
+    computeUnitLimitOverride?: number,
   ): Promise<TxSubmitResult> {
     // Concurrency guard — only one submitTransaction at a time
     if (this.submitInProgress) {
@@ -641,7 +642,7 @@ export class UltraTxEngine {
     this.submitInProgress = true;
 
     try {
-      return await this._submitTransactionInner(instructions, additionalSigners, addressLookupTableAccounts);
+      return await this._submitTransactionInner(instructions, additionalSigners, addressLookupTableAccounts, computeUnitLimitOverride);
     } finally {
       this.submitInProgress = false;
     }
@@ -651,6 +652,7 @@ export class UltraTxEngine {
     instructions: TransactionInstruction[],
     additionalSigners: Signer[],
     addressLookupTableAccounts?: AddressLookupTableAccount[],
+    computeUnitLimitOverride?: number,
   ): Promise<TxSubmitResult> {
     const logger = getLogger();
     const pipelineStart = Date.now();
@@ -712,7 +714,8 @@ export class UltraTxEngine {
         priorityFee = await this.getDynamicPriorityFee();
 
         // ── Step 3: Build + Sign ──
-        const cuLimitIx = ComputeBudgetProgram.setComputeUnitLimit({ units: this.config.computeUnitLimit });
+        const effectiveCuLimit = computeUnitLimitOverride ?? this.config.computeUnitLimit;
+        const cuLimitIx = ComputeBudgetProgram.setComputeUnitLimit({ units: effectiveCuLimit });
         const cuPriceIx = ComputeBudgetProgram.setComputeUnitPrice({ microLamports: priorityFee });
 
         const allIxs = [cuLimitIx, cuPriceIx, ...instructions];

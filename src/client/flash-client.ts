@@ -651,6 +651,7 @@ export class FlashClient implements IFlashClient {
     additionalSigners: Signer[],
     poolConfig: PoolConfig,
     addressLookupTableAccounts?: AddressLookupTableAccount[],
+    computeUnitLimitOverride?: number,
   ): Promise<string> {
     const logger = getLogger();
 
@@ -698,6 +699,7 @@ export class FlashClient implements IFlashClient {
         [...validatedInstructions],
         additionalSigners,
         altAccounts,
+        computeUnitLimitOverride,
       );
       logger.info('CLIENT', `Ultra-TX: ${result.signature} (${result.metrics.totalLatencyMs}ms, ${result.metrics.confirmedViaWs ? 'WS' : 'HTTP'}, ${result.broadcastEndpoints} endpoints)`);
       // Reset session idle timer on successful trade
@@ -708,7 +710,8 @@ export class FlashClient implements IFlashClient {
     }
 
     const maxAttempts = 3;
-    const cuLimitIx = ComputeBudgetProgram.setComputeUnitLimit({ units: this.config.computeUnitLimit });
+    const effectiveCuLimit = computeUnitLimitOverride ?? this.config.computeUnitLimit;
+    const cuLimitIx = ComputeBudgetProgram.setComputeUnitLimit({ units: effectiveCuLimit });
     const cuPriceIx = ComputeBudgetProgram.setComputeUnitPrice({ microLamports: this.config.computeUnitPrice });
 
     let lastError = '';
@@ -1378,7 +1381,40 @@ export class FlashClient implements IFlashClient {
         );
       }
 
-      const txSignature = await this.sendTx(result.instructions, result.additionalSigners, poolConfig);
+      // ── Prepend ATA createIdempotent for collateral + receive tokens (matches website) ──
+      // Website always includes createIdempotent for both the position's collateral token
+      // and the receive token (USDC). Idempotent = no-op if ATA exists, no RPC check needed.
+      const collateralMint = matchedMarket?.collateralMint;
+      const ataMints: PublicKey[] = [];
+      if (collateralMint) ataMints.push(collateralMint);
+      if (!receivingToken.mintKey.equals(collateralMint ?? PublicKey.default)) {
+        ataMints.push(receivingToken.mintKey);
+      }
+      const ataIxs = buildATAIdempotentIxs(this.wallet.publicKey, ataMints);
+
+      // ── Append cancel_all_trigger_orders on full close (matches website) ──
+      // Website always cancels remaining trigger orders (TP/SL) when closing a position.
+      let cancelIxs: TransactionInstruction[] = [];
+      let cancelSigners: Signer[] = [];
+      if (shouldFullClose) {
+        try {
+          const cancelResult = await this.perpClient.cancelAllTriggerOrders(
+            targetToken.symbol, marketCollateralSymbol, sdkSide, poolConfig
+          );
+          cancelIxs = cancelResult.instructions;
+          cancelSigners = cancelResult.additionalSigners;
+        } catch {
+          // Non-critical — position may have no trigger orders
+        }
+      }
+
+      // Assemble: ATA ixs → close ixs → cancel ixs
+      const allCloseIxs = [...ataIxs, ...result.instructions, ...cancelIxs];
+      const allSigners = [...result.additionalSigners, ...cancelSigners];
+
+      // Use tighter CU limit for close operations (matches website: 435k vs 600k for open)
+      const CLOSE_CU_LIMIT = 435_000;
+      const txSignature = await this.sendTx(allCloseIxs, allSigners, poolConfig, undefined, CLOSE_CU_LIMIT);
       this.recordRecentTrade(cacheKey);
 
       const closeAction = shouldFullClose ? 'CLOSE' : 'PARTIAL_CLOSE';
