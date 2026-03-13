@@ -2273,6 +2273,33 @@ export class FlashClient implements IFlashClient {
 
   // ─── Swap ──────────────────────────────────────────────────────────────────
 
+  /**
+   * Find a pool config that contains a given token symbol.
+   * Falls back to the default pool. Unlike getPoolConfigForMarket() which looks
+   * up perp markets, this searches pool token lists for swap/earn operations.
+   */
+  private getPoolConfigForToken(tokenSymbol: string): PoolConfig {
+    // First check default pool
+    const tokens = this.poolConfig.tokens as Array<{ symbol: string }>;
+    if (tokens.some(t => t.symbol === tokenSymbol)) {
+      return this.poolConfig;
+    }
+    // Try all known pools
+    for (const poolName of POOL_NAMES) {
+      if (!isTradeablePool(poolName)) continue;
+      try {
+        const pc = PoolConfig.fromIdsByName(poolName, this.config.network);
+        const poolTokens = pc.tokens as Array<{ symbol: string }>;
+        if (poolTokens.some(t => t.symbol === tokenSymbol)) {
+          return pc;
+        }
+      } catch {
+        // Pool not loadable
+      }
+    }
+    throw new Error(`Token ${tokenSymbol} not found in any pool`);
+  }
+
   async swap(
     inputToken: string,
     outputToken: string,
@@ -2280,7 +2307,8 @@ export class FlashClient implements IFlashClient {
     minAmountOut?: number,
   ) {
     const logger = getLogger();
-    const poolConfig = this.getPoolConfigForMarket(inputToken);
+    // Find a pool containing both tokens — try input token's pool first
+    const poolConfig = this.getPoolConfigForToken(inputToken);
 
     const inToken = this.findToken(poolConfig, inputToken);
     const outToken = this.findToken(poolConfig, outputToken);
@@ -2316,7 +2344,7 @@ export class FlashClient implements IFlashClient {
 
   async addLiquidity(tokenSymbol: string, amountUsd: number) {
     const logger = getLogger();
-    const poolConfig = this.getPoolConfigForMarket(tokenSymbol);
+    const poolConfig = this.getPoolConfigForToken(tokenSymbol);
     const token = this.findToken(poolConfig, tokenSymbol);
 
     const nativeAmount = uiDecimalsToNative(amountUsd.toString(), token.decimals);
@@ -2343,7 +2371,7 @@ export class FlashClient implements IFlashClient {
 
   async removeLiquidity(tokenSymbol: string, percent: number) {
     const logger = getLogger();
-    const poolConfig = this.getPoolConfigForMarket(tokenSymbol);
+    const poolConfig = this.getPoolConfigForToken(tokenSymbol);
     const token = this.findToken(poolConfig, tokenSymbol);
 
     // For removeLiquidity we need the LP token amount.

@@ -200,10 +200,41 @@ export const earnClaimRewardsTool: ToolDefinition = {
   },
 };
 
+// ─── earn status ─────────────────────────────────────────────────────────────
+
+export const earnStatusTool: ToolDefinition = {
+  name: 'earn_status',
+  description: 'View earn/LP/staking status and available commands',
+  parameters: z.object({}),
+  execute: async (_params, _context): Promise<ToolResult> => {
+    const lines = [
+      '',
+      `  ${theme.accentBold('EARN')}  ${chalk.dim('— LP & Staking on Flash Trade')}`,
+      '',
+      `  ${chalk.dim('Liquidity')}`,
+      `    ${chalk.cyan('earn add-liquidity $100')}        Add liquidity (default: USDC)`,
+      `    ${chalk.cyan('earn add-liquidity $200 SOL')}    Add liquidity in SOL`,
+      `    ${chalk.cyan('earn remove-liquidity 50%')}      Remove 50% of LP position`,
+      '',
+      `  ${chalk.dim('Staking')}`,
+      `    ${chalk.cyan('earn stake $200')}                Stake FLP tokens`,
+      `    ${chalk.cyan('earn unstake 25%')}               Unstake 25% of FLP`,
+      '',
+      `  ${chalk.dim('Rewards')}`,
+      `    ${chalk.cyan('earn claim')}                     Claim all pending rewards`,
+      '',
+      `  ${chalk.dim('Note: Earn features require a connected wallet (live mode).')}`,
+      '',
+    ];
+    return { success: true, message: lines.join('\n') };
+  },
+};
+
 export const allEarnTools: ToolDefinition[] = [
   earnAddLiquidityTool,
   earnRemoveLiquidityTool,
   earnStakeTool,
   earnUnstakeTool,
   earnClaimRewardsTool,
+  earnStatusTool,
 ];

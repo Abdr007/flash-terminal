@@ -366,6 +366,9 @@ export class ToolEngine {
       case ActionType.EarnClaimRewards:
         return { toolName: 'earn_claim_rewards', params: {} };
 
+      case ActionType.EarnStatus:
+        return { toolName: 'earn_status', params: {} };
+
       default:
         return null;
     }
