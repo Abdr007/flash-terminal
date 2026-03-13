@@ -3268,6 +3268,60 @@ const limitOrderListTool: ToolDefinition = {
   },
 };
 
+// ─── close_all ────────────────────────────────────────────────────────────────
+
+export const flashCloseAll: ToolDefinition = {
+  name: 'flash_close_all',
+  description: 'Close all open positions sequentially',
+  parameters: z.object({}),
+  execute: async (_params, context): Promise<ToolResult> => {
+    try {
+      const positions = await context.flashClient.getPositions();
+      if (positions.length === 0) {
+        return { success: true, message: chalk.yellow('  No open positions to close.') };
+      }
+
+      const lines: string[] = [
+        '',
+        `  ${theme.accentBold('CLOSE ALL POSITIONS')}  ${theme.dim(`(${positions.length} position${positions.length > 1 ? 's' : ''})`)}`,
+        '',
+      ];
+
+      let closed = 0;
+      let totalPnl = 0;
+      const errors: string[] = [];
+
+      for (const pos of positions) {
+        try {
+          const result = await context.flashClient.closePosition(
+            pos.market,
+            pos.side as TradeSide,
+          );
+          closed++;
+          const pnl = result.pnl ?? 0;
+          totalPnl += pnl;
+          lines.push(`  ${chalk.green('✓')} ${pos.market} ${colorSide(pos.side)} — PnL: ${colorPnl(pnl)}`);
+        } catch (err: unknown) {
+          errors.push(`${pos.market} ${pos.side}: ${getErrorMessage(err)}`);
+          lines.push(`  ${chalk.red('✗')} ${pos.market} ${colorSide(pos.side)} — ${chalk.red(getErrorMessage(err))}`);
+        }
+      }
+
+      lines.push('');
+      lines.push(`  ${theme.dim('─'.repeat(40))}`);
+      lines.push(`  Closed: ${chalk.bold(String(closed))}/${positions.length}  |  Total PnL: ${colorPnl(totalPnl)}`);
+      if (errors.length > 0) {
+        lines.push(`  ${chalk.red(`${errors.length} failed`)}`);
+      }
+      lines.push('');
+
+      return { success: errors.length === 0, message: lines.join('\n') };
+    } catch (err: unknown) {
+      return { success: false, message: chalk.red(`  Failed to close all: ${getErrorMessage(err)}`) };
+    }
+  },
+};
+
 export const allFlashTools: ToolDefinition[] = [
   flashOpenPosition,
   flashClosePosition,
@@ -3315,4 +3369,5 @@ export const allFlashTools: ToolDefinition[] = [
   limitOrderCancelTool,
   limitOrderEditTool,
   limitOrderListTool,
+  flashCloseAll,
 ];

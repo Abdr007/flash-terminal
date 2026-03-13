@@ -98,6 +98,20 @@ export enum ActionType {
   CancelOrder = 'cancel_order',
   ListOrders = 'list_orders',
   EditLimitOrder = 'edit_limit_order',
+
+  // Close All
+  CloseAll = 'close_all',
+
+  // Swap
+  Swap = 'swap',
+
+  // Earn (LP & Staking)
+  EarnAddLiquidity = 'earn_add_liquidity',
+  EarnRemoveLiquidity = 'earn_remove_liquidity',
+  EarnStake = 'earn_stake',
+  EarnUnstake = 'earn_unstake',
+  EarnClaimRewards = 'earn_claim_rewards',
+  EarnStatus = 'earn_status',
 }
 
 // ─── Zod Schemas for Intent Parsing ──────────────────────────────────────────
@@ -398,6 +412,49 @@ export const EditLimitOrderSchema = z.object({
   limitPrice: z.number().positive().optional(),
 });
 
+// ─── Close All / Swap / Earn Schemas ────────────────────────────────────────
+
+export const CloseAllSchema = z.object({
+  action: z.literal(ActionType.CloseAll),
+});
+
+export const SwapSchema = z.object({
+  action: z.literal(ActionType.Swap),
+  inputToken: z.string().max(20),
+  outputToken: z.string().max(20),
+  amount: z.number().positive(),
+});
+
+export const EarnAddLiquiditySchema = z.object({
+  action: z.literal(ActionType.EarnAddLiquidity),
+  amount: z.number().positive(),
+  token: z.string().max(20).optional(),
+});
+
+export const EarnRemoveLiquiditySchema = z.object({
+  action: z.literal(ActionType.EarnRemoveLiquidity),
+  percent: z.number().min(1).max(100),
+  token: z.string().max(20).optional(),
+});
+
+export const EarnStakeSchema = z.object({
+  action: z.literal(ActionType.EarnStake),
+  amount: z.number().positive(),
+});
+
+export const EarnUnstakeSchema = z.object({
+  action: z.literal(ActionType.EarnUnstake),
+  percent: z.number().min(1).max(100),
+});
+
+export const EarnClaimRewardsSchema = z.object({
+  action: z.literal(ActionType.EarnClaimRewards),
+});
+
+export const EarnStatusSchema = z.object({
+  action: z.literal(ActionType.EarnStatus),
+});
+
 export const ParsedIntentSchema = z.discriminatedUnion('action', [
   OpenPositionSchema,
   ClosePositionSchema,
@@ -457,6 +514,14 @@ export const ParsedIntentSchema = z.discriminatedUnion('action', [
   CancelOrderSchema,
   ListOrdersSchema,
   EditLimitOrderSchema,
+  CloseAllSchema,
+  SwapSchema,
+  EarnAddLiquiditySchema,
+  EarnRemoveLiquiditySchema,
+  EarnStakeSchema,
+  EarnUnstakeSchema,
+  EarnClaimRewardsSchema,
+  EarnStatusSchema,
 ]);
 
 export type ParsedIntent = z.infer<typeof ParsedIntentSchema>;
@@ -827,6 +892,62 @@ export interface IFlashClient {
 
   /** Get all on-chain orders for the current wallet */
   getUserOrders?(): Promise<OnChainOrder[]>;
+
+  // ─── Swap ───────────────────────────────────────────────────────────────
+
+  /** Swap tokens via Flash Trade pool */
+  swap?(
+    inputToken: string,
+    outputToken: string,
+    amountIn: number,
+    minAmountOut?: number,
+  ): Promise<SwapResult>;
+
+  // ─── Earn (LP & Staking) ──────────────────────────────────────────────
+
+  /** Add liquidity to a pool */
+  addLiquidity?(
+    tokenSymbol: string,
+    amountUsd: number,
+  ): Promise<EarnResult>;
+
+  /** Remove liquidity from a pool */
+  removeLiquidity?(
+    tokenSymbol: string,
+    percent: number,
+  ): Promise<EarnResult>;
+
+  /** Stake FLP tokens */
+  stakeFLP?(
+    amountUsd: number,
+  ): Promise<EarnResult>;
+
+  /** Unstake FLP tokens */
+  unstakeFLP?(
+    percent: number,
+  ): Promise<EarnResult>;
+
+  /** Claim staking/LP rewards */
+  claimRewards?(): Promise<EarnResult>;
+}
+
+// ─── Swap & Earn Result Types ──────────────────────────────────────────────
+
+export interface SwapResult {
+  txSignature: string;
+  inputToken: string;
+  outputToken: string;
+  amountIn: number;
+  amountOut: number;
+  price: number;
+}
+
+export interface EarnResult {
+  txSignature: string;
+  action: string;
+  amount?: number;
+  token?: string;
+  message: string;
 }
 
 export interface IDataClient {

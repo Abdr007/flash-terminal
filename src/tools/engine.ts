@@ -8,6 +8,8 @@ import {
 import { ToolRegistry } from './registry.js';
 import { allFlashTools } from './flash-tools.js';
 import { allAgentTools } from '../agent/agent-tools.js';
+import { allSwapTools } from './swap-tools.js';
+import { allEarnTools } from './earn-tools.js';
 import { runMiddleware } from '../core/execution-middleware.js';
 import chalk from 'chalk';
 import { theme } from '../cli/theme.js';
@@ -29,6 +31,12 @@ export class ToolEngine {
       this.registry.register(tool);
     }
     for (const tool of allAgentTools) {
+      this.registry.register(tool);
+    }
+    for (const tool of allSwapTools) {
+      this.registry.register(tool);
+    }
+    for (const tool of allEarnTools) {
       this.registry.register(tool);
     }
     // Lock core tools — plugins cannot override them
@@ -318,6 +326,45 @@ export class ToolEngine {
           toolName: 'limit_order_edit',
           params: { orderId: intent.orderId, market: intent.market, side: intent.side, limitPrice: intent.limitPrice },
         };
+
+      // ── Close All ──
+      case ActionType.CloseAll:
+        return { toolName: 'flash_close_all', params: {} };
+
+      // ── Swap ──
+      case ActionType.Swap:
+        return {
+          toolName: 'flash_swap',
+          params: { inputToken: intent.inputToken, outputToken: intent.outputToken, amount: intent.amount },
+        };
+
+      // ── Earn ──
+      case ActionType.EarnAddLiquidity:
+        return {
+          toolName: 'earn_add_liquidity',
+          params: { token: intent.token ?? 'USDC', amount: intent.amount },
+        };
+
+      case ActionType.EarnRemoveLiquidity:
+        return {
+          toolName: 'earn_remove_liquidity',
+          params: { token: intent.token ?? 'USDC', percent: intent.percent ?? 100 },
+        };
+
+      case ActionType.EarnStake:
+        return {
+          toolName: 'earn_stake',
+          params: { amount: intent.amount },
+        };
+
+      case ActionType.EarnUnstake:
+        return {
+          toolName: 'earn_unstake',
+          params: { percent: intent.percent ?? 100 },
+        };
+
+      case ActionType.EarnClaimRewards:
+        return { toolName: 'earn_claim_rewards', params: {} };
 
       default:
         return null;

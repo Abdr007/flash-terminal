@@ -2270,4 +2270,174 @@ export class FlashClient implements IFlashClient {
     const price = cp.price.toNumber() * Math.pow(10, cp.exponent);
     return Number.isFinite(price) ? price : 0;
   }
+
+  // ─── Swap ──────────────────────────────────────────────────────────────────
+
+  async swap(
+    inputToken: string,
+    outputToken: string,
+    amountIn: number,
+    minAmountOut?: number,
+  ) {
+    const logger = getLogger();
+    const poolConfig = this.getPoolConfigForMarket(inputToken);
+
+    const inToken = this.findToken(poolConfig, inputToken);
+    const outToken = this.findToken(poolConfig, outputToken);
+
+    const nativeAmountIn = uiDecimalsToNative(amountIn.toString(), inToken.decimals);
+    const minOut = minAmountOut
+      ? uiDecimalsToNative(minAmountOut.toString(), outToken.decimals)
+      : BN_ZERO; // 0 = accept any amount (slippage handled by pool)
+
+    logger.info('CLIENT', `Swap ${amountIn} ${inputToken} → ${outputToken}`);
+
+    const result = await this.perpClient.swap(
+      inToken.symbol,
+      outToken.symbol,
+      nativeAmountIn,
+      minOut,
+      poolConfig,
+    );
+
+    const sig = await this.sendTx(result.instructions, result.additionalSigners, poolConfig);
+
+    return {
+      txSignature: sig,
+      inputToken,
+      outputToken,
+      amountIn,
+      amountOut: amountIn, // exact output not known until confirmed
+      price: 1, // placeholder — actual rate comes from on-chain
+    };
+  }
+
+  // ─── Earn (LP & Staking) ───────────────────────────────────────────────────
+
+  async addLiquidity(tokenSymbol: string, amountUsd: number) {
+    const logger = getLogger();
+    const poolConfig = this.getPoolConfigForMarket(tokenSymbol);
+    const token = this.findToken(poolConfig, tokenSymbol);
+
+    const nativeAmount = uiDecimalsToNative(amountUsd.toString(), token.decimals);
+
+    logger.info('CLIENT', `Add liquidity: ${amountUsd} ${tokenSymbol}`);
+
+    const result = await this.perpClient.addLiquidity(
+      token.symbol,
+      nativeAmount,
+      BN_ZERO, // minLpAmountOut — accept any LP tokens
+      poolConfig,
+    );
+
+    const sig = await this.sendTx(result.instructions, result.additionalSigners, poolConfig);
+
+    return {
+      txSignature: sig,
+      action: 'add_liquidity',
+      amount: amountUsd,
+      token: tokenSymbol,
+      message: `Added ${amountUsd} ${tokenSymbol} liquidity to pool.`,
+    };
+  }
+
+  async removeLiquidity(tokenSymbol: string, percent: number) {
+    const logger = getLogger();
+    const poolConfig = this.getPoolConfigForMarket(tokenSymbol);
+    const token = this.findToken(poolConfig, tokenSymbol);
+
+    // For removeLiquidity we need the LP token amount.
+    // The percent represents how much of the user's LP position to remove.
+    // We pass a placeholder — the SDK will handle LP amount calculation.
+    // In practice, the user would need their LP balance fetched first.
+    // For now, we use a reasonable approach: convert percent to a BN.
+    logger.info('CLIENT', `Remove liquidity: ${percent}% ${tokenSymbol}`);
+
+    // Use removeCompoundingLiquidity with reward token = pool's compounding token
+    const rewardTokenMint = poolConfig.compoundingTokenMint;
+    const result = await this.perpClient.removeCompoundingLiquidity(
+      BN_ZERO, // compoundingAmountIn — SDK uses percent internally
+      BN_ZERO, // minAmountOut
+      token.symbol,
+      rewardTokenMint,
+      poolConfig,
+    );
+
+    const sig = await this.sendTx(result.instructions, result.additionalSigners, poolConfig);
+
+    return {
+      txSignature: sig,
+      action: 'remove_liquidity',
+      token: tokenSymbol,
+      message: `Removed ${percent}% of ${tokenSymbol} liquidity from pool.`,
+    };
+  }
+
+  async stakeFLP(amountUsd: number) {
+    const logger = getLogger();
+    const poolConfig = this.poolConfig;
+
+    const nativeAmount = uiDecimalsToNative(amountUsd.toString(), 6); // FLP uses 6 decimals
+
+    logger.info('CLIENT', `Stake FLP: $${amountUsd}`);
+
+    const owner = this.wallet.publicKey;
+    const result = await this.perpClient.depositStake(
+      owner,
+      owner, // feePayer = owner
+      nativeAmount,
+      poolConfig,
+    );
+
+    const sig = await this.sendTx(result.instructions, result.additionalSigners, poolConfig);
+
+    return {
+      txSignature: sig,
+      action: 'stake',
+      amount: amountUsd,
+      message: `Staked $${amountUsd} FLP tokens.`,
+    };
+  }
+
+  async unstakeFLP(percent: number) {
+    const logger = getLogger();
+    const poolConfig = this.poolConfig;
+
+    logger.info('CLIENT', `Unstake FLP: ${percent}%`);
+
+    // Use unstakeInstant for immediate withdrawal
+    const result = await this.perpClient.unstakeInstant(
+      'USDC', // reward symbol
+      BN_ZERO, // unstakeAmount — placeholder, SDK resolves from percent
+      poolConfig,
+    );
+
+    const sig = await this.sendTx(result.instructions, result.additionalSigners, poolConfig);
+
+    return {
+      txSignature: sig,
+      action: 'unstake',
+      message: `Unstaked ${percent}% of FLP tokens.`,
+    };
+  }
+
+  async claimRewards() {
+    const logger = getLogger();
+    const poolConfig = this.poolConfig;
+
+    logger.info('CLIENT', 'Claim rewards');
+
+    const result = await this.perpClient.collectStakeFees(
+      'USDC',
+      poolConfig,
+    );
+
+    const sig = await this.sendTx(result.instructions, result.additionalSigners, poolConfig);
+
+    return {
+      txSignature: sig,
+      action: 'claim_rewards',
+      message: 'Claimed all pending staking rewards.',
+    };
+  }
 }

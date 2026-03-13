@@ -61,6 +61,13 @@ Available actions:
 - portfolio_state: Show portfolio capital allocation state
 - portfolio_exposure: Show portfolio exposure breakdown
 - portfolio_rebalance: Analyze and suggest portfolio rebalancing
+- close_all: Close all open positions
+- swap: Swap tokens (fields: inputToken, outputToken, amount)
+- earn_add_liquidity: Add liquidity to pool (fields: amount, token)
+- earn_remove_liquidity: Remove liquidity (fields: percent, token)
+- earn_stake: Stake FLP tokens (fields: amount)
+- earn_unstake: Unstake FLP tokens (fields: percent)
+- earn_claim_rewards: Claim all pending rewards
 
 Available markets: ${getAllMarkets().join(', ')}
 
@@ -111,6 +118,15 @@ Examples:
 - "exposure" -> {"action":"portfolio_exposure"}
 - "rebalance" -> {"action":"portfolio_rebalance"}
 - "portfolio rebalance" -> {"action":"portfolio_rebalance"}
+- "close all" -> {"action":"close_all"}
+- "close all positions" -> {"action":"close_all"}
+- "swap 10 SOL to USDC" -> {"action":"swap","inputToken":"SOL","outputToken":"USDC","amount":10}
+- "swap SOL USDC $10" -> {"action":"swap","inputToken":"SOL","outputToken":"USDC","amount":10}
+- "earn add-liquidity $100" -> {"action":"earn_add_liquidity","amount":100,"token":"USDC"}
+- "earn remove-liquidity 50%" -> {"action":"earn_remove_liquidity","percent":50,"token":"USDC"}
+- "earn stake $200" -> {"action":"earn_stake","amount":200}
+- "earn unstake 25%" -> {"action":"earn_unstake","percent":25}
+- "earn claim rewards" -> {"action":"earn_claim_rewards"}
 
 Rules:
 - Market symbols are UPPERCASE
@@ -279,6 +295,7 @@ const COMMAND_ALIASES: Record<string, string> = {
   d: 'dashboard',
   b: 'portfolio',    // "b" for balance
   bal: 'portfolio',
+  ca: 'close all',
 };
 
 /** Expand single-letter/short command aliases at the start of input. */
@@ -867,6 +884,113 @@ export function localParse(input: string): ParsedIntent | null {
 
   if (/^(?:portfolio\s+rebalance|rebalance)$/.test(lower)) {
     return { action: ActionType.PortfolioRebalance };
+  }
+
+  // ─── Close All ─────────────────────────────────────────────────────────
+
+  if (/^(?:close\s+all|close-all|closeall|exit\s+all)(?:\s+positions?)?$/.test(lower)) {
+    return { action: ActionType.CloseAll };
+  }
+
+  // ─── Swap ──────────────────────────────────────────────────────────────
+  // "swap SOL USDC $10", "swap 10 SOL to USDC", "swap SOL to USDC $10", "swap $50 USDC to SOL"
+  const swapMatch1 = lower.match(
+    /^swap\s+\$?(\d+(?:\.\d+)?)\s+([a-z]+)\s+(?:to|for|into)\s+([a-z]+)$/
+  );
+  if (swapMatch1) {
+    return {
+      action: ActionType.Swap,
+      inputToken: resolveMarket(swapMatch1[2]),
+      outputToken: resolveMarket(swapMatch1[3]),
+      amount: parseFloat(swapMatch1[1]),
+    } as ParsedIntent;
+  }
+
+  const swapMatch2 = lower.match(
+    /^swap\s+([a-z]+)\s+(?:to|for|into)\s+([a-z]+)\s+\$?(\d+(?:\.\d+)?)$/
+  );
+  if (swapMatch2) {
+    return {
+      action: ActionType.Swap,
+      inputToken: resolveMarket(swapMatch2[1]),
+      outputToken: resolveMarket(swapMatch2[2]),
+      amount: parseFloat(swapMatch2[3]),
+    } as ParsedIntent;
+  }
+
+  const swapMatch3 = lower.match(
+    /^swap\s+([a-z]+)\s+([a-z]+)\s+\$?(\d+(?:\.\d+)?)$/
+  );
+  if (swapMatch3) {
+    return {
+      action: ActionType.Swap,
+      inputToken: resolveMarket(swapMatch3[1]),
+      outputToken: resolveMarket(swapMatch3[2]),
+      amount: parseFloat(swapMatch3[3]),
+    } as ParsedIntent;
+  }
+
+  // Bare "swap" — show usage
+  if (/^swap$/.test(lower)) {
+    return { action: ActionType.Help } as ParsedIntent;
+  }
+
+  // ─── Earn Commands ─────────────────────────────────────────────────────
+
+  // "earn add-liquidity $100", "earn add-liquidity $100 USDC", "earn add liquidity $100"
+  const earnAddMatch = lower.match(
+    /^earn\s+add[- ]?liquidity\s+\$?(\d+(?:\.\d+)?)(?:\s+([a-z]+))?$/
+  );
+  if (earnAddMatch) {
+    return {
+      action: ActionType.EarnAddLiquidity,
+      amount: parseFloat(earnAddMatch[1]),
+      token: earnAddMatch[2] ? resolveMarket(earnAddMatch[2]) : 'USDC',
+    } as ParsedIntent;
+  }
+
+  // "earn remove-liquidity 50%", "earn remove liquidity 50% USDC"
+  const earnRemoveMatch = lower.match(
+    /^earn\s+remove[- ]?liquidity\s+(\d+(?:\.\d+)?)\s*%?(?:\s+([a-z]+))?$/
+  );
+  if (earnRemoveMatch) {
+    return {
+      action: ActionType.EarnRemoveLiquidity,
+      percent: parseFloat(earnRemoveMatch[1]),
+      token: earnRemoveMatch[2] ? resolveMarket(earnRemoveMatch[2]) : 'USDC',
+    } as ParsedIntent;
+  }
+
+  // "earn stake $200", "earn stake-flp $200"
+  const earnStakeMatch = lower.match(
+    /^earn\s+stake(?:[- ]?flp)?\s+\$?(\d+(?:\.\d+)?)$/
+  );
+  if (earnStakeMatch) {
+    return {
+      action: ActionType.EarnStake,
+      amount: parseFloat(earnStakeMatch[1]),
+    } as ParsedIntent;
+  }
+
+  // "earn unstake 25%", "earn unstake-flp 25%"
+  const earnUnstakeMatch = lower.match(
+    /^earn\s+unstake(?:[- ]?flp)?\s+(\d+(?:\.\d+)?)\s*%?$/
+  );
+  if (earnUnstakeMatch) {
+    return {
+      action: ActionType.EarnUnstake,
+      percent: parseFloat(earnUnstakeMatch[1]),
+    } as ParsedIntent;
+  }
+
+  // "earn claim", "earn claim-rewards", "earn claim rewards"
+  if (/^earn\s+claim(?:[- ]?rewards?)?$/.test(lower)) {
+    return { action: ActionType.EarnClaimRewards };
+  }
+
+  // "earn status"
+  if (/^earn(?:\s+status)?$/.test(lower)) {
+    return { action: ActionType.EarnStatus };
   }
 
   return null;
