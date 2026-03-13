@@ -53,7 +53,7 @@ import { getRpcManagerInstance } from '../network/rpc-manager.js';
 import { getUltraTxEngine, initUltraTxEngine } from '../core/ultra-tx-engine.js';
 import { getEngineRouter } from '../execution/engine-router.js';
 import { createBatch, appendToBatch, isBatchWithinLimit, batchSummary, type SdkResult } from '../transaction/instruction-aggregator.js';
-import { resolveALTs } from '../transaction/alt-resolver.js';
+import { resolveALTs, verifyALTAccountOverlap, logMessageALTDiagnostics } from '../transaction/alt-resolver.js';
 import { ensureATAs } from '../transaction/ata-resolver.js';
 
 // ─── Pyth Price Service ──────────────────────────────────────────────────────
@@ -649,7 +649,7 @@ export class FlashClient implements IFlashClient {
   private async sendTx(
     instructions: TransactionInstruction[],
     additionalSigners: Signer[],
-    _poolConfig: PoolConfig,
+    poolConfig: PoolConfig,
     addressLookupTableAccounts?: AddressLookupTableAccount[],
   ): Promise<string> {
     const logger = getLogger();
@@ -669,12 +669,35 @@ export class FlashClient implements IFlashClient {
     // Any attempt to push/splice instructions after this point will throw.
     const validatedInstructions = Object.freeze([...instructions]);
 
+    // ── Resolve ALTs if not provided ──
+    // Flash SDK requires ALTs for all transactions (compresses account refs 32→1 byte).
+    // Auto-resolve from pool config when caller doesn't provide them.
+    let altAccounts = addressLookupTableAccounts;
+    if (!altAccounts) {
+      try {
+        altAccounts = await resolveALTs(this.perpClient, poolConfig);
+      } catch {
+        altAccounts = [];
+      }
+    }
+
+    // ── ALT diagnostics (first attempt only, debug level) ──
+    if (altAccounts.length > 0) {
+      const overlap = verifyALTAccountOverlap(instructions, altAccounts);
+      if (overlap.compressible > 0) {
+        logger.debug('ALT', `TX accounts: ${overlap.totalAccounts}, compressible via ALT: ${overlap.compressible} (${(overlap.compressionRatio * 100).toFixed(0)}%)`);
+      } else {
+        logger.debug('ALT', `TX has ${overlap.totalAccounts} accounts but 0 overlap with ALT — tables will have no effect`);
+      }
+    }
+
     // ── Route through Ultra-TX Engine when available ──
     const txEngine = getUltraTxEngine();
     if (txEngine) {
       const result = await txEngine.submitTransaction(
         [...validatedInstructions],
         additionalSigners,
+        altAccounts,
       );
       logger.info('CLIENT', `Ultra-TX: ${result.signature} (${result.metrics.totalLatencyMs}ms, ${result.metrics.confirmedViaWs ? 'WS' : 'HTTP'}, ${result.broadcastEndpoints} endpoints)`);
       // Reset session idle timer on successful trade
@@ -744,8 +767,14 @@ export class FlashClient implements IFlashClient {
           payerKey: this.wallet.publicKey,
           instructions: allIxs,
           recentBlockhash: blockhash,
-          addressLookupTableAccounts: addressLookupTableAccounts ?? [],
+          addressLookupTableAccounts: altAccounts ?? [],
         });
+
+        // Log ALT compilation result on first attempt
+        if (attempt === 1) {
+          logMessageALTDiagnostics(message, 'sendTx');
+        }
+
         const vtx = new VersionedTransaction(message);
         vtx.sign([this.wallet, ...additionalSigners]);
 
@@ -1545,12 +1574,18 @@ export class FlashClient implements IFlashClient {
     const cuPriceIx = ComputeBudgetProgram.setComputeUnitPrice({ microLamports: this.config.computeUnitPrice });
     const allIxs = [cuLimitIx, cuPriceIx, ...result.instructions];
 
+    // Resolve ALTs for accurate size preview
+    let previewALTs: AddressLookupTableAccount[] = [];
+    try {
+      previewALTs = await resolveALTs(this.perpClient, poolConfig);
+    } catch { /* non-critical for preview */ }
+
     const { blockhash } = await this.getBlockhash(this.connection);
     const message = MessageV0.compile({
       payerKey: this.wallet.publicKey,
       instructions: allIxs,
       recentBlockhash: blockhash,
-      addressLookupTableAccounts: [],
+      addressLookupTableAccounts: previewALTs,
     });
     const vtx = new VersionedTransaction(message);
     // DO NOT sign — this is a preview only

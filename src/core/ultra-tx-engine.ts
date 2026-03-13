@@ -24,6 +24,7 @@ import {
   VersionedTransaction,
   MessageV0,
   type Commitment,
+  type AddressLookupTableAccount,
 } from '@solana/web3.js';
 import { getLogger } from '../utils/logger.js';
 import { getRpcManagerInstance } from '../network/rpc-manager.js';
@@ -633,6 +634,7 @@ export class UltraTxEngine {
   async submitTransaction(
     instructions: TransactionInstruction[],
     additionalSigners: Signer[] = [],
+    addressLookupTableAccounts?: AddressLookupTableAccount[],
   ): Promise<TxSubmitResult> {
     // Concurrency guard — only one submitTransaction at a time
     if (this.submitInProgress) {
@@ -641,7 +643,7 @@ export class UltraTxEngine {
     this.submitInProgress = true;
 
     try {
-      return await this._submitTransactionInner(instructions, additionalSigners);
+      return await this._submitTransactionInner(instructions, additionalSigners, addressLookupTableAccounts);
     } finally {
       this.submitInProgress = false;
     }
@@ -650,6 +652,7 @@ export class UltraTxEngine {
   private async _submitTransactionInner(
     instructions: TransactionInstruction[],
     additionalSigners: Signer[],
+    addressLookupTableAccounts?: AddressLookupTableAccount[],
   ): Promise<TxSubmitResult> {
     const logger = getLogger();
     const pipelineStart = Date.now();
@@ -719,7 +722,7 @@ export class UltraTxEngine {
           payerKey: this.wallet.publicKey,
           instructions: allIxs,
           recentBlockhash: bh.blockhash,
-          addressLookupTableAccounts: [],
+          addressLookupTableAccounts: addressLookupTableAccounts ?? [],
         });
         const vtx = new VersionedTransaction(message);
         vtx.sign([this.wallet, ...additionalSigners]);
@@ -847,6 +850,7 @@ export class UltraTxEngine {
   async prebuildTransaction(
     instructions: TransactionInstruction[],
     additionalSigners: Signer[] = [],
+    addressLookupTableAccounts?: AddressLookupTableAccount[],
   ): Promise<{
     submit: () => Promise<TxSubmitResult>;
     blockhashAge: () => number;
@@ -863,7 +867,7 @@ export class UltraTxEngine {
       payerKey: this.wallet.publicKey,
       instructions: allIxs,
       recentBlockhash: bh.blockhash,
-      addressLookupTableAccounts: [],
+      addressLookupTableAccounts: addressLookupTableAccounts ?? [],
     });
     const vtx = new VersionedTransaction(message);
     vtx.sign([this.wallet, ...additionalSigners]);
@@ -878,7 +882,7 @@ export class UltraTxEngine {
         // If the prebuilt tx is too old, rebuild with fresh blockhash
         if ((Date.now() - builtAt) > 30_000) {
           getLogger().info('TX-ENGINE', 'Prebuilt tx expired — rebuilding with fresh blockhash');
-          return this.submitTransaction(instructions, additionalSigners);
+          return this.submitTransaction(instructions, additionalSigners, addressLookupTableAccounts);
         }
 
         // Concurrency guard — same as submitTransaction
