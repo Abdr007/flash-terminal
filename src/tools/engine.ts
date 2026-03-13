@@ -379,12 +379,6 @@ export class ToolEngine {
       case ActionType.EngineBenchmark:
         return { toolName: 'engine_benchmark', params: {} };
 
-      case ActionType.EngineSet:
-        return {
-          toolName: 'engine_set',
-          params: { engine: intent.engine, url: intent.url },
-        };
-
       default:
         return null;
     }

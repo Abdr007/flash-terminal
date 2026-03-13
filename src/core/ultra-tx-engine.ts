@@ -32,7 +32,7 @@ import { createConnection } from '../wallet/connection.js';
 import { getErrorMessage } from '../utils/retry.js';
 import { getLeaderRouter, initLeaderRouter, shutdownLeaderRouter } from './leader-router.js';
 import { getTpuClient } from '../network/tpu-client.js';
-import { getJitoClient } from '../network/jito-client.js';
+
 
 // ─── Configuration ───────────────────────────────────────────────────────────
 
@@ -96,8 +96,6 @@ export interface TxEngineConfig {
   wsConfirmation: boolean;
   /** Enable TPU direct forwarding (best-effort, parallel with RPC) */
   tpuForwarding: boolean;
-  /** Enable Jito bundle submission (parallel with RPC) */
-  jitoBundle: boolean;
   /** Require broadcast quorum (>=2 endpoints accept) before confirming */
   requireQuorum: boolean;
 }
@@ -143,8 +141,6 @@ export interface TxMetrics {
   submissionLatencyMs: number;
   /** Whether TPU direct forwarding was used */
   tpuForwarded: boolean;
-  /** Whether Jito bundle submission was used */
-  jitoSubmitted: boolean;
   /** RPC endpoint(s) used for broadcast */
   rpcEndpointsUsed: number;
 }
@@ -222,7 +218,6 @@ export class UltraTxEngine {
       multiBroadcast: config.multiBroadcast ?? true,
       wsConfirmation: config.wsConfirmation ?? true,
       tpuForwarding: config.tpuForwarding ?? true,
-      jitoBundle: config.jitoBundle ?? false, // Opt-in — requires Jito client init
       requireQuorum: config.requireQuorum ?? false, // Opt-in — needs multiple endpoints
     };
 
@@ -737,7 +732,6 @@ export class UltraTxEngine {
     let submittedAtSlot = 0;
     let submissionLatencyMs = 0;
     let tpuForwarded = false;
-    let jitoSubmitted = false;
 
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
       const conn = this.primaryConnection;
@@ -757,7 +751,7 @@ export class UltraTxEngine {
               totalLatencyMs: Date.now() - pipelineStart,
               broadcastCount: totalBroadcastCount, rebroadcastCount,
               confirmedViaWs: false, priorityFee, successAttempt: attempt - 1,
-              leaderRouted, submittedAtSlot, submissionLatencyMs, tpuForwarded, jitoSubmitted, rpcEndpointsUsed: totalBroadcastCount,
+              leaderRouted, submittedAtSlot, submissionLatencyMs, tpuForwarded, rpcEndpointsUsed: totalBroadcastCount,
             });
             return { signature: lastSignature, confirmationTimeMs: Date.now() - pipelineStart, attempts: attempt - 1, broadcastEndpoints: totalBroadcastCount, metrics };
           }
@@ -853,8 +847,6 @@ export class UltraTxEngine {
         let signature: string;
         let broadcastCount: number;
         let tpuForwarded = false;
-        let jitoSubmitted = false;
-
         const broadcastStart = Date.now();
 
         // ── TPU Direct Forwarding (fire-and-forget, parallel with RPC) ──
@@ -867,19 +859,6 @@ export class UltraTxEngine {
                 if (result.attempted) tpuForwarded = true;
               })
               .catch(() => {}); // TPU is best-effort
-          }
-        }
-
-        // ── Jito Bundle Submission (parallel with RPC) ──
-        if (this.config.jitoBundle) {
-          const jitoClient = getJitoClient();
-          if (jitoClient?.isOperational) {
-            // Non-blocking — fire in parallel
-            jitoClient.sendBundle(txBytes)
-              .then(result => {
-                if (result.accepted) jitoSubmitted = true;
-              })
-              .catch(() => {}); // Jito is best-effort
           }
         }
 
@@ -941,7 +920,7 @@ export class UltraTxEngine {
           broadcastCount: totalBroadcastCount, rebroadcastCount,
           confirmedViaWs, priorityFee, successAttempt: attempt,
           leaderRouted, submittedAtSlot, submissionLatencyMs,
-          tpuForwarded, jitoSubmitted, rpcEndpointsUsed: totalBroadcastCount,
+          tpuForwarded, rpcEndpointsUsed: totalBroadcastCount,
         });
 
         return {
@@ -1151,7 +1130,7 @@ export class UltraTxEngine {
             confirmedViaWs: confirmResult.confirmedViaWs,
             priorityFee, successAttempt: 1,
             leaderRouted, submittedAtSlot, submissionLatencyMs: 0,
-            tpuForwarded: false, jitoSubmitted: false, rpcEndpointsUsed: broadcastCount,
+            tpuForwarded: false, rpcEndpointsUsed: broadcastCount,
           });
 
           return {
@@ -1214,7 +1193,6 @@ export class UltraTxEngine {
     avgRebroadcastCount: number;
     leaderRoutedPct: number;
     tpuForwardedPct: number;
-    jitoSubmittedPct: number;
     avgSlotDelay: number;
     fastestEndpoint: string | null;
   } {
@@ -1226,7 +1204,7 @@ export class UltraTxEngine {
         avgCompileTimeMs: 0, avgSignTimeMs: 0, avgBroadcastTimeMs: 0, avgSubmissionLatencyMs: 0,
         p50ConfirmMs: 0, p95ConfirmMs: 0, wsConfirmPct: 0,
         avgBroadcastCount: 0, avgRebroadcastCount: 0,
-        leaderRoutedPct: 0, tpuForwardedPct: 0, jitoSubmittedPct: 0,
+        leaderRoutedPct: 0, tpuForwardedPct: 0,
         avgSlotDelay: 0, fastestEndpoint: null,
       };
     }
@@ -1263,7 +1241,6 @@ export class UltraTxEngine {
       avgRebroadcastCount: Math.round(avg(h.map(m => m.rebroadcastCount)) * 10) / 10,
       leaderRoutedPct: Math.round((leaderCount / h.length) * 100),
       tpuForwardedPct: Math.round((h.filter(m => m.tpuForwarded).length / h.length) * 100),
-      jitoSubmittedPct: Math.round((h.filter(m => m.jitoSubmitted).length / h.length) * 100),
       avgSlotDelay: routerMetrics?.avgSlotDelay ?? 0,
       fastestEndpoint: routerMetrics?.fastestEndpoint ?? null,
     };

@@ -26,7 +26,7 @@ import { shutdownStateCache } from '../core/state-cache.js';
 import { shutdownStateSnapshot } from '../core/state-snapshot.js';
 import { shutdownUltraTxEngine } from '../core/ultra-tx-engine.js';
 import { shutdownTpuClient } from '../network/tpu-client.js';
-import { shutdownJitoClient } from '../network/jito-client.js';
+
 import { loadPlugins, shutdownPlugins } from '../plugins/plugin-loader.js';
 import { StatusBar } from './status-bar.js';
 import { runDoctor } from '../tools/doctor.js';
@@ -37,7 +37,7 @@ import { buildFastDispatch } from './command-registry.js';
 import { getCommandGuidance } from '../utils/command-guidance.js';
 import { resolveMarket } from '../utils/market-resolver.js';
 import { computeSimulationLiquidationPrice, isDivergenceOk } from '../utils/protocol-liq.js';
-import { initEngineRouter, getEngineRouter, type ExecutionEngine } from '../execution/engine-router.js';
+
 
 /** Alias for backward compat — delegates to centralized resolver */
 function resolveMarketAlias(input: string): string {
@@ -221,19 +221,6 @@ export class FlashTerminal {
     this.rpcManager = initRpcManager(rpcEndpoints);
     const connection = this.rpcManager.connection;
 
-    // ─── Initialize Execution Engine Router ────────────────────────
-    if (!this.config.simulationMode) {
-      try {
-        initEngineRouter({
-          engine: this.config.executionEngine ?? 'rpc',
-          magicblockRpcUrl: this.config.magicblockRpcUrl,
-        });
-      } catch (err: unknown) {
-        console.log(chalk.yellow(`\n  ⚠ Engine router init failed: ${getErrorMessage(err)}`));
-        console.log(chalk.dim('    Falling back to standard RPC execution.'));
-        initEngineRouter({ engine: 'rpc' });
-      }
-    }
 
     // Warn if using public RPC for live trading
     if (!this.config.simulationMode && this.config.rpcUrl.includes('api.mainnet-beta.solana.com')) {
@@ -944,10 +931,6 @@ export class FlashTerminal {
         console.log(theme.pair('Address', theme.dim(walletAddr)));
       }
       console.log(theme.pair('Network', theme.value(this.config.network)));
-      const router = getEngineRouter();
-      if (router && router.engine !== 'rpc') {
-        console.log(theme.pair('Engine', theme.accent(router.label)));
-      }
       console.log('');
 
       // Use pre-fetched balance data (started before setup) — no extra RPC call
@@ -1408,11 +1391,6 @@ export class FlashTerminal {
       // Best-effort cleanup
     }
     try {
-      shutdownJitoClient();
-    } catch {
-      // Best-effort cleanup
-    }
-    try {
       shutdownUltraTxEngine();
     } catch {
       // Best-effort cleanup
@@ -1570,25 +1548,6 @@ export class FlashTerminal {
       const market = resolveMarketAlias(rawMarket);
       await this.handlePositionDebug(market);
       return;
-    } else if (lower.startsWith('engine set ') || lower.startsWith('set engine ')) {
-      const prefix = lower.startsWith('engine set ') ? 'engine set ' : 'set engine ';
-      const args = input.slice(prefix.length).trim().split(/\s+/);
-      const engineArg = args[0]?.toLowerCase();
-      if (engineArg === 'rpc') {
-        intent = { action: ActionType.EngineSet, engine: 'rpc' } as ParsedIntent;
-      } else if (engineArg === 'magicblock') {
-        const url = args[1] || undefined;
-        intent = { action: ActionType.EngineSet, engine: 'magicblock', url } as ParsedIntent;
-      } else {
-        console.log('');
-        console.log(chalk.yellow('  Invalid engine. Choose rpc or magicblock.'));
-        console.log('');
-        console.log(chalk.dim('  Usage:'));
-        console.log(`    ${chalk.bold('engine set rpc')}`);
-        console.log(`    ${chalk.bold('engine set magicblock <url>')}`);
-        console.log('');
-        return;
-      }
     } else if (lower.startsWith('dryrun ') || lower.startsWith('dry-run ') || lower.startsWith('dry run ')) {
       const prefix = lower.startsWith('dryrun ') ? 'dryrun ' : lower.startsWith('dry-run ') ? 'dry-run ' : 'dry run ';
       const innerCmd = input.slice(prefix.length).trim();

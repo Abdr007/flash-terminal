@@ -114,7 +114,6 @@ export enum ActionType {
   EarnStatus = 'earn_status',
   EngineStatus = 'engine_status',
   EngineBenchmark = 'engine_benchmark',
-  EngineSet = 'engine_set',
 }
 
 // ─── Zod Schemas for Intent Parsing ──────────────────────────────────────────
@@ -471,12 +470,6 @@ export const EngineBenchmarkSchema = z.object({
   action: z.literal(ActionType.EngineBenchmark),
 });
 
-export const EngineSetSchema = z.object({
-  action: z.literal(ActionType.EngineSet),
-  engine: z.enum(['rpc', 'magicblock']),
-  url: z.string().optional(),
-});
-
 export const ParsedIntentSchema = z.discriminatedUnion('action', [
   OpenPositionSchema,
   ClosePositionSchema,
@@ -546,7 +539,6 @@ export const ParsedIntentSchema = z.discriminatedUnion('action', [
   EarnStatusSchema,
   EngineStatusSchema,
   EngineBenchmarkSchema,
-  EngineSetSchema,
 ]);
 
 export type ParsedIntent = z.infer<typeof ParsedIntentSchema>;
@@ -1097,10 +1089,6 @@ export interface FlashConfig {
   minDelayBetweenTradesMs: number;
   /** Disable plugin loading (--no-plugins flag) */
   noPlugins?: boolean;
-  /** Execution engine: 'rpc' (default) or 'magicblock' */
-  executionEngine?: 'rpc' | 'magicblock';
-  /** MagicBlock RPC endpoint URL */
-  magicblockRpcUrl?: string;
 }
 
 // ─── Simulation Types ────────────────────────────────────────────────────────

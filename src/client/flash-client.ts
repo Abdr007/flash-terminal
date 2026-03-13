@@ -54,7 +54,7 @@ import { getUltraTxEngine, initUltraTxEngine } from '../core/ultra-tx-engine.js'
 import { initStateCache, getStateCache, shutdownStateCache } from '../core/state-cache.js';
 import { initStateSnapshot, shutdownStateSnapshot } from '../core/state-snapshot.js';
 import { initTpuClient, getTpuClient, shutdownTpuClient } from '../network/tpu-client.js';
-import { getEngineRouter } from '../execution/engine-router.js';
+
 import { createBatch, appendToBatch, isBatchWithinLimit, batchSummary, type SdkResult } from '../transaction/instruction-aggregator.js';
 import { resolveALTs, verifyALTAccountOverlap, logMessageALTDiagnostics } from '../transaction/alt-resolver.js';
 import { ensureATAs, buildATAIdempotentIxs } from '../transaction/ata-resolver.js';
@@ -835,43 +835,7 @@ export class FlashClient implements IFlashClient {
 
         const txBytes = Buffer.from(vtx.serialize());
 
-        // ── Route through execution engine (MagicBlock or RPC) ──
-        // The engine router handles send + confirm for MagicBlock, with
-        // automatic fallback to RPC on failure. For standard RPC mode,
-        // it delegates directly to the rpcSend callback below.
-        const engineRouter = getEngineRouter();
-        if (engineRouter && engineRouter.engine === 'magicblock') {
-          try {
-            const engineResult = await engineRouter.executeTransaction(
-              txBytes,
-              async (bytes) => {
-                const sig = await conn.sendRawTransaction(bytes, { skipPreflight: true, maxRetries: 3 });
-                return sig;
-              },
-            );
-            lastSignature = engineResult.signature;
-            if (engineResult.fallback) {
-              logger.info('CLIENT', `MagicBlock fallback → RPC: ${engineResult.signature}`);
-              // Fall through to standard RPC confirmation loop below
-            } else {
-              logger.info('CLIENT', `MagicBlock confirmed: ${engineResult.signature} (${engineResult.latencyMs}ms)`);
-              process.stdout.write('                              \r');
-              this.walletMgr.resetIdleTimer();
-              this.walletMgr.clearBalanceCache();
-              return engineResult.signature;
-            }
-          } catch (engineErr: unknown) {
-            const engineMsg = getErrorMessage(engineErr);
-            if (engineMsg.includes('failed on-chain')) {
-              process.stdout.write('                              \r');
-              throw engineErr;
-            }
-            logger.warn('CLIENT', `Engine router error: ${engineMsg} — using standard RPC`);
-            // Fall through to standard RPC path
-          }
-        }
-
-        const signatureStr = lastSignature || await conn.sendRawTransaction(txBytes, {
+        const signatureStr = await conn.sendRawTransaction(txBytes, {
           skipPreflight: true,
           maxRetries: 3,
         });
@@ -1204,7 +1168,8 @@ export class FlashClient implements IFlashClient {
       }
 
       // swapAndOpen does more work (swap + open in one ix) → needs higher CU
-      const cuOverride = isSwapAndOpen ? Math.max(this.config.computeUnitLimit, 450_000) : undefined;
+      // 420k matches Flash UI's CU limit — actual consumption is ~104k so 4x headroom
+      const cuOverride = isSwapAndOpen ? Math.max(this.config.computeUnitLimit, 420_000) : undefined;
 
       const txSignature = await this.sendTx(allInstructions, result.additionalSigners, poolConfig, undefined, cuOverride);
       this.recordRecentTrade(cacheKey);
