@@ -1048,8 +1048,27 @@ export class FlashClient implements IFlashClient {
       logger.debug('TRADE', `Instruction routing: market=${market} side=${sideStr} ` +
         `inputToken=${inputToken.symbol} marketCollateral=${marketCollateralSymbol}`);
 
+      // ── Check if a position already exists → use increaseSize instead of openPosition ──
+      // Flash Trade protocol rejects openPosition when a same-market same-side position exists.
+      // In that case, use increaseSize to merge into the existing position.
+      let existingPositionPubkey: PublicKey | null = null;
+      try {
+        const { position } = await this.findUserPosition(poolConfig, market, side);
+        existingPositionPubkey = position.pubkey;
+        logger.info('TRADE', `Existing ${sideStr} position found on ${market} — will increaseSize`);
+      } catch {
+        // No existing position — will open new
+      }
+
       let result: { instructions: TransactionInstruction[]; additionalSigners: Signer[] };
-      if (inputToken.symbol === marketCollateralSymbol) {
+      if (existingPositionPubkey) {
+        // Increase existing position size
+        logger.debug('TRADE', `Using increaseSize(${targetToken.symbol}, ${marketCollateralSymbol}, ${existingPositionPubkey.toBase58()})`);
+        result = await this.perpClient.increaseSize(
+          targetToken.symbol, marketCollateralSymbol, existingPositionPubkey,
+          sdkSide, poolConfig, priceAfterSlippage, sizeAmount, Privilege.None
+        );
+      } else if (inputToken.symbol === marketCollateralSymbol) {
         // User's input token matches the market's collateral custody → direct open
         logger.debug('TRADE', `Using openPosition(${targetToken.symbol}, ${marketCollateralSymbol})`);
         result = await this.perpClient.openPosition(
