@@ -117,6 +117,8 @@ export const ClosePositionSchema = z.object({
   action: z.literal(ActionType.ClosePosition),
   market: z.string().max(20),
   side: z.nativeEnum(TradeSide),
+  closePercent: z.number().min(1).max(100).optional(),
+  closeAmount: z.number().positive().optional(),
 });
 
 export const AddCollateralSchema = z.object({
@@ -476,6 +478,9 @@ export interface ClosePositionResult {
   txSignature: string;
   exitPrice: number;
   pnl: number;
+  closedSizeUsd?: number;
+  remainingSizeUsd?: number;
+  isPartial?: boolean;
 }
 
 export interface CollateralResult {
@@ -736,7 +741,9 @@ export interface IFlashClient {
   closePosition(
     market: string,
     side: TradeSide,
-    receiveToken?: string
+    receiveToken?: string,
+    closePercent?: number,
+    closeAmount?: number
   ): Promise<ClosePositionResult>;
 
   addCollateral(
@@ -876,7 +883,7 @@ export interface ToolContext {
 
 /** A trade executed during the current terminal session. */
 export interface SessionTrade {
-  action: 'open' | 'close' | 'add_collateral' | 'remove_collateral';
+  action: 'open' | 'close' | 'partial_close' | 'add_collateral' | 'remove_collateral';
   market: string;
   side: string;
   leverage?: number;

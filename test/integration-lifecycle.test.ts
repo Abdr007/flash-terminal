@@ -204,15 +204,15 @@ describe('Integration: Trade Lifecycle', () => {
 
   // ─── Error Handling ──────────────────────────────────────────────────
 
-  it('duplicate position rejected in lifecycle', async () => {
+  it('duplicate position merges in lifecycle (increaseSize)', async () => {
     await client.openPosition('SOL', TradeSide.Long, 100, 5);
-    await expect(
-      client.openPosition('SOL', TradeSide.Long, 50, 3)
-    ).rejects.toThrow(/already have an open/i);
+    const result = await client.openPosition('SOL', TradeSide.Long, 50, 3);
+    expect(result).toBeDefined();
 
-    // Original position unaffected
-    const pos = (await client.getPositions())[0];
-    expect(pos.sizeUsd).toBe(500);
+    // Position should be merged: 500 + 150 = 650
+    const pos = (await client.getPositions()).find(p => p.market === 'SOL' && p.side === TradeSide.Long);
+    expect(pos).toBeDefined();
+    expect(pos!.sizeUsd).toBeCloseTo(650, 0);
   });
 
   it('close non-existent position rejected', async () => {

@@ -50,7 +50,7 @@ export interface TradeLimitCheck {
 
 export interface SigningAuditEntry {
   timestamp: string;
-  type: 'open' | 'close' | 'add_collateral' | 'remove_collateral';
+  type: 'open' | 'close' | 'partial_close' | 'add_collateral' | 'remove_collateral';
   market: string;
   side?: string;
   collateral?: number;

@@ -5,6 +5,15 @@ import { getAllMarkets } from '../config/index.js';
 import { getLogger } from '../utils/logger.js';
 import { getErrorMessage } from '../utils/retry.js';
 import { resolveMarket, normalizeAssetText } from '../utils/market-resolver.js';
+import {
+  detectMalformedCommand,
+  invalidLeverageAlert,
+  invalidCollateralAlert,
+  invalidPercentageAlert,
+  invalidPriceAlert,
+  unknownMarketAlert,
+  type CommandAlert,
+} from '../utils/command-alerts.js';
 
 const SYSTEM_PROMPT = `You are the Flash Terminal intent parser. You convert natural language trading commands into structured JSON actions.
 
@@ -61,6 +70,9 @@ Examples:
 - "open a 5x long on SOL with $500" -> {"action":"open_position","market":"SOL","side":"long","collateral":500,"leverage":5}
 - "open 2x eth long for 10 dollars set tp 2300 and sl 1950" -> {"action":"open_position","market":"ETH","side":"long","collateral":10,"leverage":2,"takeProfit":2300,"stopLoss":1950}
 - "close my SOL long" -> {"action":"close_position","market":"SOL","side":"long"}
+- "close SOL long 50%" -> {"action":"close_position","market":"SOL","side":"long","closePercent":50}
+- "close SOL long $20" -> {"action":"close_position","market":"SOL","side":"long","closeAmount":20}
+- "close 25% of my BTC short" -> {"action":"close_position","market":"BTC","side":"short","closePercent":25}
 - "add $200 collateral to my BTC short" -> {"action":"add_collateral","market":"BTC","side":"short","amount":200}
 - "remove $100 from my ETH long" -> {"action":"remove_collateral","market":"ETH","side":"long","amount":100}
 - "set tp btc long to 75000" -> {"action":"set_tp_sl","market":"BTC","side":"long","type":"tp","price":75000}
@@ -254,6 +266,104 @@ function normalizeAssetAliases(text: string): string {
   return normalizeAssetText(text);
 }
 
+// ─── Command Aliases ──────────────────────────────────────────────────────
+// Short aliases expand to full command prefixes before parsing.
+// Only applied when the alias is the first token.
+const COMMAND_ALIASES: Record<string, string> = {
+  o: 'open',
+  c: 'close',
+  p: 'positions',
+  pos: 'positions',
+  m: 'monitor',
+  w: 'wallet',
+  d: 'dashboard',
+  b: 'portfolio',    // "b" for balance
+  bal: 'portfolio',
+};
+
+/** Expand single-letter/short command aliases at the start of input. */
+function expandAliases(input: string): string {
+  const spaceIdx = input.indexOf(' ');
+  const firstToken = spaceIdx === -1 ? input : input.slice(0, spaceIdx);
+  const rest = spaceIdx === -1 ? '' : input.slice(spaceIdx);
+  const expanded = COMMAND_ALIASES[firstToken.toLowerCase()];
+  if (expanded) return expanded + rest;
+  return input;
+}
+
+// ─── Post-Parse Validation ────────────────────────────────────────────────
+// Validates parsed intent parameters and returns an alert if invalid.
+
+/** Validate a parsed intent's parameters. Returns an alert if invalid, null if ok. */
+export function validateIntent(intent: ParsedIntent): CommandAlert | null {
+  const i = intent as Record<string, unknown>;
+
+  // Leverage validation
+  if (typeof i.leverage === 'number') {
+    if (!Number.isFinite(i.leverage) || i.leverage < 1.1 || i.leverage > 100) {
+      return invalidLeverageAlert(i.leverage);
+    }
+  }
+
+  // Collateral validation
+  if (typeof i.collateral === 'number') {
+    if (!Number.isFinite(i.collateral) || i.collateral <= 0) {
+      return invalidCollateralAlert(i.collateral);
+    }
+  }
+
+  // Amount validation (add/remove collateral)
+  if (typeof i.amount === 'number') {
+    if (!Number.isFinite(i.amount) || i.amount <= 0) {
+      return invalidCollateralAlert(i.amount);
+    }
+  }
+
+  // Close percentage validation
+  if (typeof i.closePercent === 'number') {
+    if (!Number.isFinite(i.closePercent) || i.closePercent < 1 || i.closePercent > 100) {
+      return invalidPercentageAlert(i.closePercent);
+    }
+  }
+
+  // Close amount validation
+  if (typeof i.closeAmount === 'number') {
+    if (!Number.isFinite(i.closeAmount) || i.closeAmount <= 0) {
+      return invalidCollateralAlert(i.closeAmount);
+    }
+  }
+
+  // Price validation (TP/SL, limit orders)
+  if (typeof i.price === 'number') {
+    if (!Number.isFinite(i.price) || i.price <= 0) {
+      return invalidPriceAlert(i.price);
+    }
+  }
+  if (typeof i.limitPrice === 'number') {
+    if (!Number.isFinite(i.limitPrice) || i.limitPrice <= 0) {
+      return invalidPriceAlert(i.limitPrice);
+    }
+  }
+
+  // Market validation (only for trading actions that require a valid market)
+  if (typeof i.market === 'string' && i.market) {
+    const tradingActions = [
+      ActionType.OpenPosition, ActionType.ClosePosition,
+      ActionType.AddCollateral, ActionType.RemoveCollateral,
+      ActionType.SetTpSl, ActionType.RemoveTpSl,
+      ActionType.LimitOrder,
+    ];
+    if (tradingActions.includes(intent.action as ActionType)) {
+      const allMarkets = getAllMarkets();
+      if (!allMarkets.includes(i.market as string)) {
+        return unknownMarketAlert(i.market as string);
+      }
+    }
+  }
+
+  return null;
+}
+
 /**
  * Fast local regex-based parser for common commands.
  * Exported so it can be used by both AIInterpreter and OfflineInterpreter.
@@ -261,8 +371,10 @@ function normalizeAssetAliases(text: string): string {
 export function localParse(input: string): ParsedIntent | null {
   // Sanitize: collapse whitespace (tabs, newlines, etc.) to single spaces, strip control chars
   const sanitized = input.replace(/[\x00-\x1f\x7f]/g, ' ').replace(/\s+/g, ' ').trim();
+  // Expand command aliases: "o" → "open", "c" → "close", etc.
+  const aliased = expandAliases(sanitized);
   // Pre-process: normalize number words and asset aliases
-  const normalized = normalizeAssetAliases(normalizeNumberWords(sanitized));
+  const normalized = normalizeAssetAliases(normalizeNumberWords(aliased));
   const lower = normalized.toLowerCase();
 
   // Help
@@ -527,18 +639,57 @@ export function localParse(input: string): ParsedIntent | null {
     };
   }
 
-  // Close position: "close SOL long", "close my SOL position", "close SOL"
+  // Close position with amount/percent before market: "close 50% of SOL long", "close $20 of BTC short"
+  const closePrefixMatch = lower.match(
+    /^(?:close|exit|sell)\s+(\d+(?:\.\d+)?)\s*(%|percent)\s+(?:of\s+)?(?:my\s+)?([a-z]+)\s+(long|short)/
+  );
+  if (closePrefixMatch) {
+    const side = parseSide(closePrefixMatch[4]);
+    if (side) {
+      return {
+        action: ActionType.ClosePosition,
+        market: resolveMarket(closePrefixMatch[3]),
+        side,
+        closePercent: parseFloat(closePrefixMatch[1]),
+      } as ParsedIntent;
+    }
+  }
+  const closePrefixAmtMatch = lower.match(
+    /^(?:close|exit|sell)\s+\$(\d+(?:\.\d+)?)\s+(?:of\s+|from\s+)?(?:my\s+)?([a-z]+)\s+(long|short)/
+  );
+  if (closePrefixAmtMatch) {
+    const side = parseSide(closePrefixAmtMatch[3]);
+    if (side) {
+      return {
+        action: ActionType.ClosePosition,
+        market: resolveMarket(closePrefixAmtMatch[2]),
+        side,
+        closeAmount: parseFloat(closePrefixAmtMatch[1]),
+      } as ParsedIntent;
+    }
+  }
+
+  // Close position: "close SOL long", "close SOL long 50%", "close SOL long $20"
   const closeMatch = lower.match(
-    /^(?:close|exit|sell)\s+(?:my\s+)?([a-z]+)\s+(long|short)(?:\s+position)?$/
+    /^(?:close|exit|sell)\s+(?:my\s+)?([a-z]+)\s+(long|short)(?:\s+position)?\s*(.*)$/
   );
   if (closeMatch) {
     const side = parseSide(closeMatch[2]);
     if (side) {
-      return {
+      const result: Record<string, unknown> = {
         action: ActionType.ClosePosition,
         market: resolveMarket(closeMatch[1]),
         side,
       };
+      // Parse optional partial close suffix: "50%", "$20", "25 percent"
+      const suffix = closeMatch[3].trim();
+      if (suffix) {
+        const pctMatch = suffix.match(/^(\d+(?:\.\d+)?)\s*(?:%|percent)$/);
+        const amtMatch = suffix.match(/^\$(\d+(?:\.\d+)?)$/);
+        if (pctMatch) result.closePercent = parseFloat(pctMatch[1]);
+        else if (amtMatch) result.closeAmount = parseFloat(amtMatch[1]);
+      }
+      return result as ParsedIntent;
     }
   }
 
@@ -815,6 +966,12 @@ export class AIInterpreter {
     // Try local pattern matching first for speed
     const localResult = localParse(userInput);
     if (localResult) {
+      // Validate parameters before returning
+      const alert = validateIntent(localResult);
+      if (alert) {
+        logger.debug('AI', 'Validation failed', { input: userInput, alert: alert.type });
+        return { action: ActionType.Help, _alert: alert } as ParsedIntent;
+      }
       logger.debug('AI', 'Parsed locally', { input: userInput, action: localResult.action });
       this.updateContext(localResult);
       return localResult;
@@ -828,6 +985,13 @@ export class AIInterpreter {
       return contextResult;
     }
 
+    // Check if this looks like a malformed known command before going to AI
+    const malformed = detectMalformedCommand(userInput);
+    if (malformed) {
+      logger.debug('AI', 'Detected malformed command', { input: userInput, alert: malformed.type });
+      return { action: ActionType.Help, _alert: malformed } as ParsedIntent;
+    }
+
     // Input length limit before sending to AI
     if (userInput.length > AIInterpreter.MAX_INPUT_LENGTH) {
       logger.info('AI', `Input too long (${userInput.length} chars, max ${AIInterpreter.MAX_INPUT_LENGTH})`);
@@ -837,12 +1001,27 @@ export class AIInterpreter {
     // Try primary AI provider first, then Groq as fallback
     if (this.anthropic) {
       const result = await this.tryAnthropic(userInput);
-      if (result) { this.updateContext(result); return result; }
+      if (result) {
+        // Validate AI-parsed result too
+        const alert = validateIntent(result);
+        if (alert) {
+          return { action: ActionType.Help, _alert: alert } as ParsedIntent;
+        }
+        this.updateContext(result);
+        return result;
+      }
     }
 
     if (this.groq) {
       const result = await this.tryGroq(userInput);
-      if (result) { this.updateContext(result); return result; }
+      if (result) {
+        const alert = validateIntent(result);
+        if (alert) {
+          return { action: ActionType.Help, _alert: alert } as ParsedIntent;
+        }
+        this.updateContext(result);
+        return result;
+      }
     }
 
     logger.info('AI', 'No AI provider available. Using local parsing only.');
@@ -1025,6 +1204,11 @@ export class OfflineInterpreter {
   async parseIntent(userInput: string): Promise<ParsedIntent> {
     const result = localParse(userInput);
     if (result) {
+      // Validate parameters
+      const alert = validateIntent(result);
+      if (alert) {
+        return { action: ActionType.Help, _alert: alert } as ParsedIntent;
+      }
       this.updateContext(result);
       return result;
     }
@@ -1033,6 +1217,12 @@ export class OfflineInterpreter {
     if (contextResult) {
       this.updateContext(contextResult);
       return contextResult;
+    }
+
+    // Check for malformed known commands
+    const malformed = detectMalformedCommand(userInput);
+    if (malformed) {
+      return { action: ActionType.Help, _alert: malformed } as ParsedIntent;
     }
 
     getLogger().warn('AI', 'Could not parse locally. Set an AI API key for AI-powered parsing.');

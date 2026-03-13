@@ -80,7 +80,10 @@ export class ToolEngine {
       case ActionType.ClosePosition:
         return {
           toolName: 'flash_close_position',
-          params: { market: intent.market, side: intent.side },
+          params: {
+            market: intent.market, side: intent.side,
+            closePercent: intent.closePercent, closeAmount: intent.closeAmount,
+          },
         };
 
       case ActionType.AddCollateral:

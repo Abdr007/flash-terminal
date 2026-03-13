@@ -407,13 +407,17 @@ export const flashOpenPosition: ToolDefinition = {
 
 export const flashClosePosition: ToolDefinition = {
   name: 'flash_close_position',
-  description: 'Close an existing trading position',
+  description: 'Close an existing trading position (full or partial)',
   parameters: z.object({
     market: z.string(),
     side: z.nativeEnum(TradeSide),
+    closePercent: z.number().min(1).max(100).optional(),
+    closeAmount: z.number().positive().optional(),
   }),
   execute: async (params, context): Promise<ToolResult> => {
-    const { market, side } = params as { market: string; side: TradeSide };
+    const { market, side, closePercent, closeAmount } = params as {
+      market: string; side: TradeSide; closePercent?: number; closeAmount?: number;
+    };
 
     const validationError = validateLiveTradeContext(context);
     if (validationError) {
@@ -466,27 +470,50 @@ export const flashClosePosition: ToolDefinition = {
       return { success: false, message: chalk.red(`  ${rateCheck.reason}`) };
     }
 
-    // Pre-check: verify position exists before showing confirmation
+    // Pre-check: verify position exists and validate partial close
+    let positionSizeUsd = 0;
     try {
       const positions = await context.flashClient.getPositions();
-      const exists = positions.some(p =>
+      const pos = positions.find(p =>
         (p.market ?? '').toUpperCase() === market.toUpperCase() && p.side === side,
       );
-      if (!exists) {
+      if (!pos) {
         return { success: false, message: chalk.red(`  No open ${side} position on ${market}.`) };
+      }
+      positionSizeUsd = pos.sizeUsd;
+
+      // Validate partial close amount
+      if (closePercent !== undefined) {
+        if (closePercent > 100) {
+          return { success: false, message: chalk.red(`  Close percentage cannot exceed 100%.`) };
+        }
+      }
+      if (closeAmount !== undefined && closeAmount > positionSizeUsd) {
+        return { success: false, message: chalk.red(`  Close amount $${closeAmount.toFixed(2)} exceeds position size $${positionSizeUsd.toFixed(2)}.`) };
       }
     } catch {
       // Non-critical: let the close attempt handle the error
     }
 
+    // Build close description
+    const isPartialClose = (closePercent !== undefined && closePercent < 100) || closeAmount !== undefined;
+    let closeDesc = 'Full Close';
+    if (closePercent !== undefined && closePercent < 100) {
+      closeDesc = `Partial Close — ${closePercent}%`;
+    } else if (closeAmount !== undefined) {
+      closeDesc = `Partial Close — $${closeAmount.toFixed(2)}`;
+    }
+
     // Position details for close confirmation
     const posLines = await buildPositionPreview(context, market, side);
+    const titleLabel = isPartialClose ? 'Partial Close Position' : 'Close Position';
     const closeLines = [
       '',
-      isLive ? chalk.red.bold('  CONFIRM TRANSACTION — Close Position') : chalk.yellow('  CONFIRM TRANSACTION — Close Position'),
+      isLive ? chalk.red.bold(`  CONFIRM TRANSACTION — ${titleLabel}`) : chalk.yellow(`  CONFIRM TRANSACTION — ${titleLabel}`),
       chalk.dim('  ─────────────────────────────────'),
       `  Market:  ${chalk.bold(market)} ${colorSide(side)}`,
       `  Pool:    ${chalk.cyan(pool)}`,
+      `  Action:  ${chalk.bold(closeDesc)}`,
       ...posLines,
       `  Wallet:  ${chalk.dim(walletAddr)}`,
       isLive ? `\n${chalk.red('  This will execute a REAL on-chain transaction.')}` : '',
@@ -504,7 +531,9 @@ export const flashClosePosition: ToolDefinition = {
           const journal = getTradeJournal();
           const journalId = journal.recordPending({ market, side: side.toString(), action: 'close' });
           try {
-            const result = await context.flashClient.closePosition(market, side);
+            const result = await context.flashClient.closePosition(
+              market, side, undefined, closePercent, closeAmount
+            );
 
             // Journal: confirmed
             journal.recordSent(journalId, result.txSignature);
@@ -519,17 +548,16 @@ export const flashClosePosition: ToolDefinition = {
             guard.recordSigning();
             guard.logAudit({
               timestamp: new Date().toISOString(),
-              type: 'close', market, side,
+              type: result.isPartial ? 'partial_close' : 'close', market, side,
               walletAddress: walletAddr,
               result: 'confirmed',
             });
 
             // Log session trade
             if (context.sessionTrades) {
-              // Cap session trades to prevent unbounded memory growth in long sessions
               if (context.sessionTrades.length >= 500) context.sessionTrades.shift();
               context.sessionTrades.push({
-                action: 'close', market, side,
+                action: result.isPartial ? 'partial_close' : 'close', market, side,
                 exitPrice: result.exitPrice, pnl: result.pnl,
                 txSignature: result.txSignature, timestamp: Date.now(),
               });
@@ -539,25 +567,40 @@ export const flashClosePosition: ToolDefinition = {
             const txLink = context.simulationMode
               ? result.txSignature
               : `https://solscan.io/tx/${result.txSignature}`;
-            logTradeSuccess('close', market, side, { txSignature: result.txSignature, exitPrice: result.exitPrice, pnl: result.pnl });
+            const tradeType = result.isPartial ? 'partial_close' : 'close';
+            logTradeSuccess(tradeType, market, side, { txSignature: result.txSignature, exitPrice: result.exitPrice, pnl: result.pnl });
 
             // Shadow trade — fire-and-forget, completely isolated
-            try {
-              const shadowResult = await getShadowEngine().shadowClose(market, side);
-              if (shadowResult) logShadowTrade(shadowResult);
-            } catch { /* shadow must never affect live pipeline */ }
+            if (!result.isPartial) {
+              try {
+                const shadowResult = await getShadowEngine().shadowClose(market, side);
+                if (shadowResult) logShadowTrade(shadowResult);
+              } catch { /* shadow must never affect live pipeline */ }
+            }
+
+            // Build output message
+            const outputLines = [''];
+            if (result.isPartial) {
+              outputLines.push(chalk.green('  Partial Close Executed'));
+              outputLines.push(chalk.dim('  ─────────────────'));
+              outputLines.push(`  Market:     ${chalk.bold(market)} ${colorSide(side)}`);
+              outputLines.push(`  Closed:     ${formatUsd(result.closedSizeUsd ?? 0)}`);
+              outputLines.push(`  Remaining:  ${formatUsd(result.remainingSizeUsd ?? 0)}`);
+              outputLines.push(`  Exit Price: ${formatPrice(result.exitPrice)}`);
+              if (pnlStr) outputLines.push(pnlStr.trimEnd());
+              outputLines.push(`  TX: ${chalk.dim(txLink)}`);
+            } else {
+              outputLines.push(chalk.green('  Position Closed'));
+              outputLines.push(chalk.dim('  ─────────────────'));
+              outputLines.push(`  Exit Price: ${formatPrice(result.exitPrice)}`);
+              if (pnlStr) outputLines.push(pnlStr.trimEnd());
+              outputLines.push(`  TX: ${chalk.dim(txLink)}`);
+            }
+            outputLines.push('');
 
             return {
               success: true,
-              message: [
-                '',
-                chalk.green('  Position Closed'),
-                chalk.dim('  ─────────────────'),
-                `  Exit Price: ${formatPrice(result.exitPrice)}`,
-                pnlStr,
-                `  TX: ${chalk.dim(txLink)}`,
-                '',
-              ].join('\n'),
+              message: outputLines.join('\n'),
               txSignature: result.txSignature,
             };
           } catch (error: unknown) {

@@ -266,11 +266,17 @@ export class SimulatedFlashClient implements IFlashClient {
     return { txSignature: txSig, entryPrice: finalEntryPrice, liquidationPrice, sizeUsd };
   }
 
-  async closePosition(market: string, side: TradeSide): Promise<ClosePositionResult> {
-    return this.withTradeLock(() => this._closePosition(market, side));
+  async closePosition(
+    market: string, side: TradeSide, _receiveToken?: string,
+    closePercent?: number, closeAmount?: number
+  ): Promise<ClosePositionResult> {
+    return this.withTradeLock(() => this._closePosition(market, side, closePercent, closeAmount));
   }
 
-  private async _closePosition(market: string, side: TradeSide): Promise<ClosePositionResult> {
+  private async _closePosition(
+    market: string, side: TradeSide,
+    closePercent?: number, closeAmount?: number
+  ): Promise<ClosePositionResult> {
     const logger = getLogger();
     await this.refreshPrices();
 
@@ -284,27 +290,58 @@ export class SimulatedFlashClient implements IFlashClient {
     const price = this.getPrice(market);
     const priceDelta = price - position.entryPrice;
     const pnlMultiplier = side === TradeSide.Long ? 1 : -1;
-    const pnl = position.entryPrice > 0
+    const fullPnl = position.entryPrice > 0
       ? (priceDelta / position.entryPrice) * position.sizeUsd * pnlMultiplier
       : 0;
 
+    // Determine close fraction
+    const isPartial = (closePercent !== undefined && closePercent < 100) ||
+                      (closeAmount !== undefined);
+    let closeFraction = 1;
+    if (closePercent !== undefined && closePercent < 100) {
+      closeFraction = closePercent / 100;
+    } else if (closeAmount !== undefined) {
+      if (closeAmount > position.sizeUsd) {
+        throw new Error(`Close amount $${closeAmount.toFixed(2)} exceeds position size $${position.sizeUsd.toFixed(2)}`);
+      }
+      closeFraction = closeAmount / position.sizeUsd;
+    }
+
+    // If remaining would be tiny (< $0.50), close fully
+    const remainingSize = position.sizeUsd * (1 - closeFraction);
+    const shouldFullClose = !isPartial || remainingSize < 0.50 || closeFraction >= 1;
+    const effectiveFraction = shouldFullClose ? 1 : closeFraction;
+
+    const closedSizeUsd = position.sizeUsd * effectiveFraction;
+    const closedCollateral = position.collateralUsd * effectiveFraction;
+    const pnl = fullPnl * effectiveFraction;
+
     // Close fee from protocol
     const closeFeeRates = await getProtocolFeeRates(market, null);
-    const closeFee = calcFeeUsd(position.sizeUsd, closeFeeRates.closeFeeRate);
+    const closeFee = calcFeeUsd(closedSizeUsd, closeFeeRates.closeFeeRate);
     this.state.totalFeesPaid += closeFee;
     this.state.totalRealizedPnl += pnl;
 
-    // Floor balance at zero (liquidation scenario: collateral + PnL - fee < 0)
-    const returnAmount = position.collateralUsd + pnl - closeFee;
+    // Floor balance at zero
+    const returnAmount = closedCollateral + pnl - closeFee;
     this.state.balance += Math.max(returnAmount, 0);
-    this.state.positions.splice(idx, 1);
+
+    if (shouldFullClose) {
+      this.state.positions.splice(idx, 1);
+    } else {
+      // Reduce position size proportionally
+      position.sizeUsd -= closedSizeUsd;
+      position.collateralUsd -= closedCollateral;
+      position.leverage = position.collateralUsd > 0 ? position.sizeUsd / position.collateralUsd : 0;
+    }
+
     this.state.tradeHistory.push({
       id: position.id,
-      action: 'close',
+      action: shouldFullClose ? 'close' : 'partial_close',
       market: position.market,
       side,
-      sizeUsd: position.sizeUsd,
-      collateralUsd: position.collateralUsd,
+      sizeUsd: closedSizeUsd,
+      collateralUsd: closedCollateral,
       leverage: position.leverage,
       price,
       entryPrice: position.entryPrice,
@@ -313,10 +350,18 @@ export class SimulatedFlashClient implements IFlashClient {
     });
     this.trimHistory();
 
-    const txSig = `SIM_CLOSE_${position.id}`;
-    logger.trade('CLOSE', { market, side, pnl, price, tx: txSig });
+    const txSig = shouldFullClose ? `SIM_CLOSE_${position.id}` : `SIM_PARTIAL_CLOSE_${position.id}`;
+    const closeAction = shouldFullClose ? 'CLOSE' : 'PARTIAL_CLOSE';
+    logger.trade(closeAction, { market, side, pnl, price, closedSizeUsd, tx: txSig });
 
-    return { txSignature: txSig, exitPrice: price, pnl };
+    return {
+      txSignature: txSig,
+      exitPrice: price,
+      pnl,
+      isPartial: isPartial && !shouldFullClose,
+      closedSizeUsd,
+      remainingSizeUsd: shouldFullClose ? 0 : position.sizeUsd,
+    };
   }
 
   async addCollateral(market: string, side: TradeSide, amount: number): Promise<CollateralResult> {

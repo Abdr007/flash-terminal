@@ -95,7 +95,7 @@ export function logTradeStart(type: 'open' | 'close' | 'add_collateral' | 'remov
 }
 
 /** Emitted when a trade execution succeeds. */
-export function logTradeSuccess(type: 'open' | 'close' | 'add_collateral' | 'remove_collateral', market: string, side: string, details?: Record<string, unknown>): void {
+export function logTradeSuccess(type: 'open' | 'close' | 'partial_close' | 'add_collateral' | 'remove_collateral', market: string, side: string, details?: Record<string, unknown>): void {
   try {
     getMetrics().increment(METRIC.TRADE_SUCCESS);
     getLogger().info('TRADE_EXEC', `${type.toUpperCase()} succeeded`, {

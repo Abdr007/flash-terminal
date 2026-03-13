@@ -1152,7 +1152,10 @@ export class FlashClient implements IFlashClient {
 
   // ─── Close Position ───────────────────────────────────────────────────────
 
-  async closePosition(market: string, side: TradeSide, receiveToken?: string): Promise<ClosePositionResult> {
+  async closePosition(
+    market: string, side: TradeSide, receiveToken?: string,
+    closePercent?: number, closeAmount?: number
+  ): Promise<ClosePositionResult> {
     const logger = getLogger();
 
     const cacheKey = this.tradeCacheKey('close', market, side);
@@ -1182,7 +1185,6 @@ export class FlashClient implements IFlashClient {
       );
 
       // ── Determine the correct collateral token for this market+side ──
-      // Same logic as openPosition: look up the actual market collateral from poolConfig.
       const poolMarkets = poolConfig.markets as unknown as Array<{
         targetMint: PublicKey; collateralMint: PublicKey;
         side: typeof Side.Long | typeof Side.Short;
@@ -1198,48 +1200,117 @@ export class FlashClient implements IFlashClient {
         marketCollateralSymbol = targetToken.symbol;
       }
 
+      // ── Determine if this is a partial or full close ──
+      const isPartial = (closePercent !== undefined && closePercent < 100) ||
+                        (closeAmount !== undefined);
+
+      // Fetch position data for PnL computation and partial close sizing
+      let positionSizeUsd = 0;
+      let pnl = 0;
+      const existingPositions = await this.getPositions();
+      const pos = existingPositions.find(
+        p => p.market?.toUpperCase() === market.toUpperCase() && p.side === side
+      );
+      if (pos && pos.entryPrice > 0 && pos.sizeUsd > 0) {
+        positionSizeUsd = pos.sizeUsd;
+        const priceDelta = targetPrice.uiPrice - pos.entryPrice;
+        const pnlMult = side === TradeSide.Long ? 1 : -1;
+        pnl = (priceDelta / pos.entryPrice) * pos.sizeUsd * pnlMult;
+        if (!Number.isFinite(pnl)) pnl = 0;
+      }
+
+      // Compute the USD amount to close and validate
+      let closeSizeUsd = positionSizeUsd; // default: full close
+      if (closePercent !== undefined && closePercent < 100) {
+        closeSizeUsd = positionSizeUsd * (closePercent / 100);
+      } else if (closeAmount !== undefined) {
+        if (closeAmount > positionSizeUsd) {
+          throw new Error(`Close amount $${closeAmount.toFixed(2)} exceeds position size $${positionSizeUsd.toFixed(2)}`);
+        }
+        closeSizeUsd = closeAmount;
+      }
+
+      // If remaining size would be negligibly small (< $0.50), close entirely
+      const remainingAfterClose = positionSizeUsd - closeSizeUsd;
+      const shouldFullClose = !isPartial || remainingAfterClose < 0.50 || closeSizeUsd >= positionSizeUsd;
+
+      // Scale PnL proportionally for partial close
+      if (isPartial && !shouldFullClose && positionSizeUsd > 0) {
+        pnl = pnl * (closeSizeUsd / positionSizeUsd);
+        if (!Number.isFinite(pnl)) pnl = 0;
+      }
+
       logger.debug('TRADE', `Close routing: market=${market} side=${sideStr} ` +
+        `partial=${isPartial} fullClose=${shouldFullClose} closeSizeUsd=${closeSizeUsd.toFixed(2)} ` +
         `receiveToken=${receivingToken.symbol} marketCollateral=${marketCollateralSymbol}`);
 
       let result: { instructions: TransactionInstruction[]; additionalSigners: Signer[] };
-      if (receivingToken.symbol === marketCollateralSymbol) {
-        // Output token matches market collateral — direct close
-        logger.debug('TRADE', `Using closePosition(${targetToken.symbol}, ${marketCollateralSymbol})`);
-        result = await this.perpClient.closePosition(
-          targetToken.symbol, marketCollateralSymbol, priceAfterSlippage,
-          sdkSide, poolConfig, Privilege.None
-        );
-      } else {
-        // Output token differs from market collateral — close and swap
-        logger.debug('TRADE', `Using closeAndSwap(${targetToken.symbol}, ${receivingToken.symbol}, ${marketCollateralSymbol})`);
-        result = await this.perpClient.closeAndSwap(
-          targetToken.symbol, receivingToken.symbol, marketCollateralSymbol,
-          priceAfterSlippage, sdkSide, poolConfig, Privilege.None
-        );
-      }
 
-      // Compute PnL before sending the close transaction
-      let pnl = 0;
-      try {
-        const existingPositions = await this.getPositions();
-        const pos = existingPositions.find(
-          p => p.market?.toUpperCase() === market.toUpperCase() && p.side === side
-        );
-        if (pos && pos.entryPrice > 0 && pos.sizeUsd > 0) {
-          const priceDelta = targetPrice.uiPrice - pos.entryPrice;
-          const pnlMult = side === TradeSide.Long ? 1 : -1;
-          pnl = (priceDelta / pos.entryPrice) * pos.sizeUsd * pnlMult;
-          if (!Number.isFinite(pnl)) pnl = 0;
+      if (shouldFullClose) {
+        // ── Full close ──
+        if (receivingToken.symbol === marketCollateralSymbol) {
+          logger.debug('TRADE', `Using closePosition(${targetToken.symbol}, ${marketCollateralSymbol})`);
+          result = await this.perpClient.closePosition(
+            targetToken.symbol, marketCollateralSymbol, priceAfterSlippage,
+            sdkSide, poolConfig, Privilege.None
+          );
+        } else {
+          logger.debug('TRADE', `Using closeAndSwap(${targetToken.symbol}, ${receivingToken.symbol}, ${marketCollateralSymbol})`);
+          result = await this.perpClient.closeAndSwap(
+            targetToken.symbol, receivingToken.symbol, marketCollateralSymbol,
+            priceAfterSlippage, sdkSide, poolConfig, Privilege.None
+          );
         }
-      } catch {
-        // Non-critical — PnL display is best-effort
+      } else {
+        // ── Partial close via decreaseSize ──
+        const { position } = await this.findUserPosition(poolConfig, market, side);
+        const positionData = await this.perpClient.program.account.position.fetch(position.pubkey);
+        const posData = positionData as unknown as { sizeAmount: BN };
+        if (!posData.sizeAmount || posData.sizeAmount.isZero()) {
+          throw new Error(`No open ${side} position on ${market} to partially close`);
+        }
+
+        // Compute sizeDelta in native token units proportional to closePercent/closeAmount
+        let sizeDelta: BN;
+        if (closePercent !== undefined) {
+          // Scale native sizeAmount by percentage
+          sizeDelta = posData.sizeAmount.mul(new BN(Math.round(closePercent * 100))).div(new BN(10000));
+        } else {
+          // Scale native sizeAmount by USD ratio
+          const ratio = closeSizeUsd / positionSizeUsd;
+          sizeDelta = posData.sizeAmount.mul(new BN(Math.round(ratio * 10000))).div(new BN(10000));
+        }
+
+        if (sizeDelta.isZero()) {
+          throw new Error('Computed close size is too small');
+        }
+
+        logger.debug('TRADE', `Using decreaseSize(${targetToken.symbol}, ${marketCollateralSymbol}, sizeDelta=${sizeDelta.toString()})`);
+        result = await this.perpClient.decreaseSize(
+          targetToken.symbol, marketCollateralSymbol, sdkSide,
+          position.pubkey, poolConfig, priceAfterSlippage,
+          sizeDelta, Privilege.None
+        );
       }
 
       const txSignature = await this.sendTx(result.instructions, result.additionalSigners, poolConfig);
       this.recordRecentTrade(cacheKey);
 
-      logger.trade('CLOSE', { market, side, price: targetPrice.uiPrice, pnl, tx: txSignature });
-      return { txSignature, exitPrice: targetPrice.uiPrice, pnl };
+      const closeAction = shouldFullClose ? 'CLOSE' : 'PARTIAL_CLOSE';
+      logger.trade(closeAction, {
+        market, side, price: targetPrice.uiPrice, pnl,
+        closeSizeUsd: shouldFullClose ? positionSizeUsd : closeSizeUsd,
+        tx: txSignature,
+      });
+
+      return {
+        txSignature,
+        exitPrice: targetPrice.uiPrice,
+        pnl,
+        isPartial: isPartial && !shouldFullClose,
+        closedSizeUsd: shouldFullClose ? positionSizeUsd : closeSizeUsd,
+        remainingSizeUsd: shouldFullClose ? 0 : remainingAfterClose,
+      };
     } finally {
       this.releaseTradeLock(market, side);
     }

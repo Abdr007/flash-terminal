@@ -106,12 +106,18 @@ describe('SimulatedFlashClient', () => {
     expect(client.getBalance()).toBeCloseTo(expectedBalance, 2);
   });
 
-  it('rejects duplicate position on same market/side', async () => {
+  it('merges duplicate position on same market/side (increaseSize)', async () => {
     await client.openPosition('SOL', TradeSide.Long, 100, 5);
+    const result = await client.openPosition('SOL', TradeSide.Long, 50, 3);
 
-    await expect(
-      client.openPosition('SOL', TradeSide.Long, 50, 3)
-    ).rejects.toThrow(/already have an open/i);
+    // Position should be merged, not rejected
+    expect(result).toBeDefined();
+    expect(result.txSignature).toContain('SIM_');
+    const positions = await client.getPositions();
+    const solLong = positions.find(p => p.market === 'SOL' && p.side === TradeSide.Long);
+    expect(solLong).toBeDefined();
+    // Merged: 100*5=500 + 50*3=150 = 650 total size
+    expect(solLong!.sizeUsd).toBeCloseTo(650, 0);
   });
 
   it('allows opposite side on same market', async () => {

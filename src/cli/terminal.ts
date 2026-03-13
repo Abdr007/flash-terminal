@@ -1641,11 +1641,17 @@ export class FlashTerminal {
       }
     }
 
-    // ─── Unknown Command Intercept ──────────────────────────────────
-    // If the interpreter returned Help (meaning it couldn't parse the input),
-    // and the user didn't explicitly type "help", show an unknown command message.
+    // ─── Command Alert Intercept ──────────────────────────────────
+    // If the interpreter returned Help with an _alert, display the alert message
+    // instead of the generic unknown command output.
     if (intent.action === ActionType.Help && !fastIntent) {
-      // Try position-aware suggestions first
+      const alert = (intent as Record<string, unknown>)._alert as { message: string } | undefined;
+      if (alert?.message) {
+        console.log(alert.message);
+        return;
+      }
+
+      // Try position-aware suggestions
       let positions: { market: string; side: string; sizeUsd: number }[] | undefined;
       try {
         const posList = await this.flashClient.getPositions();
@@ -1920,10 +1926,14 @@ export class FlashTerminal {
         '',
         chalk.bold('  Usage'),
         `    ${chalk.cyan('close <asset> <long|short>')}`,
+        `    ${chalk.cyan('close <asset> <long|short> <percent>%')}`,
+        `    ${chalk.cyan('close <asset> <long|short> $<amount>')}`,
         '',
         chalk.bold('  Examples'),
         chalk.dim('    close SOL long'),
-        chalk.dim('    close ETH short'),
+        chalk.dim('    close SOL long 50%'),
+        chalk.dim('    close BTC short $200'),
+        chalk.dim('    close ETH long 25%'),
         '',
       ],
       'analyze': [
