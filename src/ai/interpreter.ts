@@ -11,7 +11,7 @@ const SYSTEM_PROMPT = `You are the Flash Terminal intent parser. You convert nat
 You MUST respond with ONLY a valid JSON object. No explanations, no markdown, no extra text.
 
 Available actions:
-- open_position: Open a leveraged position
+- open_position: Open a leveraged position. Optional fields: takeProfit (number), stopLoss (number) for inline TP/SL
 - close_position: Close an existing position
 - add_collateral: Add collateral to a position
 - remove_collateral: Remove collateral from a position
@@ -23,6 +23,12 @@ Available actions:
 - get_leaderboard: Get trader leaderboard
 - get_trader_profile: Get a trader's profile
 - get_fees: Get fee data
+- set_tp_sl: Set take-profit or stop-loss on an existing position (fields: market, side, type "tp"|"sl", price)
+- remove_tp_sl: Remove TP or SL from a position (fields: market, side, type "tp"|"sl")
+- tp_sl_status: Show all active TP/SL targets
+- limit_order: Place a limit order (fields: market, side, leverage, collateral, limitPrice)
+- cancel_order: Cancel a limit order (fields: orderId)
+- list_orders: List all active orders
 - wallet_connect: Connect a wallet from file path
 - wallet_import: Import and store a wallet (needs name and path)
 - wallet_list: List stored wallets
@@ -53,9 +59,17 @@ Side must be "long" or "short".
 
 Examples:
 - "open a 5x long on SOL with $500" -> {"action":"open_position","market":"SOL","side":"long","collateral":500,"leverage":5}
+- "open 2x eth long for 10 dollars set tp 2300 and sl 1950" -> {"action":"open_position","market":"ETH","side":"long","collateral":10,"leverage":2,"takeProfit":2300,"stopLoss":1950}
 - "close my SOL long" -> {"action":"close_position","market":"SOL","side":"long"}
 - "add $200 collateral to my BTC short" -> {"action":"add_collateral","market":"BTC","side":"short","amount":200}
 - "remove $100 from my ETH long" -> {"action":"remove_collateral","market":"ETH","side":"long","amount":100}
+- "set tp btc long to 75000" -> {"action":"set_tp_sl","market":"BTC","side":"long","type":"tp","price":75000}
+- "set sl eth long $1950" -> {"action":"set_tp_sl","market":"ETH","side":"long","type":"sl","price":1950}
+- "remove tp SOL long" -> {"action":"remove_tp_sl","market":"SOL","side":"long","type":"tp"}
+- "tp status" -> {"action":"tp_sl_status"}
+- "limit long SOL 2x $100 at $82" -> {"action":"limit_order","market":"SOL","side":"long","leverage":2,"collateral":100,"limitPrice":82}
+- "cancel order 0" -> {"action":"cancel_order","orderId":"0"}
+- "orders" -> {"action":"list_orders"}
 - "show positions" -> {"action":"get_positions"}
 - "SOL price" -> {"action":"get_market_data","market":"SOL"}
 - "portfolio" -> {"action":"get_portfolio"}
