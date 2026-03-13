@@ -175,14 +175,6 @@ export class SimulatedFlashClient implements IFlashClient {
     const logger = getLogger();
     await this.refreshPrices();
 
-    // Reject duplicate positions (same market + side) — matches Flash Trade protocol
-    const existing = this.state.positions.find(
-      p => p.market === market.toUpperCase() && p.side === side,
-    );
-    if (existing) {
-      throw new Error(`Already have an open ${side} position on ${market}. Close it first or adjust collateral.`);
-    }
-
     // Per-market leverage limit (from Flash Trade protocol)
     const { getMaxLeverage } = await import('../config/index.js');
     const maxLev = getMaxLeverage(market, true); // allow up to degen max; tool layer enforces degen flag
@@ -214,27 +206,52 @@ export class SimulatedFlashClient implements IFlashClient {
       throw new Error(`Insufficient balance for collateral + fee: need $${(collateralAmount + openFee).toFixed(2)}, have $${this.state.balance.toFixed(2)}`);
     }
 
-    const position: SimulatedPosition = {
-      id: randomUUID().slice(0, 8),
-      market: market.toUpperCase(),
-      side,
-      entryPrice: price,
-      sizeUsd,
-      collateralUsd: collateralAmount,
-      leverage,
-      openFee,
-      openedAt: Date.now(),
-      maintenanceMarginRate: feeRates.maintenanceMarginRate,
-      closeFeeRate: feeRates.closeFeeRate,
-    };
-
     this.state.balance -= collateralAmount + openFee;
     this.state.totalFeesPaid += openFee;
-    this.state.positions.push(position);
+
+    // Check for existing same-side position — merge if exists (matches Flash Trade protocol)
+    const existing = this.state.positions.find(
+      p => p.market === market.toUpperCase() && p.side === side,
+    );
+
+    let txSig: string;
+    let finalEntryPrice: number;
+
+    if (existing) {
+      // Merge: weighted average entry price, sum collateral and size
+      const totalSize = existing.sizeUsd + sizeUsd;
+      finalEntryPrice = totalSize > 0
+        ? (existing.entryPrice * existing.sizeUsd + price * sizeUsd) / totalSize
+        : price;
+      existing.sizeUsd = totalSize;
+      existing.collateralUsd += collateralAmount;
+      existing.leverage = existing.collateralUsd > 0 ? existing.sizeUsd / existing.collateralUsd : leverage;
+      existing.entryPrice = finalEntryPrice;
+      existing.openFee += openFee;
+      txSig = `SIM_ADD_${existing.id}`;
+    } else {
+      const position: SimulatedPosition = {
+        id: randomUUID().slice(0, 8),
+        market: market.toUpperCase(),
+        side,
+        entryPrice: price,
+        sizeUsd,
+        collateralUsd: collateralAmount,
+        leverage,
+        openFee,
+        openedAt: Date.now(),
+        maintenanceMarginRate: feeRates.maintenanceMarginRate,
+        closeFeeRate: feeRates.closeFeeRate,
+      };
+      this.state.positions.push(position);
+      finalEntryPrice = price;
+      txSig = `SIM_${position.id}`;
+    }
+
     this.state.tradeHistory.push({
-      id: position.id,
+      id: existing?.id ?? randomUUID().slice(0, 8),
       action: 'open',
-      market: position.market,
+      market: market.toUpperCase(),
       side,
       sizeUsd,
       collateralUsd: collateralAmount,
@@ -244,10 +261,9 @@ export class SimulatedFlashClient implements IFlashClient {
     });
     this.trimHistory();
 
-    const txSig = `SIM_${position.id}`;
     logger.trade('OPEN', { market, side, collateral: collateralAmount, leverage, price, tx: txSig });
 
-    return { txSignature: txSig, entryPrice: price, liquidationPrice, sizeUsd };
+    return { txSignature: txSig, entryPrice: finalEntryPrice, liquidationPrice, sizeUsd };
   }
 
   async closePosition(market: string, side: TradeSide): Promise<ClosePositionResult> {

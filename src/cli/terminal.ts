@@ -3530,29 +3530,6 @@ export class FlashTerminal {
       return;
     }
 
-    // Check for existing position on same market/side (Flash rejects duplicates)
-    try {
-      const existingPositions = await this.flashClient.getPositions();
-      const duplicate = existingPositions.find(
-        p => (p.market ?? '').toUpperCase() === market.toUpperCase() && p.side === side,
-      );
-      if (duplicate) {
-        const sideLabel = side === TradeSide.Long ? 'LONG' : 'SHORT';
-        console.log('');
-        console.log(chalk.yellow(`  Position already exists for ${market.toUpperCase()} ${sideLabel}`));
-        console.log(chalk.dim(`    Size:       ${formatUsd(duplicate.sizeUsd)}`));
-        console.log(chalk.dim(`    Collateral: ${formatUsd(duplicate.collateralUsd)}`));
-        console.log(chalk.dim(`    Entry:      $${formatPrice(duplicate.entryPrice)}`));
-        console.log('');
-        console.log(chalk.dim('  Flash Trade does not allow duplicate positions on the same market/side.'));
-        console.log(chalk.dim('  Use "add collateral" to increase an existing position, or close it first.'));
-        console.log('');
-        return;
-      }
-    } catch {
-      // Best-effort — don't block dry-run if position fetch fails
-    }
-
     process.stdout.write(chalk.dim('  Building transaction preview...\r'));
 
     try {

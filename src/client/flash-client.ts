@@ -940,7 +940,7 @@ export class FlashClient implements IFlashClient {
     this.acquireTradeLock(market, side);
     try {
       // ── Parallel pre-trade validation ──
-      // Run SOL fee check, USDC balance check, and duplicate position check concurrently.
+      // Run SOL fee check and USDC balance check concurrently.
       // These are independent RPC calls that previously ran sequentially (~600-1500ms total).
       const poolConfig = this.getPoolConfigForMarket(market);
       const inputSymbol = collateralToken ?? DEFAULT_COLLATERAL_TOKEN;
@@ -950,7 +950,7 @@ export class FlashClient implements IFlashClient {
         // 1. SOL fee check
         this.ensureSufficientSol(),
 
-        // 2. USDC balance + duplicate position check (combined to reduce parallelism overhead)
+        // 2. USDC balance check
         (async () => {
           // USDC balance check
           if (inputSymbol === 'USDC') {
@@ -972,30 +972,10 @@ export class FlashClient implements IFlashClient {
             }
           }
 
-          // Duplicate position check
-          try {
-            const positions = await this.perpClient.getUserPositions(this.wallet.publicKey, poolConfig);
-            const token = this.findToken(poolConfig, market);
-            const markets = poolConfig.markets as unknown as Array<{
-              marketAccount: PublicKey; targetMint: PublicKey; side: typeof Side.Long | typeof Side.Short;
-            }>;
-            const marketConfig = markets.find(m => m.targetMint.equals(token.mintKey) && m.side === sdkSide);
-            if (marketConfig) {
-              const existing = (positions as Array<{ market: PublicKey }>).find(
-                p => p.market.equals(marketConfig.marketAccount)
-              );
-              if (existing) {
-                throw new Error(
-                  `You already have an open ${sideStr} position on ${market}.\n` +
-                  `  Close it first with: close ${sideStr} ${market}`
-                );
-              }
-            }
-          } catch (e: unknown) {
-            const eMsg = getErrorMessage(e);
-            if (eMsg.includes('already have an open')) throw e;
-            logger.debug('CLIENT', `Pre-trade position check skipped: ${scrubSensitive(eMsg)}`);
-          }
+          // Note: no duplicate position check — Flash Trade protocol allows
+          // increasing position size by opening additional same-side trades.
+          // The protocol merges them into a single position with recalculated
+          // weighted entry price.
         })(),
 
         // 3. Price map fetch (runs concurrently with validation checks)
