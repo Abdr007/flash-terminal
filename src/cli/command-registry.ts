@@ -476,6 +476,14 @@ export const COMMAND_REGISTRY: CommandEntry[] = [
     aliases: ['engine benchmark'],
   },
   {
+    name: 'engine set',
+    action: null,
+    category: 'Utilities',
+    description: 'Switch engine: engine set magicblock <url>',
+    helpFormat: 'engine set <rpc|magicblock> [url]',
+    aliases: ['set engine'],
+  },
+  {
     name: 'degen',
     action: null,
     category: 'Utilities',

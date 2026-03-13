@@ -9,7 +9,7 @@ import { z } from 'zod';
 import chalk from 'chalk';
 import { ToolDefinition, ToolResult } from '../types/index.js';
 import { theme } from '../cli/theme.js';
-import { getEngineRouter } from '../execution/engine-router.js';
+import { getEngineRouter, initEngineRouter, type ExecutionEngine } from '../execution/engine-router.js';
 import { getRpcManagerInstance } from '../network/rpc-manager.js';
 
 // ─── engine status ──────────────────────────────────────────────────────────
@@ -58,7 +58,7 @@ export const engineStatusTool: ToolDefinition = {
     }
 
     lines.push('');
-    lines.push(`  ${theme.dim('Switch engines: EXECUTION_ENGINE=magicblock or --engine magicblock')}`);
+    lines.push(`  ${theme.dim('Switch engines: engine set magicblock <url> | engine set rpc')}`);
     lines.push('');
 
     return { success: true, message: lines.join('\n') };
@@ -129,7 +129,71 @@ export const engineBenchmarkTool: ToolDefinition = {
   },
 };
 
+// ─── engine set ──────────────────────────────────────────────────────────────
+
+export const engineSetTool: ToolDefinition = {
+  name: 'engine_set',
+  description: 'Switch execution engine at runtime',
+  parameters: z.object({
+    engine: z.enum(['rpc', 'magicblock']),
+    url: z.string().optional(),
+  }),
+  execute: async (params: Record<string, unknown>): Promise<ToolResult> => {
+    const engine = params.engine as ExecutionEngine;
+    const url = params.url as string | undefined;
+
+    const lines = [''];
+
+    if (engine === 'magicblock') {
+      if (!url) {
+        lines.push(`  ${chalk.yellow('MagicBlock requires a URL.')}`);
+        lines.push('');
+        lines.push(`  ${theme.dim('Usage: engine set magicblock <url>')}`);
+        lines.push(`  ${theme.dim('Example: engine set magicblock https://rpc.magicblock.xyz')}`);
+        lines.push('');
+        return { success: false, message: lines.join('\n') };
+      }
+
+      try {
+        new URL(url);
+      } catch {
+        lines.push(`  ${chalk.red('Invalid URL:')} ${url}`);
+        lines.push('');
+        return { success: false, message: lines.join('\n') };
+      }
+
+      try {
+        const router = initEngineRouter({ engine: 'magicblock', magicblockRpcUrl: url });
+        const ping = await router.ping();
+        const statusIcon = ping.ok ? chalk.green('✓') : chalk.yellow('⚠');
+        const latency = ping.ok ? theme.value(`${ping.latencyMs}ms`) : chalk.yellow('unreachable');
+
+        lines.push(`  ${chalk.green('✓')} Engine switched to ${chalk.hex('#FF6B00').bold('MagicBlock')}`);
+        lines.push(`  ${theme.pair('Endpoint', theme.dim(url))}`);
+        lines.push(`  ${theme.pair('Ping', `${statusIcon} ${latency}`)}`);
+
+        if (!ping.ok) {
+          lines.push('');
+          lines.push(`  ${chalk.yellow('  Endpoint unreachable — transactions will fallback to RPC.')}`);
+        }
+      } catch (err: unknown) {
+        lines.push(`  ${chalk.red('Failed to initialize MagicBlock engine.')}`);
+        lines.push(`  ${theme.dim(String(err))}`);
+        lines.push('');
+        return { success: false, message: lines.join('\n') };
+      }
+    } else {
+      initEngineRouter({ engine: 'rpc' });
+      lines.push(`  ${chalk.green('✓')} Engine switched to ${theme.value('RPC')}`);
+    }
+
+    lines.push('');
+    return { success: true, message: lines.join('\n') };
+  },
+};
+
 export const allEngineTools: ToolDefinition[] = [
   engineStatusTool,
   engineBenchmarkTool,
+  engineSetTool,
 ];

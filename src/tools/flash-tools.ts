@@ -270,9 +270,19 @@ export const flashOpenPosition: ToolDefinition = {
           const journal = getTradeJournal();
           const journalId = journal.recordPending({ market, side: side.toString(), action: 'open', collateral, leverage, sizeUsd });
           try {
-            const result = await context.flashClient.openPosition(
-              market, side, collateral, leverage, collateral_token
-            );
+            // Use atomic method when TP/SL are provided (single transaction)
+            const useAtomic = (takeProfit !== undefined || stopLoss !== undefined)
+              && context.flashClient.openPositionAtomic
+              && !context.simulationMode;
+
+            const result = useAtomic
+              ? await context.flashClient.openPositionAtomic!(
+                  market, side, collateral, leverage, collateral_token,
+                  takeProfit, stopLoss,
+                )
+              : await context.flashClient.openPosition(
+                  market, side, collateral, leverage, collateral_token,
+                );
 
             // Journal: mark confirmed and remove
             journal.recordSent(journalId, result.txSignature);
@@ -344,12 +354,22 @@ export const flashOpenPosition: ToolDefinition = {
               if (shadowResult) logShadowTrade(shadowResult);
             } catch { /* shadow must never affect live pipeline */ }
 
-            // Auto-set TP/SL targets if provided inline (on-chain via Flash SDK)
+            // TP/SL display lines
             const tpSlLines: string[] = [];
-            if (takeProfit !== undefined || stopLoss !== undefined) {
+            const atomicIncluded = (result as any).triggerOrdersIncluded === true;
+
+            if (atomicIncluded) {
+              // TP/SL were included in the atomic transaction
+              if (takeProfit !== undefined) {
+                tpSlLines.push(`  Take Profit:       ${chalk.green('$' + takeProfit.toFixed(2))} ${chalk.dim('(on-chain, atomic)')}`);
+              }
+              if (stopLoss !== undefined) {
+                tpSlLines.push(`  Stop Loss:         ${chalk.red('$' + stopLoss.toFixed(2))} ${chalk.dim('(on-chain, atomic)')}`);
+              }
+            } else if (takeProfit !== undefined || stopLoss !== undefined) {
+              // Sequential fallback — place TP/SL as separate transactions
               const client = context.flashClient;
               if (client.placeTriggerOrder && !context.simulationMode) {
-                // Place on-chain trigger orders
                 if (takeProfit !== undefined) {
                   try {
                     await client.placeTriggerOrder(market, side, takeProfit, false);

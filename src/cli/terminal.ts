@@ -1482,8 +1482,6 @@ export class FlashTerminal {
 
     if (fastIntent) {
       intent = fastIntent;
-    } else if (this.showUsageHint(lower)) {
-      return;
     } else if (/^set\s+(tp|sl)\b/.test(lower)) {
       // Set TP/SL — parse via interpreter, show usage on failure
       const parsed = localParse(input);
@@ -1542,6 +1540,25 @@ export class FlashTerminal {
       const market = resolveMarketAlias(rawMarket);
       await this.handlePositionDebug(market);
       return;
+    } else if (lower.startsWith('engine set ') || lower.startsWith('set engine ')) {
+      const prefix = lower.startsWith('engine set ') ? 'engine set ' : 'set engine ';
+      const args = input.slice(prefix.length).trim().split(/\s+/);
+      const engineArg = args[0]?.toLowerCase();
+      if (engineArg === 'rpc') {
+        intent = { action: ActionType.EngineSet, engine: 'rpc' } as ParsedIntent;
+      } else if (engineArg === 'magicblock') {
+        const url = args[1] || undefined;
+        intent = { action: ActionType.EngineSet, engine: 'magicblock', url } as ParsedIntent;
+      } else {
+        console.log('');
+        console.log(chalk.yellow('  Invalid engine. Choose rpc or magicblock.'));
+        console.log('');
+        console.log(chalk.dim('  Usage:'));
+        console.log(`    ${chalk.bold('engine set rpc')}`);
+        console.log(`    ${chalk.bold('engine set magicblock <url>')}`);
+        console.log('');
+        return;
+      }
     } else if (lower.startsWith('dryrun ') || lower.startsWith('dry-run ') || lower.startsWith('dry run ')) {
       const prefix = lower.startsWith('dryrun ') ? 'dryrun ' : lower.startsWith('dry-run ') ? 'dry-run ' : 'dry run ';
       const innerCmd = input.slice(prefix.length).trim();

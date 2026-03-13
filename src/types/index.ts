@@ -114,6 +114,7 @@ export enum ActionType {
   EarnStatus = 'earn_status',
   EngineStatus = 'engine_status',
   EngineBenchmark = 'engine_benchmark',
+  EngineSet = 'engine_set',
 }
 
 // ─── Zod Schemas for Intent Parsing ──────────────────────────────────────────
@@ -470,6 +471,12 @@ export const EngineBenchmarkSchema = z.object({
   action: z.literal(ActionType.EngineBenchmark),
 });
 
+export const EngineSetSchema = z.object({
+  action: z.literal(ActionType.EngineSet),
+  engine: z.enum(['rpc', 'magicblock']),
+  url: z.string().optional(),
+});
+
 export const ParsedIntentSchema = z.discriminatedUnion('action', [
   OpenPositionSchema,
   ClosePositionSchema,
@@ -539,6 +546,7 @@ export const ParsedIntentSchema = z.discriminatedUnion('action', [
   EarnStatusSchema,
   EngineStatusSchema,
   EngineBenchmarkSchema,
+  EngineSetSchema,
 ]);
 
 export type ParsedIntent = z.infer<typeof ParsedIntentSchema>;
@@ -554,6 +562,8 @@ export interface OpenPositionResult {
   entryPrice: number;
   liquidationPrice: number;
   sizeUsd: number;
+  /** True if TP/SL were included in the same atomic transaction */
+  triggerOrdersIncluded?: boolean;
 }
 
 export interface ClosePositionResult {
@@ -847,6 +857,17 @@ export interface IFlashClient {
 
   /** Get recent trade history (simulation mode). */
   getTradeHistory?(): SimulatedTrade[];
+
+  /** Open position with optional TP/SL in a single atomic transaction. */
+  openPositionAtomic?(
+    market: string,
+    side: TradeSide,
+    collateralAmount: number,
+    leverage: number,
+    collateralToken?: string,
+    takeProfit?: number,
+    stopLoss?: number,
+  ): Promise<OpenPositionResult>;
 
   /** Build a transaction preview without signing or sending. */
   previewOpenPosition?(
