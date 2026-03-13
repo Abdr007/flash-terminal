@@ -32,6 +32,7 @@ import { buildFastDispatch } from './command-registry.js';
 import { getCommandGuidance } from '../utils/command-guidance.js';
 import { resolveMarket } from '../utils/market-resolver.js';
 import { computeSimulationLiquidationPrice, isDivergenceOk } from '../utils/protocol-liq.js';
+import { initEngineRouter, getEngineRouter, type ExecutionEngine } from '../execution/engine-router.js';
 
 /** Alias for backward compat — delegates to centralized resolver */
 function resolveMarketAlias(input: string): string {
@@ -214,6 +215,20 @@ export class FlashTerminal {
     const rpcEndpoints = buildRpcEndpoints(this.config.rpcUrl, this.config.backupRpcUrls);
     this.rpcManager = initRpcManager(rpcEndpoints);
     const connection = this.rpcManager.connection;
+
+    // ─── Initialize Execution Engine Router ────────────────────────
+    if (!this.config.simulationMode) {
+      try {
+        initEngineRouter({
+          engine: this.config.executionEngine ?? 'rpc',
+          magicblockRpcUrl: this.config.magicblockRpcUrl,
+        });
+      } catch (err: unknown) {
+        console.log(chalk.yellow(`\n  ⚠ Engine router init failed: ${getErrorMessage(err)}`));
+        console.log(chalk.dim('    Falling back to standard RPC execution.'));
+        initEngineRouter({ engine: 'rpc' });
+      }
+    }
 
     // Warn if using public RPC for live trading
     if (!this.config.simulationMode && this.config.rpcUrl.includes('api.mainnet-beta.solana.com')) {
@@ -924,6 +939,10 @@ export class FlashTerminal {
         console.log(theme.pair('Address', theme.dim(walletAddr)));
       }
       console.log(theme.pair('Network', theme.value(this.config.network)));
+      const router = getEngineRouter();
+      if (router && router.engine !== 'rpc') {
+        console.log(theme.pair('Engine', theme.accent(router.label)));
+      }
       console.log('');
 
       // Use pre-fetched balance data (started before setup) — no extra RPC call

@@ -462,6 +462,20 @@ export const COMMAND_REGISTRY: CommandEntry[] = [
     aliases: ['flash doctor'],
   },
   {
+    name: 'engine status',
+    action: ActionType.EngineStatus,
+    category: 'Utilities',
+    description: 'Show execution engine info',
+    aliases: ['engine'],
+  },
+  {
+    name: 'benchmark engine',
+    action: ActionType.EngineBenchmark,
+    category: 'Utilities',
+    description: 'Benchmark execution engines',
+    aliases: ['engine benchmark'],
+  },
+  {
     name: 'degen',
     action: null,
     category: 'Utilities',

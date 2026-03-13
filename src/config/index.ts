@@ -95,6 +95,13 @@ function validateRpcUrl(url: string): string {
   return url;
 }
 
+function parseExecutionEngine(value?: string): 'rpc' | 'magicblock' {
+  if (!value) return 'rpc';
+  const lower = value.toLowerCase().trim();
+  if (lower === 'magicblock') return 'magicblock';
+  return 'rpc';
+}
+
 export function loadConfig(): FlashConfig {
   const backupRpcUrls: string[] = [];
   if (process.env.BACKUP_RPC_1) backupRpcUrls.push(validateRpcUrl(process.env.BACKUP_RPC_1));
@@ -120,6 +127,8 @@ export function loadConfig(): FlashConfig {
     maxLeverage: parseIntSafe(process.env.MAX_LEVERAGE, 0),
     maxTradesPerMinute: parseIntSafe(process.env.MAX_TRADES_PER_MINUTE, 10),
     minDelayBetweenTradesMs: parseIntSafe(process.env.MIN_DELAY_BETWEEN_TRADES_MS, 3000),
+    executionEngine: parseExecutionEngine(process.env.EXECUTION_ENGINE),
+    magicblockRpcUrl: process.env.MAGICBLOCK_RPC_URL || undefined,
   };
 }
 

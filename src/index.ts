@@ -60,12 +60,16 @@ program
   .description('Start the interactive Flash Terminal')
   .option('-p, --pool <name>', 'Default pool name')
   .option('--rpc <url>', 'Solana RPC URL')
+  .option('--engine <type>', 'Execution engine: rpc (default) or magicblock')
+  .option('--magicblock-rpc <url>', 'MagicBlock RPC endpoint URL')
   .option('--no-plugins', 'Disable plugin loading')
-  .action(async (opts: { pool?: string; rpc?: string; plugins?: boolean }) => {
+  .action(async (opts: { pool?: string; rpc?: string; engine?: string; magicblockRpc?: string; plugins?: boolean }) => {
     const config = loadConfig();
 
     if (opts.pool) config.defaultPool = opts.pool;
     if (opts.rpc) config.rpcUrl = opts.rpc;
+    if (opts.engine === 'magicblock') config.executionEngine = 'magicblock';
+    if (opts.magicblockRpc) config.magicblockRpcUrl = opts.magicblockRpc;
     if (opts.plugins === false) config.noPlugins = true;
 
     const terminal = new FlashTerminal(config);

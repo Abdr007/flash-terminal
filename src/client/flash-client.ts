@@ -50,6 +50,7 @@ import { getErrorMessage, withRetry } from '../utils/retry.js';
 import type { WalletManager } from '../wallet/walletManager.js';
 import { getRpcManagerInstance } from '../network/rpc-manager.js';
 import { getUltraTxEngine, initUltraTxEngine } from '../core/ultra-tx-engine.js';
+import { getEngineRouter } from '../execution/engine-router.js';
 
 // ─── Pyth Price Service ──────────────────────────────────────────────────────
 
@@ -768,7 +769,43 @@ export class FlashClient implements IFlashClient {
 
         const txBytes = Buffer.from(vtx.serialize());
 
-        const signatureStr = await conn.sendRawTransaction(txBytes, {
+        // ── Route through execution engine (MagicBlock or RPC) ──
+        // The engine router handles send + confirm for MagicBlock, with
+        // automatic fallback to RPC on failure. For standard RPC mode,
+        // it delegates directly to the rpcSend callback below.
+        const engineRouter = getEngineRouter();
+        if (engineRouter && engineRouter.engine === 'magicblock') {
+          try {
+            const engineResult = await engineRouter.executeTransaction(
+              txBytes,
+              async (bytes) => {
+                const sig = await conn.sendRawTransaction(bytes, { skipPreflight: true, maxRetries: 3 });
+                return sig;
+              },
+            );
+            lastSignature = engineResult.signature;
+            if (engineResult.fallback) {
+              logger.info('CLIENT', `MagicBlock fallback → RPC: ${engineResult.signature}`);
+              // Fall through to standard RPC confirmation loop below
+            } else {
+              logger.info('CLIENT', `MagicBlock confirmed: ${engineResult.signature} (${engineResult.latencyMs}ms)`);
+              process.stdout.write('                              \r');
+              this.walletMgr.resetIdleTimer();
+              this.walletMgr.clearBalanceCache();
+              return engineResult.signature;
+            }
+          } catch (engineErr: unknown) {
+            const engineMsg = getErrorMessage(engineErr);
+            if (engineMsg.includes('failed on-chain')) {
+              process.stdout.write('                              \r');
+              throw engineErr;
+            }
+            logger.warn('CLIENT', `Engine router error: ${engineMsg} — using standard RPC`);
+            // Fall through to standard RPC path
+          }
+        }
+
+        const signatureStr = lastSignature || await conn.sendRawTransaction(txBytes, {
           skipPreflight: true,
           maxRetries: 3,
         });

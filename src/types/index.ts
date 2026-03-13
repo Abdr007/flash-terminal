@@ -112,6 +112,8 @@ export enum ActionType {
   EarnUnstake = 'earn_unstake',
   EarnClaimRewards = 'earn_claim_rewards',
   EarnStatus = 'earn_status',
+  EngineStatus = 'engine_status',
+  EngineBenchmark = 'engine_benchmark',
 }
 
 // ─── Zod Schemas for Intent Parsing ──────────────────────────────────────────
@@ -460,6 +462,14 @@ export const EarnStatusSchema = z.object({
   action: z.literal(ActionType.EarnStatus),
 });
 
+export const EngineStatusSchema = z.object({
+  action: z.literal(ActionType.EngineStatus),
+});
+
+export const EngineBenchmarkSchema = z.object({
+  action: z.literal(ActionType.EngineBenchmark),
+});
+
 export const ParsedIntentSchema = z.discriminatedUnion('action', [
   OpenPositionSchema,
   ClosePositionSchema,
@@ -527,6 +537,8 @@ export const ParsedIntentSchema = z.discriminatedUnion('action', [
   EarnUnstakeSchema,
   EarnClaimRewardsSchema,
   EarnStatusSchema,
+  EngineStatusSchema,
+  EngineBenchmarkSchema,
 ]);
 
 export type ParsedIntent = z.infer<typeof ParsedIntentSchema>;
@@ -1064,6 +1076,10 @@ export interface FlashConfig {
   minDelayBetweenTradesMs: number;
   /** Disable plugin loading (--no-plugins flag) */
   noPlugins?: boolean;
+  /** Execution engine: 'rpc' (default) or 'magicblock' */
+  executionEngine?: 'rpc' | 'magicblock';
+  /** MagicBlock RPC endpoint URL */
+  magicblockRpcUrl?: string;
 }
 
 // ─── Simulation Types ────────────────────────────────────────────────────────

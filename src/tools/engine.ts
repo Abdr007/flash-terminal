@@ -10,6 +10,7 @@ import { allFlashTools } from './flash-tools.js';
 import { allAgentTools } from '../agent/agent-tools.js';
 import { allSwapTools } from './swap-tools.js';
 import { allEarnTools } from './earn-tools.js';
+import { allEngineTools } from './engine-tools.js';
 import { runMiddleware } from '../core/execution-middleware.js';
 import chalk from 'chalk';
 import { theme } from '../cli/theme.js';
@@ -37,6 +38,9 @@ export class ToolEngine {
       this.registry.register(tool);
     }
     for (const tool of allEarnTools) {
+      this.registry.register(tool);
+    }
+    for (const tool of allEngineTools) {
       this.registry.register(tool);
     }
     // Lock core tools — plugins cannot override them
@@ -368,6 +372,12 @@ export class ToolEngine {
 
       case ActionType.EarnStatus:
         return { toolName: 'earn_status', params: {} };
+
+      case ActionType.EngineStatus:
+        return { toolName: 'engine_status', params: {} };
+
+      case ActionType.EngineBenchmark:
+        return { toolName: 'engine_benchmark', params: {} };
 
       default:
         return null;
