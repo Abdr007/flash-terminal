@@ -29,6 +29,7 @@ import { runDoctor } from '../tools/doctor.js';
 import { theme } from './theme.js';
 import { completer, getSuggestions } from './completer.js';
 import { buildFastDispatch } from './command-registry.js';
+import { getCommandGuidance } from '../utils/command-guidance.js';
 import { resolveMarket } from '../utils/market-resolver.js';
 import { computeSimulationLiquidationPrice, isDivergenceOk } from '../utils/protocol-liq.js';
 
@@ -1651,20 +1652,27 @@ export class FlashTerminal {
         return;
       }
 
-      // Try position-aware suggestions
-      let positions: { market: string; side: string; sizeUsd: number }[] | undefined;
+      // Fetch positions for context-aware suggestions
+      let positions: { market: string; side: string }[] | undefined;
       try {
         const posList = await this.flashClient.getPositions();
         positions = posList.map(p => ({
           market: p.market ?? '',
           side: p.side ?? '',
-          sizeUsd: p.sizeUsd ?? 0,
         })).filter(p => p.market && p.side);
       } catch {
         // Non-critical — proceed without position context
       }
 
-      const suggestion = getSuggestions(input, positions);
+      // Intelligent guidance system — fuzzy match, incomplete, invalid params
+      const guidance = getCommandGuidance(input, positions);
+      if (guidance) {
+        console.log(guidance);
+        return;
+      }
+
+      // Legacy suggestion engine fallback
+      const suggestion = getSuggestions(input, positions as any);
       if (suggestion) {
         console.log('');
         console.log(theme.warning(`  Unknown command: ${input}`));
@@ -1672,16 +1680,15 @@ export class FlashTerminal {
         return;
       }
 
+      // Generic fallback
       console.log('');
-      console.log(theme.warning(`  Unknown command: ${input}`));
+      console.log(chalk.yellow(`  \u26A0 Unknown command: ${input}`));
       console.log('');
-      console.log(theme.section('  Try'));
-      console.log(`    ${theme.command('help')}       List all commands`);
-      console.log(`    ${theme.command('markets')}    View available markets`);
-      console.log(`    ${theme.command('positions')}  View open positions`);
-      console.log(`    ${theme.command('monitor')}    Live market monitoring`);
-      console.log('');
-      console.log(theme.dim('  You can also type natural language, e.g. "what is the price of SOL?"'));
+      console.log(`  ${theme.section('Try')}`);
+      console.log(`    ${theme.command('help')}         List all commands`);
+      console.log(`    ${theme.command('markets')}      View available markets`);
+      console.log(`    ${theme.command('positions')}    View open positions`);
+      console.log(`    ${theme.command('monitor')}      Live market monitoring`);
       console.log('');
       return;
     }
@@ -1910,89 +1917,9 @@ export class FlashTerminal {
    * Returns true if a hint was shown (caller should return early).
    */
   private showUsageHint(lower: string): boolean {
-    const hints: Record<string, string[]> = {
-      'open': [
-        '',
-        chalk.bold('  Usage'),
-        `    ${chalk.cyan('open <leverage>x <long|short> <asset> $<collateral>')}`,
-        '',
-        chalk.bold('  Examples'),
-        chalk.dim('    open 5x long SOL $500'),
-        chalk.dim('    open 3x short ETH $200'),
-        chalk.dim('    open 10x long BTC $1000'),
-        '',
-      ],
-      'close': [
-        '',
-        chalk.bold('  Usage'),
-        `    ${chalk.cyan('close <asset> <long|short>')}`,
-        `    ${chalk.cyan('close <asset> <long|short> <percent>%')}`,
-        `    ${chalk.cyan('close <asset> <long|short> $<amount>')}`,
-        '',
-        chalk.bold('  Examples'),
-        chalk.dim('    close SOL long'),
-        chalk.dim('    close SOL long 50%'),
-        chalk.dim('    close BTC short $200'),
-        chalk.dim('    close ETH long 25%'),
-        '',
-      ],
-      'analyze': [
-        '',
-        chalk.bold('  Usage'),
-        `    ${chalk.cyan('analyze <asset>')}`,
-        '',
-        chalk.bold('  Examples'),
-        chalk.dim('    analyze SOL'),
-        chalk.dim('    analyze BTC'),
-        chalk.dim('    analyze ETH'),
-        '',
-      ],
-      'dryrun': [
-        '',
-        chalk.bold('  Usage'),
-        `    ${chalk.cyan('dryrun <command>')}`,
-        '',
-        chalk.bold('  Examples'),
-        chalk.dim('    dryrun open 5x long SOL $500'),
-        chalk.dim('    dryrun close ETH short'),
-        '',
-      ],
-      'dry-run': [
-        '',
-        chalk.bold('  Usage'),
-        `    ${chalk.cyan('dryrun <command>')}`,
-        '',
-        chalk.bold('  Examples'),
-        chalk.dim('    dryrun open 5x long SOL $500'),
-        chalk.dim('    dryrun close ETH short'),
-        '',
-      ],
-      'add': [
-        '',
-        chalk.bold('  Usage'),
-        `    ${chalk.cyan('add $<amount> to <asset> <long|short>')}`,
-        '',
-        chalk.bold('  Examples'),
-        chalk.dim('    add $100 to SOL long'),
-        chalk.dim('    add $50 to BTC short'),
-        chalk.dim('    add $200 to ETH long'),
-        '',
-      ],
-      'remove': [
-        '',
-        chalk.bold('  Usage'),
-        `    ${chalk.cyan('remove $<amount> from <asset> <long|short>')}`,
-        '',
-        chalk.bold('  Examples'),
-        chalk.dim('    remove $100 from SOL long'),
-        chalk.dim('    remove $50 from BTC short'),
-        '',
-      ],
-    };
-
-    const hint = hints[lower];
-    if (hint) {
-      console.log(hint.join('\n'));
+    const guidance = getCommandGuidance(lower);
+    if (guidance) {
+      console.log(guidance);
       return true;
     }
     return false;
