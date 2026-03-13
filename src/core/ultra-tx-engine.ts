@@ -55,9 +55,6 @@ const POLL_INTERVAL_MS = 3_000;
 /** Maximum transaction attempts before failure */
 const MAX_ATTEMPTS = 3;
 
-/** Priority fee floor (microLamports) — minimum even in low congestion */
-const PRIORITY_FEE_FLOOR = 100_000;
-
 /** Priority fee ceiling (microLamports) — cap to prevent overpay */
 const PRIORITY_FEE_CEILING = 5_000_000;
 
@@ -188,7 +185,7 @@ export class UltraTxEngine {
     this.primaryConnection = primaryConnection;
     this.wallet = wallet;
     this.config = {
-      computeUnitPrice: config.computeUnitPrice ?? 500_000,
+      computeUnitPrice: config.computeUnitPrice ?? 100_000,
       computeUnitLimit: config.computeUnitLimit ?? DEFAULT_CU_LIMIT,
       dynamicPriorityFee: config.dynamicPriorityFee ?? true,
       multiBroadcast: config.multiBroadcast ?? true,
@@ -308,7 +305,8 @@ export class UltraTxEngine {
         const p75Fee = sorted[p75Index];
 
         // Clamp between floor and ceiling
-        const fee = Math.max(PRIORITY_FEE_FLOOR, Math.min(p75Fee, PRIORITY_FEE_CEILING));
+        // Use configured computeUnitPrice as floor — matches website behavior
+        const fee = Math.max(this.config.computeUnitPrice, Math.min(p75Fee, PRIORITY_FEE_CEILING));
 
         this.cachedPriorityFee = { fee, fetchedAt: Date.now() };
         return fee;
