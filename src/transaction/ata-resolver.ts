@@ -2,8 +2,9 @@
  * ATA (Associated Token Account) Resolver
  *
  * Ensures required token accounts exist before transaction execution.
- * If an ATA is missing, prepends a createAssociatedTokenAccountIdempotent
- * instruction to the transaction.
+ * Matches Flash Trade website behavior: always include createIdempotent
+ * for the target token — no RPC check needed (the instruction is a no-op
+ * if the account already exists).
  */
 
 import {
@@ -18,8 +19,37 @@ import {
 } from '@solana/spl-token';
 
 /**
+ * Build createAssociatedTokenAccountIdempotent instructions for the given mints.
+ * Always includes the instruction — matches Flash Trade website behavior.
+ * The idempotent variant is a no-op if the ATA already exists, so no RPC
+ * check is needed and no extra latency is added.
+ *
+ * @param owner  Wallet public key (payer and owner)
+ * @param mints  Token mints that need ATAs
+ * @returns      createIdempotent instructions (one per mint)
+ */
+export function buildATAIdempotentIxs(
+  owner: PublicKey,
+  mints: PublicKey[],
+): TransactionInstruction[] {
+  if (mints.length === 0) return [];
+
+  return mints.map(mint => {
+    const ataAddress = getAssociatedTokenAddressSync(mint, owner, true);
+    return createAssociatedTokenAccountIdempotentInstruction(
+      owner,       // payer
+      ataAddress,  // ATA address
+      owner,       // owner
+      mint,        // mint
+      TOKEN_PROGRAM_ID,
+    );
+  });
+}
+
+/**
  * Check which ATAs exist and return create instructions for missing ones.
  * Uses idempotent instruction — safe to include even if account exists.
+ * This variant does an RPC check first (use buildATAIdempotentIxs to skip the check).
  *
  * @param connection  Solana RPC connection
  * @param owner       Wallet public key (payer and owner)

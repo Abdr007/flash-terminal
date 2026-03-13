@@ -119,7 +119,7 @@ export function loadConfig(): FlashConfig {
     simulationMode: (process.env.SIMULATION_MODE ?? 'true').toLowerCase() !== 'false',
     defaultSlippageBps: parseIntSafe(process.env.DEFAULT_SLIPPAGE_BPS, 150),
     computeUnitLimit: parseIntSafe(process.env.COMPUTE_UNIT_LIMIT, 600000),
-    computeUnitPrice: parseIntSafe(process.env.COMPUTE_UNIT_PRICE, 500000),
+    computeUnitPrice: parseIntSafe(process.env.COMPUTE_UNIT_PRICE, 100000),
     logFile: process.env.LOG_FILE || null,
     // Signing guard limits (0 = unlimited / use market defaults)
     maxCollateralPerTrade: parseIntSafe(process.env.MAX_COLLATERAL_PER_TRADE, 0),

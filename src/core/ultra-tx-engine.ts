@@ -729,6 +729,16 @@ export class UltraTxEngine {
 
         buildTimeMs = Date.now() - buildStart;
 
+        // ── Transaction assembly diagnostics (first attempt only) ──
+        if (attempt === 1) {
+          const txSize = vtx.serialize().length;
+          const altLookups = message.addressTableLookups ?? [];
+          const altLookupCount = altLookups.reduce(
+            (sum, l) => sum + l.readonlyIndexes.length + l.writableIndexes.length, 0,
+          );
+          logger.info('TX', `Size: ${txSize}b | ALT: ${altLookups.length > 0 ? `${altLookups.length} table(s), ${altLookupCount} accounts` : 'none'} | Static: ${message.staticAccountKeys.length} | Fee: ${priorityFee} µL | IXs: ${allIxs.length}`);
+        }
+
         // ── Step 4: Simulate (first attempt only) ──
         if (attempt === 1) {
           await this.simulateTransaction(vtx, conn);

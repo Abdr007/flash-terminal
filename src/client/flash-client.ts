@@ -54,7 +54,7 @@ import { getUltraTxEngine, initUltraTxEngine } from '../core/ultra-tx-engine.js'
 import { getEngineRouter } from '../execution/engine-router.js';
 import { createBatch, appendToBatch, isBatchWithinLimit, batchSummary, type SdkResult } from '../transaction/instruction-aggregator.js';
 import { resolveALTs, verifyALTAccountOverlap, logMessageALTDiagnostics } from '../transaction/alt-resolver.js';
-import { ensureATAs } from '../transaction/ata-resolver.js';
+import { ensureATAs, buildATAIdempotentIxs } from '../transaction/ata-resolver.js';
 
 // ─── Pyth Price Service ──────────────────────────────────────────────────────
 
@@ -770,8 +770,14 @@ export class FlashClient implements IFlashClient {
           addressLookupTableAccounts: altAccounts ?? [],
         });
 
-        // Log ALT compilation result on first attempt
+        // Log transaction assembly diagnostics on first attempt
         if (attempt === 1) {
+          const txSize = new VersionedTransaction(message).serialize().length;
+          const altLookups = message.addressTableLookups ?? [];
+          const altLookupCount = altLookups.reduce(
+            (sum, l) => sum + l.readonlyIndexes.length + l.writableIndexes.length, 0,
+          );
+          logger.info('TX', `Size: ${txSize}b | ALT: ${altLookups.length > 0 ? `${altLookups.length} table(s), ${altLookupCount} accounts` : 'none'} | Static: ${message.staticAccountKeys.length} | Fee: ${this.config.computeUnitPrice} µL | IXs: ${allIxs.length}`);
           logMessageALTDiagnostics(message, 'sendTx');
         }
 
@@ -1158,7 +1164,13 @@ export class FlashClient implements IFlashClient {
         );
       }
 
-      const txSignature = await this.sendTx(result.instructions, result.additionalSigners, poolConfig);
+      // Ensure target token ATA exists (matches Flash Trade website behavior).
+      // Website always prepends createAssociatedTokenAccountIdempotent for the
+      // target token before swap_and_open. Idempotent = no-op if ATA exists.
+      const ataIxs = buildATAIdempotentIxs(this.wallet.publicKey, [targetToken.mintKey]);
+      const allInstructions = [...ataIxs, ...result.instructions];
+
+      const txSignature = await this.sendTx(allInstructions, result.additionalSigners, poolConfig);
       this.recordRecentTrade(cacheKey);
 
       // Compute SDK-exact liquidation price for the return value
@@ -2339,21 +2351,18 @@ export class FlashClient implements IFlashClient {
         // Continue without ALTs
       }
 
-      // ── Resolve ATAs for trigger orders ──
-      if (tpResult || slResult) {
-        try {
-          const receiveToken = this.findToken(poolConfig, DEFAULT_COLLATERAL_TOKEN);
-          const ataIxs = await ensureATAs(
-            this.connection,
-            this.wallet.publicKey,
-            [receiveToken.mintKey],
-          );
-          if (ataIxs.length > 0) {
-            // Prepend ATA creation instructions
-            batch.instructions.unshift(...ataIxs);
-          }
-        } catch {
-          // Non-critical — ATAs likely exist
+      // ── Ensure target token ATA exists (matches Flash Trade website) ──
+      // Website always includes createAssociatedTokenAccountIdempotent for the
+      // target token before swap_and_open. The idempotent variant is a no-op if
+      // the ATA already exists, so no RPC check needed.
+      {
+        const ataIxs = buildATAIdempotentIxs(
+          this.wallet.publicKey,
+          [targetToken.mintKey],
+        );
+        if (ataIxs.length > 0) {
+          // Prepend ATA creation before all other instructions
+          batch.instructions.unshift(...ataIxs);
         }
       }
 

@@ -102,7 +102,7 @@ export function validateConfig(): ConfigWarning[] {
   }
 
   // ── Compute unit price sanity ──
-  const cuPrice = parseFloat(process.env.COMPUTE_UNIT_PRICE ?? '500000');
+  const cuPrice = parseFloat(process.env.COMPUTE_UNIT_PRICE ?? '100000');
   if (cuPrice > 10_000_000) {
     warnings.push({
       level: 'warning',
