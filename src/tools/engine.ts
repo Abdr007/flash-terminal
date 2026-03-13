@@ -342,29 +342,29 @@ export class ToolEngine {
       case ActionType.EarnAddLiquidity:
         return {
           toolName: 'earn_add_liquidity',
-          params: { token: intent.token ?? 'USDC', amount: intent.amount },
+          params: { token: intent.token ?? 'USDC', amount: intent.amount, pool: intent.pool },
         };
 
       case ActionType.EarnRemoveLiquidity:
         return {
           toolName: 'earn_remove_liquidity',
-          params: { token: intent.token ?? 'USDC', percent: intent.percent ?? 100 },
+          params: { token: intent.token ?? 'USDC', percent: intent.percent ?? 100, pool: intent.pool },
         };
 
       case ActionType.EarnStake:
         return {
           toolName: 'earn_stake',
-          params: { amount: intent.amount },
+          params: { amount: intent.amount, pool: intent.pool },
         };
 
       case ActionType.EarnUnstake:
         return {
           toolName: 'earn_unstake',
-          params: { percent: intent.percent ?? 100 },
+          params: { percent: intent.percent ?? 100, pool: intent.pool },
         };
 
       case ActionType.EarnClaimRewards:
-        return { toolName: 'earn_claim_rewards', params: {} };
+        return { toolName: 'earn_claim_rewards', params: { pool: intent.pool } };
 
       case ActionType.EarnStatus:
         return { toolName: 'earn_status', params: {} };

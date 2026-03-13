@@ -2342,14 +2342,34 @@ export class FlashClient implements IFlashClient {
 
   // ─── Earn (LP & Staking) ───────────────────────────────────────────────────
 
-  async addLiquidity(tokenSymbol: string, amountUsd: number) {
+  /**
+   * Resolve a PoolConfig by pool name. Falls back to default pool if not specified.
+   */
+  private resolvePoolConfig(poolName?: string): PoolConfig {
+    if (!poolName) return this.poolConfig;
+    if (poolName === this.poolConfig.poolName) return this.poolConfig;
+    if (!isTradeablePool(poolName)) {
+      throw new Error(`Pool "${poolName}" is not available. Use "earn status" to see available pools.`);
+    }
+    const pc = PoolConfig.fromIdsByName(poolName, this.config.network);
+    // Register program IDs
+    this.allowedPrograms.add(pc.programId.toBase58());
+    if (pc.perpComposibilityProgramId) this.allowedPrograms.add(pc.perpComposibilityProgramId.toBase58());
+    if (pc.fbNftRewardProgramId) this.allowedPrograms.add(pc.fbNftRewardProgramId.toBase58());
+    if (pc.rewardDistributionProgram?.programId) this.allowedPrograms.add(pc.rewardDistributionProgram.programId.toBase58());
+    ALLOWED_PROGRAM_IDS = this.allowedPrograms;
+    return pc;
+  }
+
+  async addLiquidity(tokenSymbol: string, amountUsd: number, pool?: string) {
     const logger = getLogger();
-    const poolConfig = this.getPoolConfigForToken(tokenSymbol);
+    const poolConfig = pool ? this.resolvePoolConfig(pool) : this.getPoolConfigForToken(tokenSymbol);
     const token = this.findToken(poolConfig, tokenSymbol);
 
     const nativeAmount = uiDecimalsToNative(amountUsd.toString(), token.decimals);
+    const flpSymbol = (poolConfig as any).compoundingLpTokenSymbol || 'FLP';
 
-    logger.info('CLIENT', `Add liquidity: ${amountUsd} ${tokenSymbol}`);
+    logger.info('CLIENT', `Add liquidity: ${amountUsd} ${tokenSymbol} → ${poolConfig.poolName} (${flpSymbol})`);
 
     const result = await this.perpClient.addLiquidity(
       token.symbol,
@@ -2365,26 +2385,21 @@ export class FlashClient implements IFlashClient {
       action: 'add_liquidity',
       amount: amountUsd,
       token: tokenSymbol,
-      message: `Added ${amountUsd} ${tokenSymbol} liquidity to pool.`,
+      message: `Added ${amountUsd} ${tokenSymbol} liquidity to ${poolConfig.poolName} → ${flpSymbol}`,
     };
   }
 
-  async removeLiquidity(tokenSymbol: string, percent: number) {
+  async removeLiquidity(tokenSymbol: string, percent: number, pool?: string) {
     const logger = getLogger();
-    const poolConfig = this.getPoolConfigForToken(tokenSymbol);
+    const poolConfig = pool ? this.resolvePoolConfig(pool) : this.getPoolConfigForToken(tokenSymbol);
     const token = this.findToken(poolConfig, tokenSymbol);
+    const flpSymbol = (poolConfig as any).compoundingLpTokenSymbol || 'FLP';
 
-    // For removeLiquidity we need the LP token amount.
-    // The percent represents how much of the user's LP position to remove.
-    // We pass a placeholder — the SDK will handle LP amount calculation.
-    // In practice, the user would need their LP balance fetched first.
-    // For now, we use a reasonable approach: convert percent to a BN.
-    logger.info('CLIENT', `Remove liquidity: ${percent}% ${tokenSymbol}`);
+    logger.info('CLIENT', `Remove liquidity: ${percent}% from ${poolConfig.poolName} (${flpSymbol})`);
 
-    // Use removeCompoundingLiquidity with reward token = pool's compounding token
     const rewardTokenMint = poolConfig.compoundingTokenMint;
     const result = await this.perpClient.removeCompoundingLiquidity(
-      BN_ZERO, // compoundingAmountIn — SDK uses percent internally
+      BN_ZERO, // compoundingAmountIn
       BN_ZERO, // minAmountOut
       token.symbol,
       rewardTokenMint,
@@ -2397,22 +2412,24 @@ export class FlashClient implements IFlashClient {
       txSignature: sig,
       action: 'remove_liquidity',
       token: tokenSymbol,
-      message: `Removed ${percent}% of ${tokenSymbol} liquidity from pool.`,
+      message: `Removed ${percent}% of ${flpSymbol} from ${poolConfig.poolName} → ${tokenSymbol}`,
     };
   }
 
-  async stakeFLP(amountUsd: number) {
+  async stakeFLP(amountUsd: number, pool?: string) {
     const logger = getLogger();
-    const poolConfig = this.poolConfig;
+    const poolConfig = this.resolvePoolConfig(pool);
+    const flpSymbol = (poolConfig as any).compoundingLpTokenSymbol || 'FLP';
+    const sflpSymbol = (poolConfig as any).stakedLpTokenSymbol || 'sFLP';
 
-    const nativeAmount = uiDecimalsToNative(amountUsd.toString(), 6); // FLP uses 6 decimals
+    const nativeAmount = uiDecimalsToNative(amountUsd.toString(), poolConfig.lpDecimals);
 
-    logger.info('CLIENT', `Stake FLP: $${amountUsd}`);
+    logger.info('CLIENT', `Stake ${flpSymbol}: $${amountUsd} → ${sflpSymbol} (${poolConfig.poolName})`);
 
     const owner = this.wallet.publicKey;
     const result = await this.perpClient.depositStake(
       owner,
-      owner, // feePayer = owner
+      owner,
       nativeAmount,
       poolConfig,
     );
@@ -2423,20 +2440,20 @@ export class FlashClient implements IFlashClient {
       txSignature: sig,
       action: 'stake',
       amount: amountUsd,
-      message: `Staked $${amountUsd} FLP tokens.`,
+      message: `Staked $${amountUsd} ${flpSymbol} → ${sflpSymbol} (${poolConfig.poolName})`,
     };
   }
 
-  async unstakeFLP(percent: number) {
+  async unstakeFLP(percent: number, pool?: string) {
     const logger = getLogger();
-    const poolConfig = this.poolConfig;
+    const poolConfig = this.resolvePoolConfig(pool);
+    const sflpSymbol = (poolConfig as any).stakedLpTokenSymbol || 'sFLP';
 
-    logger.info('CLIENT', `Unstake FLP: ${percent}%`);
+    logger.info('CLIENT', `Unstake ${sflpSymbol}: ${percent}% (${poolConfig.poolName})`);
 
-    // Use unstakeInstant for immediate withdrawal
     const result = await this.perpClient.unstakeInstant(
-      'USDC', // reward symbol
-      BN_ZERO, // unstakeAmount — placeholder, SDK resolves from percent
+      'USDC',
+      BN_ZERO,
       poolConfig,
     );
 
@@ -2445,15 +2462,15 @@ export class FlashClient implements IFlashClient {
     return {
       txSignature: sig,
       action: 'unstake',
-      message: `Unstaked ${percent}% of FLP tokens.`,
+      message: `Unstaked ${percent}% of ${sflpSymbol} (${poolConfig.poolName})`,
     };
   }
 
-  async claimRewards() {
+  async claimRewards(pool?: string) {
     const logger = getLogger();
-    const poolConfig = this.poolConfig;
+    const poolConfig = this.resolvePoolConfig(pool);
 
-    logger.info('CLIENT', 'Claim rewards');
+    logger.info('CLIENT', `Claim rewards from ${poolConfig.poolName}`);
 
     const result = await this.perpClient.collectStakeFees(
       'USDC',
@@ -2465,7 +2482,7 @@ export class FlashClient implements IFlashClient {
     return {
       txSignature: sig,
       action: 'claim_rewards',
-      message: 'Claimed all pending staking rewards.',
+      message: `Claimed staking rewards from ${poolConfig.poolName}`,
     };
   }
 }

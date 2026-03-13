@@ -429,26 +429,31 @@ export const EarnAddLiquiditySchema = z.object({
   action: z.literal(ActionType.EarnAddLiquidity),
   amount: z.number().positive(),
   token: z.string().max(20).optional(),
+  pool: z.string().max(30).optional(),
 });
 
 export const EarnRemoveLiquiditySchema = z.object({
   action: z.literal(ActionType.EarnRemoveLiquidity),
   percent: z.number().min(1).max(100),
   token: z.string().max(20).optional(),
+  pool: z.string().max(30).optional(),
 });
 
 export const EarnStakeSchema = z.object({
   action: z.literal(ActionType.EarnStake),
   amount: z.number().positive(),
+  pool: z.string().max(30).optional(),
 });
 
 export const EarnUnstakeSchema = z.object({
   action: z.literal(ActionType.EarnUnstake),
   percent: z.number().min(1).max(100),
+  pool: z.string().max(30).optional(),
 });
 
 export const EarnClaimRewardsSchema = z.object({
   action: z.literal(ActionType.EarnClaimRewards),
+  pool: z.string().max(30).optional(),
 });
 
 export const EarnStatusSchema = z.object({
@@ -909,26 +914,30 @@ export interface IFlashClient {
   addLiquidity?(
     tokenSymbol: string,
     amountUsd: number,
+    pool?: string,
   ): Promise<EarnResult>;
 
   /** Remove liquidity from a pool */
   removeLiquidity?(
     tokenSymbol: string,
     percent: number,
+    pool?: string,
   ): Promise<EarnResult>;
 
   /** Stake FLP tokens */
   stakeFLP?(
     amountUsd: number,
+    pool?: string,
   ): Promise<EarnResult>;
 
   /** Unstake FLP tokens */
   unstakeFLP?(
     percent: number,
+    pool?: string,
   ): Promise<EarnResult>;
 
   /** Claim staking/LP rewards */
-  claimRewards?(): Promise<EarnResult>;
+  claimRewards?(pool?: string): Promise<EarnResult>;
 }
 
 // ─── Swap & Earn Result Types ──────────────────────────────────────────────

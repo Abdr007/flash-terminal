@@ -2,12 +2,38 @@ import { z } from 'zod';
 import { ToolDefinition, ToolResult } from '../types/index.js';
 import { formatUsd } from '../utils/format.js';
 import { getErrorMessage } from '../utils/retry.js';
+import { POOL_NAMES } from '../config/index.js';
 import chalk from 'chalk';
 import { theme } from '../cli/theme.js';
 
 const NOT_AVAILABLE_MSG = chalk.yellow(
   '  Earn features are not available in simulation mode. Connect a wallet for live LP/staking.',
 );
+
+/** Load pool FLP token info dynamically from SDK PoolConfig */
+function getPoolEarnInfo(): Array<{ poolName: string; flp: string; sflp: string; tokens: string[] }> {
+  try {
+    const { PoolConfig } = require('flash-sdk');
+    const result: Array<{ poolName: string; flp: string; sflp: string; tokens: string[] }> = [];
+    for (const name of POOL_NAMES) {
+      try {
+        const pc = PoolConfig.fromIdsByName(name, 'mainnet-beta');
+        const tokens = (pc.tokens as Array<{ symbol: string }>).map((t: { symbol: string }) => t.symbol);
+        result.push({
+          poolName: name,
+          flp: pc.compoundingLpTokenSymbol || 'FLP',
+          sflp: pc.stakedLpTokenSymbol || 'sFLP',
+          tokens,
+        });
+      } catch {
+        // Pool not loadable by SDK
+      }
+    }
+    return result;
+  } catch {
+    return [];
+  }
+}
 
 // ─── earn add-liquidity ──────────────────────────────────────────────────────
 
@@ -17,9 +43,10 @@ export const earnAddLiquidityTool: ToolDefinition = {
   parameters: z.object({
     token: z.string().max(20).default('USDC'),
     amount: z.number().positive(),
+    pool: z.string().max(30).optional(),
   }),
   execute: async (params, context): Promise<ToolResult> => {
-    const { token, amount } = params as { token: string; amount: number };
+    const { token, amount, pool } = params as { token: string; amount: number; pool?: string };
     const client = context.flashClient;
 
     if (!client.addLiquidity) {
@@ -31,7 +58,7 @@ export const earnAddLiquidityTool: ToolDefinition = {
     }
 
     try {
-      const result = await client.addLiquidity(token.toUpperCase(), amount);
+      const result = await client.addLiquidity(token.toUpperCase(), amount, pool);
       const lines = [
         '',
         `  ${theme.accentBold('LIQUIDITY ADDED')}`,
@@ -58,9 +85,10 @@ export const earnRemoveLiquidityTool: ToolDefinition = {
   parameters: z.object({
     token: z.string().max(20).default('USDC'),
     percent: z.number().min(1).max(100),
+    pool: z.string().max(30).optional(),
   }),
   execute: async (params, context): Promise<ToolResult> => {
-    const { token, percent } = params as { token: string; percent: number };
+    const { token, percent, pool } = params as { token: string; percent: number; pool?: string };
     const client = context.flashClient;
 
     if (!client.removeLiquidity) {
@@ -72,7 +100,7 @@ export const earnRemoveLiquidityTool: ToolDefinition = {
     }
 
     try {
-      const result = await client.removeLiquidity(token.toUpperCase(), percent);
+      const result = await client.removeLiquidity(token.toUpperCase(), percent, pool);
       const lines = [
         '',
         `  ${theme.accentBold('LIQUIDITY REMOVED')}`,
@@ -98,9 +126,10 @@ export const earnStakeTool: ToolDefinition = {
   description: 'Stake FLP tokens for rewards',
   parameters: z.object({
     amount: z.number().positive(),
+    pool: z.string().max(30).optional(),
   }),
   execute: async (params, context): Promise<ToolResult> => {
-    const { amount } = params as { amount: number };
+    const { amount, pool } = params as { amount: number; pool?: string };
     const client = context.flashClient;
 
     if (!client.stakeFLP) {
@@ -112,7 +141,7 @@ export const earnStakeTool: ToolDefinition = {
     }
 
     try {
-      const result = await client.stakeFLP(amount);
+      const result = await client.stakeFLP(amount, pool);
       const lines = [
         '',
         `  ${theme.accentBold('FLP STAKED')}`,
@@ -137,9 +166,10 @@ export const earnUnstakeTool: ToolDefinition = {
   description: 'Unstake FLP tokens',
   parameters: z.object({
     percent: z.number().min(1).max(100),
+    pool: z.string().max(30).optional(),
   }),
   execute: async (params, context): Promise<ToolResult> => {
-    const { percent } = params as { percent: number };
+    const { percent, pool } = params as { percent: number; pool?: string };
     const client = context.flashClient;
 
     if (!client.unstakeFLP) {
@@ -151,7 +181,7 @@ export const earnUnstakeTool: ToolDefinition = {
     }
 
     try {
-      const result = await client.unstakeFLP(percent);
+      const result = await client.unstakeFLP(percent, pool);
       const lines = [
         '',
         `  ${theme.accentBold('FLP UNSTAKED')}`,
@@ -174,8 +204,11 @@ export const earnUnstakeTool: ToolDefinition = {
 export const earnClaimRewardsTool: ToolDefinition = {
   name: 'earn_claim_rewards',
   description: 'Claim all pending LP/staking rewards',
-  parameters: z.object({}),
-  execute: async (_params, context): Promise<ToolResult> => {
+  parameters: z.object({
+    pool: z.string().max(30).optional(),
+  }),
+  execute: async (params, context): Promise<ToolResult> => {
+    const { pool } = params as { pool?: string };
     const client = context.flashClient;
 
     if (!client.claimRewards) {
@@ -183,7 +216,7 @@ export const earnClaimRewardsTool: ToolDefinition = {
     }
 
     try {
-      const result = await client.claimRewards();
+      const result = await client.claimRewards(pool);
       const lines = [
         '',
         `  ${theme.accentBold('REWARDS CLAIMED')}`,
@@ -204,28 +237,44 @@ export const earnClaimRewardsTool: ToolDefinition = {
 
 export const earnStatusTool: ToolDefinition = {
   name: 'earn_status',
-  description: 'View earn/LP/staking status and available commands',
+  description: 'View all pools, FLP tokens, and earn commands',
   parameters: z.object({}),
   execute: async (_params, _context): Promise<ToolResult> => {
+    const pools = getPoolEarnInfo();
+
     const lines = [
       '',
       `  ${theme.accentBold('EARN')}  ${chalk.dim('— LP & Staking on Flash Trade')}`,
       '',
-      `  ${chalk.dim('Liquidity')}`,
-      `    ${chalk.cyan('earn add-liquidity $100')}        Add liquidity (default: USDC)`,
-      `    ${chalk.cyan('earn add-liquidity $200 SOL')}    Add liquidity in SOL`,
-      `    ${chalk.cyan('earn remove-liquidity 50%')}      Remove 50% of LP position`,
-      '',
-      `  ${chalk.dim('Staking')}`,
-      `    ${chalk.cyan('earn stake $200')}                Stake FLP tokens`,
-      `    ${chalk.cyan('earn unstake 25%')}               Unstake 25% of FLP`,
-      '',
-      `  ${chalk.dim('Rewards')}`,
-      `    ${chalk.cyan('earn claim')}                     Claim all pending rewards`,
-      '',
-      `  ${chalk.dim('Note: Earn features require a connected wallet (live mode).')}`,
-      '',
+      `  ${chalk.dim('─'.repeat(60))}`,
+      `  ${chalk.bold('Pool'.padEnd(16))}${chalk.bold('FLP Token'.padEnd(12))}${chalk.bold('Staked'.padEnd(12))}${chalk.bold('Pool Tokens')}`,
+      `  ${chalk.dim('─'.repeat(60))}`,
     ];
+
+    for (const pool of pools) {
+      const tokensStr = pool.tokens.join(', ');
+      lines.push(
+        `  ${chalk.white(pool.poolName.padEnd(16))}${chalk.green(pool.flp.padEnd(12))}${chalk.yellow(pool.sflp.padEnd(12))}${chalk.dim(tokensStr)}`,
+      );
+    }
+
+    lines.push(`  ${chalk.dim('─'.repeat(60))}`);
+    lines.push('');
+    lines.push(`  ${chalk.dim('Commands')}  ${chalk.dim('(add pool:<name> to target a specific pool)')}`);
+    lines.push('');
+    lines.push(`    ${chalk.cyan('earn add-liquidity $100')}                Add USDC to default pool`);
+    lines.push(`    ${chalk.cyan('earn add-liquidity $100 SOL')}            Add SOL liquidity`);
+    lines.push(`    ${chalk.cyan('earn add-liquidity $100 pool:Governance.1')}  Add to specific pool`);
+    lines.push(`    ${chalk.cyan('earn remove-liquidity 50%')}              Remove 50% of LP`);
+    lines.push(`    ${chalk.cyan('earn stake $200')}                        Stake FLP → sFLP`);
+    lines.push(`    ${chalk.cyan('earn stake $200 pool:Virtual.1')}         Stake in specific pool`);
+    lines.push(`    ${chalk.cyan('earn unstake 25%')}                       Unstake 25% of sFLP`);
+    lines.push(`    ${chalk.cyan('earn claim')}                             Claim pending rewards`);
+    lines.push(`    ${chalk.cyan('earn claim pool:Ondo.1')}                 Claim from specific pool`);
+    lines.push('');
+    lines.push(`  ${chalk.dim('Note: Earn features require a connected wallet (live mode).')}`);
+    lines.push('');
+
     return { success: true, message: lines.join('\n') };
   },
 };

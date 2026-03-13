@@ -219,3 +219,57 @@ describe('Earn parsing', () => {
     expect(result!.action).toBe(ActionType.EarnStatus);
   });
 });
+
+describe('Earn pool targeting', () => {
+  it('parses "earn add-liquidity $100 pool:Crypto.1"', () => {
+    const result = localParse('earn add-liquidity $100 pool:Crypto.1');
+    expect(result).toBeDefined();
+    expect(result!.action).toBe(ActionType.EarnAddLiquidity);
+    const r = result as any;
+    expect(r.amount).toBe(100);
+    expect(r.pool).toBe('Crypto.1');
+  });
+
+  it('parses "earn stake $200 pool:Virtual.1"', () => {
+    const result = localParse('earn stake $200 pool:Virtual.1');
+    expect(result).toBeDefined();
+    expect(result!.action).toBe(ActionType.EarnStake);
+    const r = result as any;
+    expect(r.amount).toBe(200);
+    expect(r.pool).toBe('Virtual.1');
+  });
+
+  it('parses "earn unstake 50% pool:Governance.1"', () => {
+    const result = localParse('earn unstake 50% pool:Governance.1');
+    expect(result).toBeDefined();
+    expect(result!.action).toBe(ActionType.EarnUnstake);
+    const r = result as any;
+    expect(r.percent).toBe(50);
+    expect(r.pool).toBe('Governance.1');
+  });
+
+  it('parses "earn claim pool:Ondo.1"', () => {
+    const result = localParse('earn claim pool:Ondo.1');
+    expect(result).toBeDefined();
+    expect(result!.action).toBe(ActionType.EarnClaimRewards);
+    const r = result as any;
+    expect(r.pool).toBe('Ondo.1');
+  });
+
+  it('parses "earn remove-liquidity 25% SOL pool:Crypto.1"', () => {
+    const result = localParse('earn remove-liquidity 25% SOL pool:Crypto.1');
+    expect(result).toBeDefined();
+    expect(result!.action).toBe(ActionType.EarnRemoveLiquidity);
+    const r = result as any;
+    expect(r.percent).toBe(25);
+    expect(r.token).toBe('SOL');
+    expect(r.pool).toBe('Crypto.1');
+  });
+
+  it('no pool defaults to undefined', () => {
+    const result = localParse('earn stake $100');
+    expect(result).toBeDefined();
+    const r = result as any;
+    expect(r.pool).toBeUndefined();
+  });
+});
