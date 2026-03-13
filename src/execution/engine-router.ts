@@ -15,7 +15,6 @@
  *   - Singleton lifecycle — init once, use everywhere
  */
 
-import { Connection } from '@solana/web3.js';
 import { MagicBlockClient, type MagicBlockResult } from './magicblock-client.js';
 import { getLogger } from '../utils/logger.js';
 import { getErrorMessage } from '../utils/retry.js';
