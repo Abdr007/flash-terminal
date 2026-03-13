@@ -7,6 +7,19 @@ import { getErrorMessage } from './utils/retry.js';
 import { BUILD_INFO } from './build-info.js';
 import chalk from 'chalk';
 
+// Suppress noisy @solana/web3.js 429 retry messages that pollute the terminal prompt.
+// The library prints these directly to console.error — we redirect to the log file instead.
+const _origConsoleError = console.error;
+console.error = (...args: unknown[]) => {
+  const msg = typeof args[0] === 'string' ? args[0] : '';
+  if (msg.includes('Server responded with') && msg.includes('Retrying after')) {
+    // Drop these — they come from @solana/web3.js internal retry logic
+    // and interleave with the user's CLI prompt making it unreadable.
+    return;
+  }
+  _origConsoleError(...args);
+};
+
 // Global error handlers — prevent crashes from leaking to the user
 // NOTE: unhandledRejection must NOT call process.exit() — background subsystems
 // (health monitor, reconciler) fire-and-forget promises that may

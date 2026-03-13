@@ -336,39 +336,55 @@ export class FlashTerminal {
         }
         console.log(chalk.cyan(`\n  ℹ RPC failover triggered → ${ep.label}`));
       });
-      // Start background health monitoring for live trading
-      this.rpcManager.startMonitoring();
     }
 
-    // Run crash recovery engine (verifies pending transactions from previous session)
-    try {
-      const { runRecovery } = await import('../runtime/recovery-engine.js');
-      const conn = this.rpcManager?.connection ?? null;
-      const recoveryResult = await runRecovery(conn);
-      if (recoveryResult.recovered > 0) {
-        console.log(chalk.green(`  Recovery: ${recoveryResult.recovered} pending trade(s) confirmed on-chain`));
-      }
-      if (recoveryResult.failed > 0) {
-        console.log(chalk.yellow(`  Recovery: ${recoveryResult.failed} trade(s) did not land`));
-      }
-    } catch {
-      // Recovery is non-critical — never block startup
-    }
-
-    // Initialize state reconciliation engine
-    const reconciler = initReconciler(this.flashClient);
-    reconciler.reconcile().catch(() => {}); // Initial sync — fire and forget
+    // ── Staggered background init ──────────────────────────────────────────
+    // Defer non-critical RPC-heavy tasks to avoid 429 rate limiting on startup.
+    // Each task is spaced out to prevent simultaneous RPC bursts.
     if (!this.config.simulationMode) {
-      reconciler.startPeriodicSync(); // 60s background sync for live mode
+      // Health monitor — start after 5s
+      setTimeout(() => {
+        this.rpcManager.startMonitoring();
+      }, 5_000).unref();
+
+      // Crash recovery — start after 3s
+      setTimeout(async () => {
+        try {
+          const { runRecovery } = await import('../runtime/recovery-engine.js');
+          const conn = this.rpcManager?.connection ?? null;
+          const recoveryResult = await runRecovery(conn);
+          if (recoveryResult.recovered > 0) {
+            console.log(chalk.green(`\n  Recovery: ${recoveryResult.recovered} pending trade(s) confirmed on-chain`));
+          }
+          if (recoveryResult.failed > 0) {
+            console.log(chalk.yellow(`\n  Recovery: ${recoveryResult.failed} trade(s) did not land`));
+          }
+        } catch {
+          // Recovery is non-critical
+        }
+      }, 3_000).unref();
+
+      // State reconciliation — start after 8s (after recovery finishes)
+      setTimeout(() => {
+        const reconciler = initReconciler(this.flashClient);
+        reconciler.reconcile().catch(() => {});
+        reconciler.startPeriodicSync();
+      }, 8_000).unref();
+    } else {
+      // Sim mode: just init reconciler without periodic sync
+      const reconciler = initReconciler(this.flashClient);
+      reconciler.reconcile().catch(() => {});
     }
 
-    // Start background maintenance (cache sweep, memory monitoring, oracle freshness)
-    try {
-      const { startMaintenance } = await import('../system/maintenance.js');
-      this.maintenance = startMaintenance();
-    } catch {
-      // Maintenance is non-critical
-    }
+    // Start background maintenance after 10s
+    setTimeout(async () => {
+      try {
+        const { startMaintenance } = await import('../system/maintenance.js');
+        this.maintenance = startMaintenance();
+      } catch {
+        // Maintenance is non-critical
+      }
+    }, 10_000).unref();
 
     // Load plugins and register their tools
     if (this.config.noPlugins) {
