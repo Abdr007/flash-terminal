@@ -122,11 +122,12 @@ Examples:
 - "close all positions" -> {"action":"close_all"}
 - "swap 10 SOL to USDC" -> {"action":"swap","inputToken":"SOL","outputToken":"USDC","amount":10}
 - "swap SOL USDC $10" -> {"action":"swap","inputToken":"SOL","outputToken":"USDC","amount":10}
-- "earn add-liquidity $100" -> {"action":"earn_add_liquidity","amount":100,"token":"USDC"}
-- "earn remove-liquidity 50%" -> {"action":"earn_remove_liquidity","percent":50,"token":"USDC"}
-- "earn stake $200" -> {"action":"earn_stake","amount":200}
-- "earn unstake 25%" -> {"action":"earn_unstake","percent":25}
-- "earn claim rewards" -> {"action":"earn_claim_rewards"}
+- "earn add $100 crypto" -> {"action":"earn_add_liquidity","amount":100,"token":"USDC","pool":"Crypto.1"}
+- "earn remove 50% governance" -> {"action":"earn_remove_liquidity","percent":50,"token":"USDC","pool":"Governance.1"}
+- "earn stake $200 virtual" -> {"action":"earn_stake","amount":200,"pool":"Virtual.1"}
+- "earn unstake 25% governance" -> {"action":"earn_unstake","percent":25,"pool":"Governance.1"}
+- "earn claim" -> {"action":"earn_claim_rewards"}
+- "earn claim crypto" -> {"action":"earn_claim_rewards","pool":"Crypto.1"}
 
 Rules:
 - Market symbols are UPPERCASE
@@ -936,79 +937,110 @@ export function localParse(input: string): ParsedIntent | null {
   }
 
   // ─── Earn Commands ─────────────────────────────────────────────────────
-  // All earn commands support optional "pool:<name>" suffix (case-preserved).
+  // Natural language pool aliases — users type "crypto", system resolves to "Crypto.1"
 
-  /** Extract pool:Name from the end of input. Returns [cleaned, poolName|undefined]. */
-  function extractPool(text: string): [string, string | undefined] {
-    // Match pool:Crypto.1, pool:Virtual.1, etc. (case-insensitive key, preserve value)
-    const poolMatch = text.match(/\s+pool:(\S+)$/i);
-    if (poolMatch) {
-      return [text.slice(0, poolMatch.index).trim(), poolMatch[1]];
+  const EARN_POOL_ALIASES: Record<string, string> = {
+    crypto: 'Crypto.1',
+    virtual: 'Virtual.1',
+    governance: 'Governance.1',
+    gov: 'Governance.1',
+    community: 'Community.1',
+    meme: 'Community.2',
+    trump: 'Trump.1',
+    ore: 'Ore.1',
+    ondo: 'Ondo.1',
+    stocks: 'Ondo.1',
+  };
+
+  /** Resolve a pool alias to protocol pool name. Also accepts pool:Name for backward compat. */
+  function resolveEarnPool(alias?: string): string | undefined {
+    if (!alias) return undefined;
+    // Support legacy pool:Crypto.1 syntax
+    if (alias.startsWith('pool:')) return alias.slice(5);
+    return EARN_POOL_ALIASES[alias.toLowerCase()] ?? undefined;
+  }
+
+  /** Extract the last token as a pool alias if it matches. Returns [cleaned, poolName|undefined]. */
+  function extractEarnPool(text: string, originalText?: string): [string, string | undefined] {
+    const tokens = text.trim().split(/\s+/);
+    if (tokens.length < 2) return [text, undefined];
+    const last = tokens[tokens.length - 1];
+    // For pool: syntax, use original casing from originalText
+    const origTokens = originalText?.trim().split(/\s+/);
+    const lastOrig = origTokens?.[origTokens.length - 1] ?? last;
+    // Check if last token is a pool alias or pool:X
+    if (EARN_POOL_ALIASES[last] || last.startsWith('pool:')) {
+      const pool = resolveEarnPool(last.startsWith('pool:') ? lastOrig : last);
+      return [tokens.slice(0, -1).join(' '), pool];
     }
     return [text, undefined];
   }
 
-  // Pre-extract pool suffix from lower (but use original input for pool name preservation)
-  const [earnBody, earnPool] = extractPool(normalized);
-  const earnLower = earnBody.toLowerCase();
+  // Only process if input starts with "earn"
+  if (/^earn\b/.test(lower)) {
+    const [earnBody, earnPool] = extractEarnPool(lower, normalized);
 
-  // "earn add-liquidity $100", "earn add-liquidity $100 USDC", "earn add liquidity $100 pool:Crypto.1"
-  const earnAddMatch = earnLower.match(
-    /^earn\s+add[- ]?liquidity\s+\$?(\d+(?:\.\d+)?)(?:\s+([a-z]+))?$/
-  );
-  if (earnAddMatch) {
-    return {
-      action: ActionType.EarnAddLiquidity,
-      amount: parseFloat(earnAddMatch[1]),
-      token: earnAddMatch[2] ? resolveMarket(earnAddMatch[2]) : 'USDC',
-      pool: earnPool,
-    } as ParsedIntent;
-  }
+    // "earn add $100", "earn add $100 crypto", "earn add-liquidity $100 governance"
+    const earnAddMatch = earnBody.match(
+      /^earn\s+add(?:[- ]?liquidity)?\s+\$?(\d+(?:\.\d+)?)$/
+    );
+    if (earnAddMatch) {
+      return {
+        action: ActionType.EarnAddLiquidity,
+        amount: parseFloat(earnAddMatch[1]),
+        token: 'USDC',
+        pool: earnPool ?? EARN_POOL_ALIASES['crypto'],
+      } as ParsedIntent;
+    }
 
-  // "earn remove-liquidity 50%", "earn remove liquidity 50% USDC"
-  const earnRemoveMatch = earnLower.match(
-    /^earn\s+remove[- ]?liquidity\s+(\d+(?:\.\d+)?)\s*%?(?:\s+([a-z]+))?$/
-  );
-  if (earnRemoveMatch) {
-    return {
-      action: ActionType.EarnRemoveLiquidity,
-      percent: parseFloat(earnRemoveMatch[1]),
-      token: earnRemoveMatch[2] ? resolveMarket(earnRemoveMatch[2]) : 'USDC',
-      pool: earnPool,
-    } as ParsedIntent;
-  }
+    // "earn remove 50%", "earn remove 50% crypto", "earn remove-liquidity 25% governance"
+    const earnRemoveMatch = earnBody.match(
+      /^earn\s+remove(?:[- ]?liquidity)?\s+(\d+(?:\.\d+)?)\s*%?$/
+    );
+    if (earnRemoveMatch) {
+      return {
+        action: ActionType.EarnRemoveLiquidity,
+        percent: parseFloat(earnRemoveMatch[1]),
+        token: 'USDC',
+        pool: earnPool ?? EARN_POOL_ALIASES['crypto'],
+      } as ParsedIntent;
+    }
 
-  // "earn stake $200", "earn stake-flp $200", "earn stake $200 pool:Governance.1"
-  const earnStakeMatch = earnLower.match(
-    /^earn\s+stake(?:[- ]?flp)?\s+\$?(\d+(?:\.\d+)?)$/
-  );
-  if (earnStakeMatch) {
-    return {
-      action: ActionType.EarnStake,
-      amount: parseFloat(earnStakeMatch[1]),
-      pool: earnPool,
-    } as ParsedIntent;
-  }
+    // "earn stake $200", "earn stake $200 governance"
+    const earnStakeMatch = earnBody.match(
+      /^earn\s+stake(?:[- ]?flp)?\s+\$?(\d+(?:\.\d+)?)$/
+    );
+    if (earnStakeMatch) {
+      return {
+        action: ActionType.EarnStake,
+        amount: parseFloat(earnStakeMatch[1]),
+        pool: earnPool ?? EARN_POOL_ALIASES['crypto'],
+      } as ParsedIntent;
+    }
 
-  // "earn unstake 25%", "earn unstake-flp 25%"
-  const earnUnstakeMatch = earnLower.match(
-    /^earn\s+unstake(?:[- ]?flp)?\s+(\d+(?:\.\d+)?)\s*%?$/
-  );
-  if (earnUnstakeMatch) {
-    return {
-      action: ActionType.EarnUnstake,
-      percent: parseFloat(earnUnstakeMatch[1]),
-      pool: earnPool,
-    } as ParsedIntent;
-  }
+    // "earn unstake 25%", "earn unstake 50% governance"
+    const earnUnstakeMatch = earnBody.match(
+      /^earn\s+unstake(?:[- ]?flp)?\s+(\d+(?:\.\d+)?)\s*%?$/
+    );
+    if (earnUnstakeMatch) {
+      return {
+        action: ActionType.EarnUnstake,
+        percent: parseFloat(earnUnstakeMatch[1]),
+        pool: earnPool ?? EARN_POOL_ALIASES['crypto'],
+      } as ParsedIntent;
+    }
 
-  // "earn claim", "earn claim-rewards", "earn claim rewards", "earn claim pool:X"
-  if (/^earn\s+claim(?:[- ]?rewards?)?$/.test(earnLower)) {
-    return { action: ActionType.EarnClaimRewards, pool: earnPool } as ParsedIntent;
-  }
+    // "earn claim", "earn claim crypto", "earn claim governance"
+    if (/^earn\s+claim(?:[- ]?rewards?)?$/.test(earnBody)) {
+      return { action: ActionType.EarnClaimRewards, pool: earnPool } as ParsedIntent;
+    }
 
-  // "earn status" or bare "earn"
-  if (/^earn(?:\s+status)?$/.test(earnLower)) {
+    // "earn status" or bare "earn"
+    if (/^earn(?:\s+status)?$/.test(earnBody)) {
+      return { action: ActionType.EarnStatus };
+    }
+
+    // Unknown earn subcommand — show earn help
     return { action: ActionType.EarnStatus };
   }
 

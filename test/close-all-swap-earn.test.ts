@@ -136,13 +136,13 @@ describe('Earn parsing', () => {
     expect(r.token).toBe('USDC');
   });
 
-  it('parses "earn add liquidity $200 SOL"', () => {
-    const result = localParse('earn add liquidity $200 SOL');
+  it('parses "earn add liquidity $200"', () => {
+    const result = localParse('earn add liquidity $200');
     expect(result).toBeDefined();
     expect(result!.action).toBe(ActionType.EarnAddLiquidity);
     const r = result as any;
     expect(r.amount).toBe(200);
-    expect(r.token).toBe('SOL');
+    expect(r.token).toBe('USDC');
   });
 
   it('parses "earn remove-liquidity 50%"', () => {
@@ -256,20 +256,19 @@ describe('Earn pool targeting', () => {
     expect(r.pool).toBe('Ondo.1');
   });
 
-  it('parses "earn remove-liquidity 25% SOL pool:Crypto.1"', () => {
-    const result = localParse('earn remove-liquidity 25% SOL pool:Crypto.1');
+  it('parses "earn remove-liquidity 25% pool:Crypto.1"', () => {
+    const result = localParse('earn remove-liquidity 25% pool:Crypto.1');
     expect(result).toBeDefined();
     expect(result!.action).toBe(ActionType.EarnRemoveLiquidity);
     const r = result as any;
     expect(r.percent).toBe(25);
-    expect(r.token).toBe('SOL');
     expect(r.pool).toBe('Crypto.1');
   });
 
-  it('no pool defaults to undefined', () => {
+  it('no pool defaults to Crypto.1', () => {
     const result = localParse('earn stake $100');
     expect(result).toBeDefined();
     const r = result as any;
-    expect(r.pool).toBeUndefined();
+    expect(r.pool).toBe('Crypto.1');
   });
 });
