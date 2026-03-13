@@ -22,6 +22,8 @@ import { initSigningGuard } from '../security/signing-guard.js';
 import { RpcManager, buildRpcEndpoints, initRpcManager } from '../network/rpc-manager.js';
 import { initSystemDiagnostics } from '../system/system-diagnostics.js';
 import { initReconciler, getReconciler } from '../core/state-reconciliation.js';
+import { shutdownStateCache } from '../core/state-cache.js';
+import { shutdownUltraTxEngine } from '../core/ultra-tx-engine.js';
 import { loadPlugins, shutdownPlugins } from '../plugins/plugin-loader.js';
 import { StatusBar } from './status-bar.js';
 import { runDoctor } from '../tools/doctor.js';
@@ -1384,6 +1386,16 @@ export class FlashTerminal {
     }
     try {
       shutdownPlugins().catch(() => {});
+    } catch {
+      // Best-effort cleanup
+    }
+    try {
+      shutdownStateCache();
+    } catch {
+      // Best-effort cleanup
+    }
+    try {
+      shutdownUltraTxEngine();
     } catch {
       // Best-effort cleanup
     }

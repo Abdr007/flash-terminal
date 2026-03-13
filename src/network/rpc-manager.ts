@@ -10,6 +10,7 @@ const FAILURE_RATE_WINDOW = 20;
 const FAILURE_RATE_THRESHOLD = 0.5; // 50% failure rate triggers failover
 const FAILOVER_COOLDOWN_MS = 60_000; // Minimum 60s between failovers to prevent oscillation
 const SLOT_LAG_THRESHOLD = 50; // Slots behind network tip before endpoint is considered stale
+const SLOT_CONSENSUS_DIVERGENCE = 3; // Max slot divergence for consensus
 
 export interface RpcEndpoint {
   url: string;
@@ -419,6 +420,79 @@ export class RpcManager {
       this.monitorTimer = null;
       getLogger().info('RPC', 'Health monitor stopped');
     }
+  }
+
+  /**
+   * Get slot consensus across all endpoints.
+   * Returns the median slot and whether endpoints agree within SLOT_CONSENSUS_DIVERGENCE.
+   */
+  getSlotConsensus(): { medianSlot: number; inConsensus: boolean; divergentEndpoints: string[] } {
+    const slots: { url: string; slot: number }[] = [];
+    for (const ep of this.endpoints) {
+      const slot = this.slotHistory.get(ep.url);
+      if (slot !== undefined && slot > 0) {
+        slots.push({ url: ep.url, slot });
+      }
+    }
+
+    if (slots.length === 0) {
+      return { medianSlot: 0, inConsensus: true, divergentEndpoints: [] };
+    }
+
+    // Compute median
+    const sorted = [...slots].sort((a, b) => a.slot - b.slot);
+    const medianSlot = sorted[Math.floor(sorted.length / 2)].slot;
+
+    // Find divergent endpoints (> SLOT_CONSENSUS_DIVERGENCE from median)
+    const divergent: string[] = [];
+    for (const s of slots) {
+      if (Math.abs(s.slot - medianSlot) > SLOT_CONSENSUS_DIVERGENCE) {
+        divergent.push(s.url);
+      }
+    }
+
+    return {
+      medianSlot,
+      inConsensus: divergent.length === 0,
+      divergentEndpoints: divergent,
+    };
+  }
+
+  /**
+   * Get connections that are within slot consensus (< 3 slot divergence from median).
+   * Used by broadcast to exclude stale endpoints.
+   */
+  getConsensusHealthyConnections(): Connection[] {
+    const consensus = this.getSlotConsensus();
+    if (consensus.medianSlot === 0) {
+      // No slot data — return primary only
+      return [this._connection];
+    }
+
+    const connections: Connection[] = [];
+    for (const ep of this.endpoints) {
+      if (!consensus.divergentEndpoints.includes(ep.url)) {
+        if (ep.url === this.activeEndpoint.url) {
+          connections.push(this._connection);
+        } else {
+          try {
+            connections.push(new Connection(ep.url, {
+              commitment: 'confirmed',
+              disableRetryOnRateLimit: true,
+            }));
+          } catch {
+            // Skip invalid endpoints
+          }
+        }
+      }
+    }
+
+    // Always include at least the primary
+    if (connections.length === 0) {
+      connections.push(this._connection);
+    }
+
+    return connections;
   }
 
   /**

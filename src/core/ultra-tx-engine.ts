@@ -34,11 +34,14 @@ import { getLeaderRouter, initLeaderRouter, shutdownLeaderRouter } from './leade
 
 // ─── Configuration ───────────────────────────────────────────────────────────
 
-/** Blockhash refresh interval — 10s keeps blockhash fresh without excessive RPC load */
-const BLOCKHASH_REFRESH_MS = 10_000;
+/** Blockhash refresh interval — 300ms for ultra-low latency access */
+const BLOCKHASH_REFRESH_MS = 300;
 
 /** Maximum age before a cached blockhash is considered stale */
-const BLOCKHASH_MAX_AGE_MS = 15_000;
+const BLOCKHASH_MAX_AGE_MS = 2_000;
+
+/** Fork protection: reject blockhash if slot drops by more than this amount */
+const BLOCKHASH_FORK_SLOT_DROP = 5;
 
 /** Confirmation timeout per attempt */
 const CONFIRM_TIMEOUT_MS = 45_000;
@@ -64,8 +67,11 @@ const DEFAULT_CU_LIMIT = 420_000;
 /** Recent priority fee sample size for dynamic calculation */
 const PRIORITY_FEE_SAMPLE_SIZE = 20;
 
-/** Priority fee cache TTL */
-const PRIORITY_FEE_CACHE_MS = 10_000;
+/** Priority fee cache TTL — 5s refresh for responsive congestion tracking */
+const PRIORITY_FEE_CACHE_MS = 5_000;
+
+/** Congestion detection: uplift % when >50% of recent fees exceed baseline */
+const CONGESTION_UPLIFT_PCT = 0.20;
 
 /** Maximum number of metrics entries to retain */
 const MAX_METRICS_ENTRIES = 100;
@@ -96,8 +102,14 @@ export interface TxSubmitResult {
 export interface TxMetrics {
   /** Time to acquire blockhash (0 if pre-cached) */
   blockhashLatencyMs: number;
-  /** Time to build + sign the transaction */
+  /** Time to build + sign the transaction (legacy aggregate) */
   buildTimeMs: number;
+  /** Time to compile MessageV0 */
+  compileTimeMs: number;
+  /** Time to sign the transaction */
+  signTimeMs: number;
+  /** Time from first broadcast to first endpoint acceptance */
+  broadcastTimeMs: number;
   /** Time from first broadcast to confirmation */
   confirmLatencyMs: number;
   /** Total end-to-end time */
@@ -116,6 +128,8 @@ export interface TxMetrics {
   leaderRouted: boolean;
   /** Slot at which the tx was submitted */
   submittedAtSlot: number;
+  /** Time from submit call to broadcast completion */
+  submissionLatencyMs: number;
 }
 
 interface CachedBlockhash {
@@ -226,6 +240,16 @@ export class UltraTxEngine {
     this.blockhashInflight = (async () => {
       try {
         const result = await this.primaryConnection.getLatestBlockhash('confirmed');
+
+        // Fork protection: reject if block height drops significantly
+        // (indicates RPC returned stale data or a fork occurred)
+        if (this.cachedBlockhash &&
+            result.lastValidBlockHeight < this.cachedBlockhash.lastValidBlockHeight - BLOCKHASH_FORK_SLOT_DROP) {
+          getLogger().warn('TX-ENGINE', `Blockhash fork detected: height dropped from ${this.cachedBlockhash.lastValidBlockHeight} to ${result.lastValidBlockHeight}`);
+          // Keep the existing (newer) blockhash
+          return this.cachedBlockhash;
+        }
+
         const cached: CachedBlockhash = {
           blockhash: result.blockhash,
           lastValidBlockHeight: result.lastValidBlockHeight,
@@ -304,9 +328,16 @@ export class UltraTxEngine {
         );
         const p75Fee = sorted[p75Index];
 
-        // Clamp between floor and ceiling
-        // Use configured computeUnitPrice as floor — matches website behavior
-        const fee = Math.max(this.config.computeUnitPrice, Math.min(p75Fee, PRIORITY_FEE_CEILING));
+        // Congestion detection: if >50% of non-zero fees exceed our baseline, apply uplift
+        const baseline = this.config.computeUnitPrice;
+        const aboveBaseline = sorted.filter(f => f > baseline).length;
+        const congested = aboveBaseline > sorted.length * 0.5;
+
+        // Clamp between floor and ceiling, with congestion uplift
+        let fee = Math.max(baseline, Math.min(p75Fee, PRIORITY_FEE_CEILING));
+        if (congested) {
+          fee = Math.min(Math.round(fee * (1 + CONGESTION_UPLIFT_PCT)), PRIORITY_FEE_CEILING);
+        }
 
         this.cachedPriorityFee = { fee, fetchedAt: Date.now() };
         return fee;
@@ -326,6 +357,7 @@ export class UltraTxEngine {
 
   /**
    * Build broadcast connection list from all healthy RPC endpoints.
+   * Uses slot consensus to exclude endpoints that are divergent (>3 slots off median).
    * The primary connection is always included.
    */
   private refreshBroadcastConnections(): void {
@@ -335,17 +367,21 @@ export class UltraTxEngine {
       return;
     }
 
-    const connections: Connection[] = [this.primaryConnection];
+    // Use slot-consensus-filtered connections when available
+    const consensusConnections = rpcMgr.getConsensusHealthyConnections();
+    if (consensusConnections.length > 0) {
+      this.broadcastConnections = consensusConnections;
+      return;
+    }
 
-    // Add connections for all non-active endpoints
-    // We already have the active one as primaryConnection
+    // Fallback: all endpoints
+    const connections: Connection[] = [this.primaryConnection];
     const activeUrl = rpcMgr.activeEndpoint.url;
     const allEndpoints = rpcMgr.getEndpoints();
 
     for (const ep of allEndpoints) {
       if (ep.url !== activeUrl) {
           try {
-            // Lightweight connections for broadcast only — no WebSocket needed
             const conn = new Connection(ep.url, {
               commitment: 'confirmed',
               disableRetryOnRateLimit: true,
@@ -670,12 +706,16 @@ export class UltraTxEngine {
     // Metrics accumulators
     let blockhashLatencyMs = 0;
     let buildTimeMs = 0;
+    let compileTimeMs = 0;
+    let signTimeMs = 0;
+    let broadcastTimeMs = 0;
     let confirmLatencyMs = 0;
     let rebroadcastCount = 0;
     let confirmedViaWs = false;
     let priorityFee = this.config.computeUnitPrice;
     let leaderRouted = false;
     let submittedAtSlot = 0;
+    let submissionLatencyMs = 0;
 
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
       const conn = this.primaryConnection;
@@ -690,11 +730,12 @@ export class UltraTxEngine {
             logger.info('TX-ENGINE', `Previous tx confirmed (late detection): ${lastSignature}`);
             const metrics = this.buildMetrics({
               blockhashLatencyMs, buildTimeMs,
+              compileTimeMs, signTimeMs, broadcastTimeMs,
               confirmLatencyMs: Date.now() - pipelineStart - buildTimeMs - blockhashLatencyMs,
               totalLatencyMs: Date.now() - pipelineStart,
               broadcastCount: totalBroadcastCount, rebroadcastCount,
               confirmedViaWs: false, priorityFee, successAttempt: attempt - 1,
-              leaderRouted, submittedAtSlot,
+              leaderRouted, submittedAtSlot, submissionLatencyMs,
             });
             return { signature: lastSignature, confirmationTimeMs: Date.now() - pipelineStart, attempts: attempt - 1, broadcastEndpoints: totalBroadcastCount, metrics };
           }
@@ -720,20 +761,26 @@ export class UltraTxEngine {
         const buildStart = Date.now();
         priorityFee = await this.getDynamicPriorityFee();
 
-        // ── Step 3: Build + Sign ──
+        // ── Step 3: Build + Sign (granular timing) ──
         const effectiveCuLimit = computeUnitLimitOverride ?? this.config.computeUnitLimit;
         const cuLimitIx = ComputeBudgetProgram.setComputeUnitLimit({ units: effectiveCuLimit });
         const cuPriceIx = ComputeBudgetProgram.setComputeUnitPrice({ microLamports: priorityFee });
 
         const allIxs = [cuLimitIx, cuPriceIx, ...instructions];
+
+        const compileStart = Date.now();
         const message = MessageV0.compile({
           payerKey: this.wallet.publicKey,
           instructions: allIxs,
           recentBlockhash: bh.blockhash,
           addressLookupTableAccounts: addressLookupTableAccounts ?? [],
         });
+        compileTimeMs = Date.now() - compileStart;
+
+        const signStart = Date.now();
         const vtx = new VersionedTransaction(message);
         vtx.sign([this.wallet, ...additionalSigners]);
+        signTimeMs = Date.now() - signStart;
 
         buildTimeMs = Date.now() - buildStart;
 
@@ -765,6 +812,7 @@ export class UltraTxEngine {
         let signature: string;
         let broadcastCount: number;
 
+        const broadcastStart = Date.now();
         if (this.config.multiBroadcast && this.broadcastConnections.length > 1) {
           const result = await this.broadcastToAll(txBytes);
           signature = result.signature;
@@ -777,6 +825,8 @@ export class UltraTxEngine {
           });
           broadcastCount = 1;
         }
+        broadcastTimeMs = Date.now() - broadcastStart;
+        submissionLatencyMs = Date.now() - pipelineStart;
 
         lastSignature = signature;
         totalBroadcastCount = broadcastCount;
@@ -803,11 +853,13 @@ export class UltraTxEngine {
         logger.info('TX-ENGINE', `Tx confirmed: ${signature} (${confirmLatencyMs}ms, ${confirmedViaWs ? 'WS' : 'HTTP'}, ${rebroadcastCount} rebroadcasts)`);
 
         const metrics = this.buildMetrics({
-          blockhashLatencyMs, buildTimeMs, confirmLatencyMs,
+          blockhashLatencyMs, buildTimeMs,
+          compileTimeMs, signTimeMs, broadcastTimeMs,
+          confirmLatencyMs,
           totalLatencyMs: Date.now() - pipelineStart,
           broadcastCount: totalBroadcastCount, rebroadcastCount,
           confirmedViaWs, priorityFee, successAttempt: attempt,
-          leaderRouted, submittedAtSlot,
+          leaderRouted, submittedAtSlot, submissionLatencyMs,
         });
 
         return {
@@ -857,6 +909,72 @@ export class UltraTxEngine {
       `  Last error: ${lastError}\n` +
       (lastSignature ? `  Last signature: ${lastSignature}\n  Check https://solscan.io/tx/${lastSignature}` : '')
     );
+  }
+
+  // ─── Async Submit (fire-and-confirm-in-background) ───────────────────────
+
+  /**
+   * Submit a transaction and return immediately after broadcast.
+   * Confirmation happens in the background via a callback.
+   *
+   * Returns the signature immediately — caller can proceed without waiting.
+   * The onConfirmed callback fires when confirmation arrives (or on error).
+   */
+  async submitTransactionAsync(
+    instructions: TransactionInstruction[],
+    additionalSigners: Signer[] = [],
+    onConfirmed?: (result: { signature: string; confirmed: boolean; error?: string }) => void,
+    addressLookupTableAccounts?: AddressLookupTableAccount[],
+    computeUnitLimitOverride?: number,
+  ): Promise<string> {
+    const logger = getLogger();
+
+    // Get blockhash + priority fee
+    const { blockhash: bh } = await this.getBlockhash();
+    const priorityFee = await this.getDynamicPriorityFee();
+
+    // Build + sign
+    const effectiveCuLimit = computeUnitLimitOverride ?? this.config.computeUnitLimit;
+    const cuLimitIx = ComputeBudgetProgram.setComputeUnitLimit({ units: effectiveCuLimit });
+    const cuPriceIx = ComputeBudgetProgram.setComputeUnitPrice({ microLamports: priorityFee });
+
+    const allIxs = [cuLimitIx, cuPriceIx, ...instructions];
+    const message = MessageV0.compile({
+      payerKey: this.wallet.publicKey,
+      instructions: allIxs,
+      recentBlockhash: bh.blockhash,
+      addressLookupTableAccounts: addressLookupTableAccounts ?? [],
+    });
+    const vtx = new VersionedTransaction(message);
+    vtx.sign([this.wallet, ...additionalSigners]);
+    const txBytes = Buffer.from(vtx.serialize());
+
+    // Broadcast
+    let signature: string;
+    if (this.config.multiBroadcast && this.broadcastConnections.length > 1) {
+      const result = await this.broadcastToAll(txBytes);
+      signature = result.signature;
+    } else {
+      signature = await this.primaryConnection.sendRawTransaction(txBytes, {
+        skipPreflight: true,
+        maxRetries: 0,
+      });
+    }
+
+    logger.info('TX-ENGINE', `Async broadcast: ${signature}`);
+
+    // Background confirmation — fire-and-forget
+    if (onConfirmed) {
+      this.waitForConfirmation(signature, txBytes, this.primaryConnection, CONFIRM_TIMEOUT_MS)
+        .then(() => {
+          onConfirmed({ signature, confirmed: true });
+        })
+        .catch((err: unknown) => {
+          onConfirmed({ signature, confirmed: false, error: getErrorMessage(err) });
+        });
+    }
+
+    return signature;
   }
 
   // ─── Prebuilt Transaction ────────────────────────────────────────────────
@@ -944,12 +1062,13 @@ export class UltraTxEngine {
 
           const metrics = this.buildMetrics({
             blockhashLatencyMs: 0, buildTimeMs: 0,
+            compileTimeMs: 0, signTimeMs: 0, broadcastTimeMs: 0,
             confirmLatencyMs: totalLatencyMs,
             totalLatencyMs,
             broadcastCount, rebroadcastCount: confirmResult.rebroadcastCount,
             confirmedViaWs: confirmResult.confirmedViaWs,
             priorityFee, successAttempt: 1,
-            leaderRouted, submittedAtSlot,
+            leaderRouted, submittedAtSlot, submissionLatencyMs: 0,
           });
 
           return {
@@ -1001,6 +1120,10 @@ export class UltraTxEngine {
     avgConfirmLatencyMs: number;
     avgBlockhashLatencyMs: number;
     avgBuildTimeMs: number;
+    avgCompileTimeMs: number;
+    avgSignTimeMs: number;
+    avgBroadcastTimeMs: number;
+    avgSubmissionLatencyMs: number;
     p50ConfirmMs: number;
     p95ConfirmMs: number;
     wsConfirmPct: number;
@@ -1015,6 +1138,7 @@ export class UltraTxEngine {
       return {
         totalTxs: 0, avgTotalLatencyMs: 0, avgConfirmLatencyMs: 0,
         avgBlockhashLatencyMs: 0, avgBuildTimeMs: 0,
+        avgCompileTimeMs: 0, avgSignTimeMs: 0, avgBroadcastTimeMs: 0, avgSubmissionLatencyMs: 0,
         p50ConfirmMs: 0, p95ConfirmMs: 0, wsConfirmPct: 0,
         avgBroadcastCount: 0, avgRebroadcastCount: 0,
         leaderRoutedPct: 0, avgSlotDelay: 0, fastestEndpoint: null,
@@ -1042,6 +1166,10 @@ export class UltraTxEngine {
       avgConfirmLatencyMs: Math.round(avg(confirmTimes)),
       avgBlockhashLatencyMs: Math.round(avg(h.map(m => m.blockhashLatencyMs))),
       avgBuildTimeMs: Math.round(avg(h.map(m => m.buildTimeMs))),
+      avgCompileTimeMs: Math.round(avg(h.map(m => m.compileTimeMs))),
+      avgSignTimeMs: Math.round(avg(h.map(m => m.signTimeMs))),
+      avgBroadcastTimeMs: Math.round(avg(h.map(m => m.broadcastTimeMs))),
+      avgSubmissionLatencyMs: Math.round(avg(h.map(m => m.submissionLatencyMs))),
       p50ConfirmMs: Math.round(percentile(confirmTimes, 0.5)),
       p95ConfirmMs: Math.round(percentile(confirmTimes, 0.95)),
       wsConfirmPct: Math.round((wsCount / h.length) * 100),

@@ -51,6 +51,7 @@ import { getErrorMessage, withRetry } from '../utils/retry.js';
 import type { WalletManager } from '../wallet/walletManager.js';
 import { getRpcManagerInstance } from '../network/rpc-manager.js';
 import { getUltraTxEngine, initUltraTxEngine } from '../core/ultra-tx-engine.js';
+import { initStateCache, getStateCache, shutdownStateCache } from '../core/state-cache.js';
 import { getEngineRouter } from '../execution/engine-router.js';
 import { createBatch, appendToBatch, isBatchWithinLimit, batchSummary, type SdkResult } from '../transaction/instruction-aggregator.js';
 import { resolveALTs, verifyALTAccountOverlap, logMessageALTDiagnostics } from '../transaction/alt-resolver.js';
@@ -399,7 +400,10 @@ export class FlashClient implements IFlashClient {
 
     this.priceService = new PythPriceService(config.pythnetUrl);
 
-    // Initialize ultra-low latency execution engine (handles its own blockhash refresh at 2s)
+    // Initialize state prewarming cache (3s background refresh)
+    initStateCache(this.connection);
+
+    // Initialize ultra-low latency execution engine (handles its own blockhash refresh at 300ms)
     initUltraTxEngine(this.connection, this.wallet, {
       computeUnitPrice: config.computeUnitPrice,
       computeUnitLimit: config.computeUnitLimit,
@@ -505,9 +509,11 @@ export class FlashClient implements IFlashClient {
     this.connection = connection;
     this.provider = newProvider;
     this.perpClient = newPerpClient;
-    // Propagate connection change to ultra-tx engine and wallet manager
+    // Propagate connection change to ultra-tx engine, state cache, and wallet manager
     const txEngine = getUltraTxEngine();
     if (txEngine) txEngine.updateConnection(connection);
+    const stateCache = getStateCache();
+    if (stateCache) stateCache.updateConnection(connection);
     this.walletMgr.setConnection(connection);
     getLogger().info('CLIENT', 'Connection replaced (RPC failover)');
   }
