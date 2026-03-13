@@ -176,7 +176,9 @@ export class WalletStore {
   getWalletPath(name: string): string {
     const safeName = sanitizeName(name);
     const registry = loadRegistry();
-    const entry = registry.wallets.find(w => w.name === safeName);
+    // Exact match first, then case-insensitive fallback
+    const entry = registry.wallets.find(w => w.name === safeName)
+      ?? registry.wallets.find(w => w.name.toLowerCase() === safeName.toLowerCase());
     if (!entry) {
       throw new Error(`Wallet "${safeName}" not found. Use "wallet list" to see registered wallets.`);
     }
@@ -195,7 +197,7 @@ export class WalletStore {
     try {
       const safeName = sanitizeName(name);
       const registry = loadRegistry();
-      return registry.wallets.some(w => w.name === safeName);
+      return registry.wallets.some(w => w.name === safeName || w.name.toLowerCase() === safeName.toLowerCase());
     } catch {
       return false;
     }
@@ -205,7 +207,8 @@ export class WalletStore {
   getWalletEntry(name: string): WalletEntry {
     const safeName = sanitizeName(name);
     const registry = loadRegistry();
-    const entry = registry.wallets.find(w => w.name === safeName);
+    const entry = registry.wallets.find(w => w.name === safeName)
+      ?? registry.wallets.find(w => w.name.toLowerCase() === safeName.toLowerCase());
     if (!entry) {
       throw new Error(`Wallet "${safeName}" not found.`);
     }

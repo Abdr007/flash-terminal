@@ -419,11 +419,14 @@ export function localParse(input: string): ParsedIntent | null {
   }
   const walletUseMatch = lower.match(/^wallet\s+use\s+(\S+)$/);
   if (walletUseMatch) {
-    return { action: ActionType.WalletUse, name: walletUseMatch[1] };
+    // Preserve original case — wallet names are case-sensitive
+    const origMatch = normalized.match(/^wallet\s+use\s+(\S+)$/i);
+    return { action: ActionType.WalletUse, name: origMatch?.[1] ?? walletUseMatch[1] };
   }
   const walletRemoveMatch = lower.match(/^wallet\s+remove\s+(\S+)$/);
   if (walletRemoveMatch) {
-    return { action: ActionType.WalletRemove, name: walletRemoveMatch[1] };
+    const origMatch = normalized.match(/^wallet\s+remove\s+(\S+)$/i);
+    return { action: ActionType.WalletRemove, name: origMatch?.[1] ?? walletRemoveMatch[1] };
   }
   if (/^wallet\s+disconnect$/.test(lower)) {
     return { action: ActionType.WalletDisconnect };
