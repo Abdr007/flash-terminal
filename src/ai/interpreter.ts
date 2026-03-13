@@ -100,12 +100,14 @@ function parseSide(raw: string): TradeSide | null {
   return null;
 }
 
-/** Parse optional "tp $X sl $Y" suffix from an open command. */
+/** Parse optional "tp $X sl $Y" suffix from an open command.
+ * Accepts: tp $95 sl $80, set tp 2300 and sl 1950, tp 2300 sl 1950, etc.
+ */
 function parseTpSlSuffix(suffix: string, result: Record<string, unknown>): void {
   if (!suffix) return;
-  const tpMatch = suffix.match(/\btp\s+\$?(\d+(?:\.\d+)?)/);
+  const tpMatch = suffix.match(/\btp\s+(?:to\s+|at\s+)?\$?(\d+(?:\.\d+)?)/);
   if (tpMatch) result.takeProfit = parseFloat(tpMatch[1]);
-  const slMatch = suffix.match(/\bsl\s+\$?(\d+(?:\.\d+)?)/);
+  const slMatch = suffix.match(/\bsl\s+(?:to\s+|at\s+)?\$?(\d+(?:\.\d+)?)/);
   if (slMatch) result.stopLoss = parseFloat(slMatch[1]);
 }
 
@@ -357,7 +359,7 @@ export function localParse(input: string): ParsedIntent | null {
 
   // Open position: "open 5x long SOL $500" with optional tp/sl: "open 5x long SOL $500 tp $95 sl $80"
   const openMatch = lower.match(
-    /^(?:open|buy|enter)\s+(?:a\s+)?(\d+(?:\.\d+)?)\s*x?\s*(long|short)\s+(?:position\s+)?(?:on\s+)?([a-z]+)\s+(?:with\s+)?\$?(\d+(?:\.\d+)?)(.*)$/
+    /^(?:open|buy|enter)\s+(?:a\s+)?(\d+(?:\.\d+)?)\s*x?\s*(long|short)\s+(?:position\s+)?(?:on\s+)?([a-z]+)\s+(?:with\s+|for\s+)?\$?(\d+(?:\.\d+)?)(?:\s+dollars?)?(.*)$/
   );
   if (openMatch) {
     const side = parseSide(openMatch[2]);
@@ -370,6 +372,26 @@ export function localParse(input: string): ParsedIntent | null {
         leverage: parseFloat(openMatch[1]),
       };
       parseTpSlSuffix(openMatch[5], result);
+      return result as ParsedIntent;
+    }
+  }
+
+  // Alternate order: "open 2x ETH long for $10", "open 5x SOL short $500"
+  // (market before side)
+  const openMatch1b = lower.match(
+    /^(?:open|buy|enter)\s+(?:a\s+)?(\d+(?:\.\d+)?)\s*x?\s+([a-z]+)\s+(long|short)\s+(?:with\s+|for\s+)?\$?(\d+(?:\.\d+)?)(?:\s+dollars?)?(.*)$/
+  );
+  if (openMatch1b) {
+    const side = parseSide(openMatch1b[3]);
+    if (side) {
+      const result: Record<string, unknown> = {
+        action: ActionType.OpenPosition,
+        market: resolveMarket(openMatch1b[2]),
+        side,
+        collateral: parseFloat(openMatch1b[4]),
+        leverage: parseFloat(openMatch1b[1]),
+      };
+      parseTpSlSuffix(openMatch1b[5], result);
       return result as ParsedIntent;
     }
   }
