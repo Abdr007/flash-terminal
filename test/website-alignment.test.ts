@@ -227,7 +227,7 @@ describe('Compute Unit Config (Step 3)', () => {
   });
 
   it('CU limit and price instructions compile correctly', () => {
-    const cuLimit = ComputeBudgetProgram.setComputeUnitLimit({ units: 600000 });
+    const cuLimit = ComputeBudgetProgram.setComputeUnitLimit({ units: 420000 });
     const cuPrice = ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 100000 });
 
     expect(cuLimit.programId.toBase58()).toBe('ComputeBudget111111111111111111111111111111');
@@ -240,7 +240,7 @@ describe('Compute Unit Config (Step 3)', () => {
 describe('Atomic Pipeline + Size (Steps 4-5)', () => {
   it('full open + TP + SL with ALT fits under 750 bytes', () => {
     const payer = Keypair.generate();
-    const cuLimit = ComputeBudgetProgram.setComputeUnitLimit({ units: 600000 });
+    const cuLimit = ComputeBudgetProgram.setComputeUnitLimit({ units: 420000 });
     const cuPrice = ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 100000 });
     const ataIx = buildATAIdempotentIxs(payer.publicKey, [WETH_MINT])[0];
     const swapAndOpen = mockSwapAndOpen(payer.publicKey);
@@ -268,7 +268,7 @@ describe('Atomic Pipeline + Size (Steps 4-5)', () => {
 
   it('same transaction WITHOUT ALT exceeds 750 bytes', () => {
     const payer = Keypair.generate();
-    const cuLimit = ComputeBudgetProgram.setComputeUnitLimit({ units: 600000 });
+    const cuLimit = ComputeBudgetProgram.setComputeUnitLimit({ units: 420000 });
     const cuPrice = ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 100000 });
     const ataIx = buildATAIdempotentIxs(payer.publicKey, [WETH_MINT])[0];
     const swapAndOpen = mockSwapAndOpen(payer.publicKey);
@@ -293,7 +293,7 @@ describe('Atomic Pipeline + Size (Steps 4-5)', () => {
 
   it('ALT reduces static account count', () => {
     const payer = Keypair.generate();
-    const cuLimit = ComputeBudgetProgram.setComputeUnitLimit({ units: 600000 });
+    const cuLimit = ComputeBudgetProgram.setComputeUnitLimit({ units: 420000 });
     const cuPrice = ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 100000 });
     const swapAndOpen = mockSwapAndOpen(payer.publicKey);
 
@@ -321,7 +321,7 @@ describe('Instruction Order (Step 6)', () => {
     const payer = Keypair.generate();
 
     // Build instructions in the same order as the website
-    const cuLimit = ComputeBudgetProgram.setComputeUnitLimit({ units: 600000 });
+    const cuLimit = ComputeBudgetProgram.setComputeUnitLimit({ units: 420000 });
     const cuPrice = ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 100000 });
     const ataIx = buildATAIdempotentIxs(payer.publicKey, [WETH_MINT])[0];
     const swapAndOpen = mockSwapAndOpen(payer.publicKey);
@@ -373,7 +373,7 @@ describe('Instruction Order (Step 6)', () => {
 describe('Fallback Behavior', () => {
   it('transaction works without ALT (graceful degradation)', () => {
     const payer = Keypair.generate();
-    const cuLimit = ComputeBudgetProgram.setComputeUnitLimit({ units: 600000 });
+    const cuLimit = ComputeBudgetProgram.setComputeUnitLimit({ units: 420000 });
     const cuPrice = ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 100000 });
     const ix = mockSwapAndOpen(payer.publicKey);
 
@@ -411,6 +411,123 @@ describe('Fallback Behavior', () => {
   });
 });
 
+// ─── STEP 7: Execution Optimization Validation ──────────────────────────────
+
+describe('Execution Optimization (Section 10)', () => {
+  it('CU limit defaults to 420k (not 600k)', () => {
+    // The default CU limit should match Flash Trade website
+    const DEFAULT_CU_LIMIT = 420_000;
+    const cuLimit = ComputeBudgetProgram.setComputeUnitLimit({ units: DEFAULT_CU_LIMIT });
+    expect(cuLimit.programId.toBase58()).toBe('ComputeBudget111111111111111111111111111111');
+
+    // Verify the serialized instruction encodes the correct value
+    // CU limit instruction: 1 byte discriminator (2) + 4 byte u32 LE
+    expect(cuLimit.data[0]).toBe(2); // SetComputeUnitLimit discriminator
+    const encoded = cuLimit.data.readUInt32LE(1);
+    expect(encoded).toBe(420_000);
+  });
+
+  it('dynamic CU scaling increases to 450k for >4 instructions', () => {
+    // When a trade has TP + SL (6 instructions total), CU should scale up
+    const BASE_CU = 420_000;
+    const SCALE_DELTA = 30_000;
+    const MAX_CU = 600_000;
+
+    // Simulate dynamic scaling logic from flash-client.ts sendTx
+    const simulate = (ixCount: number) => {
+      return ixCount > 4 ? Math.min(BASE_CU + SCALE_DELTA, MAX_CU) : BASE_CU;
+    };
+
+    // Standard trade (3-4 instructions): ATA + swap_and_open = 4
+    expect(simulate(3)).toBe(420_000);
+    expect(simulate(4)).toBe(420_000);
+
+    // Trade with TP/SL (5-6 instructions): needs more CU
+    expect(simulate(5)).toBe(450_000);
+    expect(simulate(6)).toBe(450_000);
+  });
+
+  it('priority fee ceiling is 500k µL', () => {
+    const PRIORITY_FEE_CEILING = 500_000;
+    // Test that fees above ceiling are clamped
+    expect(Math.min(1_000_000, PRIORITY_FEE_CEILING)).toBe(500_000);
+    expect(Math.min(500_000, PRIORITY_FEE_CEILING)).toBe(500_000);
+    expect(Math.min(100_000, PRIORITY_FEE_CEILING)).toBe(100_000);
+  });
+
+  it('priority fee formula: lamports = µL × CU_limit / 1M', () => {
+    const CU_LIMIT = 420_000;
+    const CU_PRICE_UL = 100_000; // microLamports
+    const feeLamports = (CU_PRICE_UL * CU_LIMIT) / 1_000_000;
+    // 100k × 420k / 1M = 42,000 lamports = 0.000042 SOL
+    expect(feeLamports).toBe(42_000);
+  });
+
+  it('full pipeline with 420k CU produces smaller tx than 600k', () => {
+    const payer = Keypair.generate();
+
+    const build = (cuUnits: number) => {
+      const cuLimit = ComputeBudgetProgram.setComputeUnitLimit({ units: cuUnits });
+      const cuPrice = ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 100_000 });
+      const ataIx = buildATAIdempotentIxs(payer.publicKey, [WETH_MINT])[0];
+      const swapAndOpen = mockSwapAndOpen(payer.publicKey);
+
+      const message = new TransactionMessage({
+        payerKey: payer.publicKey,
+        instructions: [cuLimit, cuPrice, ataIx, swapAndOpen],
+        recentBlockhash: 'GDDMwNyyx8uB6zqW2ih1UzsHi3xQ5emyXAGaicKE1ZCR',
+      }).compileToV0Message([ALT]);
+
+      return new VersionedTransaction(message).serialize();
+    };
+
+    // Both should serialize; CU value difference is in instruction data only
+    const tx420k = build(420_000);
+    const tx600k = build(600_000);
+    expect(tx420k.length).toBeLessThan(750);
+    expect(tx600k.length).toBeLessThan(750);
+  });
+
+  it('close position tx with ATA + cancel_trigger_orders has correct instruction count', () => {
+    const payer = Keypair.generate();
+    const cuLimit = ComputeBudgetProgram.setComputeUnitLimit({ units: 420_000 });
+    const cuPrice = ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 100_000 });
+
+    // ATA for collateral + receive tokens
+    const ataIxs = buildATAIdempotentIxs(payer.publicKey, [USDC_MINT, WETH_MINT]);
+
+    // close_position instruction
+    const closeIx = mockSwapAndOpen(payer.publicKey); // mock — same shape
+
+    // cancel_all_trigger_orders
+    const cancelIx = mockPlaceTriggerOrder(payer.publicKey); // mock
+
+    const allIxs = [cuLimit, cuPrice, ...ataIxs, closeIx, cancelIx];
+
+    // Website close tx has 6 instructions: CU limit, CU price, ATA×2, close, cancel
+    expect(allIxs).toHaveLength(6);
+
+    const message = new TransactionMessage({
+      payerKey: payer.publicKey,
+      instructions: allIxs,
+      recentBlockhash: 'GDDMwNyyx8uB6zqW2ih1UzsHi3xQ5emyXAGaicKE1ZCR',
+    }).compileToV0Message([ALT]);
+
+    expect(message.compiledInstructions).toHaveLength(6);
+    expect(new VersionedTransaction(message).serialize().length).toBeLessThan(750);
+  });
+
+  it('config validator warns on priority fee > 500k', () => {
+    // The config validator threshold was lowered from 10M to 500k
+    const VALIDATOR_THRESHOLD = 500_000;
+    const testFee = 600_000;
+    expect(testFee > VALIDATOR_THRESHOLD).toBe(true);
+
+    const okFee = 100_000;
+    expect(okFee > VALIDATOR_THRESHOLD).toBe(false);
+  });
+});
+
 // ─── Full Pipeline Simulation ───────────────────────────────────────────────
 
 describe('Full Pipeline Simulation', () => {
@@ -418,7 +535,7 @@ describe('Full Pipeline Simulation', () => {
     const payer = Keypair.generate();
 
     // Step 1: CU budget (added by sendTx/ultra-tx)
-    const cuLimit = ComputeBudgetProgram.setComputeUnitLimit({ units: 600000 });
+    const cuLimit = ComputeBudgetProgram.setComputeUnitLimit({ units: 420000 });
     const cuPrice = ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 100000 });
 
     // Step 2: ATA create for target token

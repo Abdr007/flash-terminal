@@ -56,10 +56,10 @@ const POLL_INTERVAL_MS = 3_000;
 const MAX_ATTEMPTS = 3;
 
 /** Priority fee ceiling (microLamports) — cap to prevent overpay */
-const PRIORITY_FEE_CEILING = 5_000_000;
+const PRIORITY_FEE_CEILING = 500_000;
 
-/** Compute unit limit for Flash Trade transactions */
-const DEFAULT_CU_LIMIT = 600_000;
+/** Compute unit limit for Flash Trade transactions (matches website) */
+const DEFAULT_CU_LIMIT = 420_000;
 
 /** Recent priority fee sample size for dynamic calculation */
 const PRIORITY_FEE_SAMPLE_SIZE = 20;
@@ -737,7 +737,7 @@ export class UltraTxEngine {
           const altLookupCount = altLookups.reduce(
             (sum, l) => sum + l.readonlyIndexes.length + l.writableIndexes.length, 0,
           );
-          logger.info('TX', `Size: ${txSize}b | ALT: ${altLookups.length > 0 ? `${altLookups.length} table(s), ${altLookupCount} accounts` : 'none'} | Static: ${message.staticAccountKeys.length} | Fee: ${priorityFee} µL | IXs: ${allIxs.length}`);
+          logger.info('TX', `Size: ${txSize}b | ALT: ${altLookups.length > 0 ? `${altLookups.length} table(s), ${altLookupCount} accounts` : 'none'} | Static: ${message.staticAccountKeys.length} | CU: ${effectiveCuLimit} | Fee: ${priorityFee} µL | IXs: ${allIxs.length}`);
         }
 
         // ── Step 4: Simulate (first attempt only) ──
@@ -862,6 +862,7 @@ export class UltraTxEngine {
     instructions: TransactionInstruction[],
     additionalSigners: Signer[] = [],
     addressLookupTableAccounts?: AddressLookupTableAccount[],
+    computeUnitLimitOverride?: number,
   ): Promise<{
     submit: () => Promise<TxSubmitResult>;
     blockhashAge: () => number;
@@ -870,7 +871,8 @@ export class UltraTxEngine {
     const { blockhash: bh } = await this.getBlockhash();
     const priorityFee = await this.getDynamicPriorityFee();
 
-    const cuLimitIx = ComputeBudgetProgram.setComputeUnitLimit({ units: this.config.computeUnitLimit });
+    const effectiveCuLimit = computeUnitLimitOverride ?? this.config.computeUnitLimit;
+    const cuLimitIx = ComputeBudgetProgram.setComputeUnitLimit({ units: effectiveCuLimit });
     const cuPriceIx = ComputeBudgetProgram.setComputeUnitPrice({ microLamports: priorityFee });
 
     const allIxs = [cuLimitIx, cuPriceIx, ...instructions];

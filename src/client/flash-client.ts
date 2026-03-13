@@ -692,6 +692,12 @@ export class FlashClient implements IFlashClient {
       }
     }
 
+    // ── Dynamic CU limit scaling (matches website behavior) ──
+    // Base: 420k CU. If instructions > 4 (e.g. TP/SL attached), scale to 450k.
+    // Never exceed 600k. Explicit overrides take precedence.
+    const dynamicCuLimit = computeUnitLimitOverride ??
+      (instructions.length > 4 ? Math.min(this.config.computeUnitLimit + 30_000, 600_000) : this.config.computeUnitLimit);
+
     // ── Route through Ultra-TX Engine when available ──
     const txEngine = getUltraTxEngine();
     if (txEngine) {
@@ -699,7 +705,7 @@ export class FlashClient implements IFlashClient {
         [...validatedInstructions],
         additionalSigners,
         altAccounts,
-        computeUnitLimitOverride,
+        dynamicCuLimit,
       );
       logger.info('CLIENT', `Ultra-TX: ${result.signature} (${result.metrics.totalLatencyMs}ms, ${result.metrics.confirmedViaWs ? 'WS' : 'HTTP'}, ${result.broadcastEndpoints} endpoints)`);
       // Reset session idle timer on successful trade
@@ -710,8 +716,7 @@ export class FlashClient implements IFlashClient {
     }
 
     const maxAttempts = 3;
-    const effectiveCuLimit = computeUnitLimitOverride ?? this.config.computeUnitLimit;
-    const cuLimitIx = ComputeBudgetProgram.setComputeUnitLimit({ units: effectiveCuLimit });
+    const cuLimitIx = ComputeBudgetProgram.setComputeUnitLimit({ units: dynamicCuLimit });
     const cuPriceIx = ComputeBudgetProgram.setComputeUnitPrice({ microLamports: this.config.computeUnitPrice });
 
     let lastError = '';
@@ -780,7 +785,7 @@ export class FlashClient implements IFlashClient {
           const altLookupCount = altLookups.reduce(
             (sum, l) => sum + l.readonlyIndexes.length + l.writableIndexes.length, 0,
           );
-          logger.info('TX', `Size: ${txSize}b | ALT: ${altLookups.length > 0 ? `${altLookups.length} table(s), ${altLookupCount} accounts` : 'none'} | Static: ${message.staticAccountKeys.length} | Fee: ${this.config.computeUnitPrice} µL | IXs: ${allIxs.length}`);
+          logger.info('TX', `Size: ${txSize}b | ALT: ${altLookups.length > 0 ? `${altLookups.length} table(s), ${altLookupCount} accounts` : 'none'} | Static: ${message.staticAccountKeys.length} | CU: ${dynamicCuLimit} | Fee: ${this.config.computeUnitPrice} µL | IXs: ${allIxs.length}`);
           logMessageALTDiagnostics(message, 'sendTx');
         }
 
@@ -1412,9 +1417,8 @@ export class FlashClient implements IFlashClient {
       const allCloseIxs = [...ataIxs, ...result.instructions, ...cancelIxs];
       const allSigners = [...result.additionalSigners, ...cancelSigners];
 
-      // Use tighter CU limit for close operations (matches website: 435k vs 600k for open)
-      const CLOSE_CU_LIMIT = 435_000;
-      const txSignature = await this.sendTx(allCloseIxs, allSigners, poolConfig, undefined, CLOSE_CU_LIMIT);
+      // CU limit handled by dynamic scaling in sendTx (420k base, +30k if >4 instructions)
+      const txSignature = await this.sendTx(allCloseIxs, allSigners, poolConfig);
       this.recordRecentTrade(cacheKey);
 
       const closeAction = shouldFullClose ? 'CLOSE' : 'PARTIAL_CLOSE';
