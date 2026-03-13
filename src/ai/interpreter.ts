@@ -271,20 +271,16 @@ export function localParse(input: string): ParsedIntent | null {
   }
 
   // Wallet commands
-  // "wallet import-key <name>" — secure private key import (hidden input prompt)
-  const walletImportKeyMatch = lower.match(/^wallet\s+import-key\s+(\S+)$/);
-  if (walletImportKeyMatch) {
-    return { action: ActionType.WalletImport, name: walletImportKeyMatch[1], path: '__prompt__' };
-  }
-  // Bare "wallet import-key" without name
-  if (/^wallet\s+import-key$/.test(lower)) {
-    return { action: ActionType.WalletImport, name: '', path: '' };
-  }
+  // "wallet import <name> <path>" — register a wallet file path
   const walletImportMatch = lower.match(/^wallet\s+import\s+(\S+)\s+(.+)$/);
   if (walletImportMatch) {
     return { action: ActionType.WalletImport, name: walletImportMatch[1], path: walletImportMatch[2].trim() };
   }
-  // Bare "wallet import" without args — route to import tool with empty params so it shows usage
+  // "wallet import-key" — no longer supported, show usage
+  if (/^wallet\s+import-key/.test(lower)) {
+    return { action: ActionType.WalletImport, name: '', path: '' };
+  }
+  // Bare "wallet import" without args — show usage
   if (/^wallet\s+import$/.test(lower)) {
     return { action: ActionType.WalletImport, name: '', path: '' };
   }

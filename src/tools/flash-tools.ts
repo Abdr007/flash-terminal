@@ -1297,60 +1297,12 @@ export const flashGetTraderProfile: ToolDefinition = {
 // ─── Wallet Tools ───────────────────────────────────────────────────────────
 
 import { WalletStore } from '../wallet/wallet-store.js';
-import { readFileSync, realpathSync, statSync } from 'fs';
-import { resolve } from 'path';
-import { homedir } from 'os';
 
 const walletStore = new WalletStore();
 
-/** Read private key from stdin with hidden input (no echo). */
-async function readHiddenInput(prompt: string): Promise<string> {
-  return new Promise((resolve) => {
-    process.stdout.write(prompt);
-    const stdin = process.stdin;
-    const wasRaw = stdin.isRaw;
-    if (stdin.isTTY) stdin.setRawMode(true);
-    stdin.resume();
-
-    let input = '';
-    const onData = (data: Buffer) => {
-      const ch = data.toString();
-      // Enter key
-      if (ch === '\r' || ch === '\n') {
-        stdin.removeListener('data', onData);
-        if (stdin.isTTY && wasRaw !== undefined) stdin.setRawMode(wasRaw);
-        stdin.pause();
-        process.stdout.write('\n');
-        resolve(input);
-        return;
-      }
-      // Ctrl+C
-      if (ch === '\u0003') {
-        stdin.removeListener('data', onData);
-        if (stdin.isTTY && wasRaw !== undefined) stdin.setRawMode(wasRaw);
-        stdin.pause();
-        process.stdout.write('\n');
-        resolve('');
-        return;
-      }
-      // Backspace
-      if (ch === '\u007F' || ch === '\b') {
-        if (input.length > 0) {
-          input = input.slice(0, -1);
-          process.stdout.write('\b \b');
-        }
-        return;
-      }
-      input += ch;
-      process.stdout.write('*');
-    };
-    stdin.on('data', onData);
-  });
-}
-
 export const walletImport: ToolDefinition = {
   name: 'wallet_import',
-  description: 'Import a wallet from a keypair JSON file or base58 private key',
+  description: 'Register a wallet from a keypair JSON file path (no key material stored)',
   parameters: z.object({
     name: z.string(),
     path: z.string(),
@@ -1366,68 +1318,22 @@ export const walletImport: ToolDefinition = {
           chalk.bold('  Import Wallet'),
           chalk.dim('  ─────────────────'),
           '',
-          chalk.bold('  From file:'),
           `  ${chalk.cyan('wallet import <name> <path>')}`,
           chalk.dim('  wallet import main ~/.config/solana/id.json'),
           '',
-          chalk.bold('  From private key (Phantom / Solflare):'),
-          `  ${chalk.cyan('wallet import-key <name>')}`,
-          chalk.dim('  Prompts securely for your private key (hidden input)'),
+          chalk.dim('  Only the file path is stored — your private key is never copied.'),
           '',
         ].join('\n'),
       };
     }
 
-    let secretKey: number[] | undefined;
     try {
-      // Check if this is an import-key flow (path === '__prompt__')
-      if (path === '__prompt__') {
-        // Secure hidden input — key never appears in terminal or shell history
-        const key = await readHiddenInput(chalk.dim('  Enter private key: '));
-        if (!key) {
-          return { success: false, message: chalk.yellow('  Import cancelled.') };
-        }
-        try {
-          const bs58 = await import('bs58');
-          const decoded = bs58.default.decode(key);
-          secretKey = Array.from(decoded);
-        } catch {
-          return { success: false, message: chalk.red('  Invalid base58 private key. Check the key and try again.') };
-        }
-      } else {
-        // Import from JSON file
-        const resolvedPath = resolve(path);
-        const home = homedir();
-        const homePrefix = home.endsWith('/') ? home : home + '/';
-        if (resolvedPath !== home && !resolvedPath.startsWith(homePrefix)) {
-          return { success: false, message: chalk.red(`  Wallet path must be within home directory (${home}).`) };
-        }
-        let realPath: string;
-        try {
-          realPath = realpathSync(resolvedPath);
-        } catch {
-          return { success: false, message: chalk.red(`  Wallet file not found: ${resolvedPath}`) };
-        }
-        if (realPath !== home && !realPath.startsWith(homePrefix)) {
-          return { success: false, message: chalk.red('  Wallet path resolves outside home directory (symlink?).') };
-        }
-
-        // Reject suspiciously large files (keypair JSON should be < 1KB)
-        const fileSize = statSync(realPath).size;
-        if (fileSize > 1024) {
-          return { success: false, message: chalk.red(`  File too large (${fileSize} bytes). Expected a 64-byte keypair JSON.`) };
-        }
-        let raw = readFileSync(realPath, 'utf-8');
-        secretKey = JSON.parse(raw);
-        raw = ''; // Clear raw secret key material from memory
-      }
-
-      const result = walletStore.importWallet(name, secretKey!);
+      const result = walletStore.registerWallet(name, path);
 
       // Auto-set as default
       walletStore.setDefault(name);
 
-      // Auto-connect the wallet
+      // Auto-connect the wallet directly from the original file
       const wm = context.walletManager;
       if (wm) {
         wm.loadFromFile(result.path);
@@ -1444,23 +1350,15 @@ export const walletImport: ToolDefinition = {
         chalk.green('  Wallet Imported'),
         chalk.dim('  ─────────────────'),
         `  Name:    ${chalk.bold(name)}`,
+        `  Path:    ${chalk.dim(result.path)}`,
         `  Address: ${chalk.cyan(result.address)}`,
-        `  Set as default wallet.`,
+        '',
+        chalk.dim('  No key material stored by Flash Terminal.'),
         '',
       ];
 
       if (canSign) {
         lines.push(chalk.bgRed.white.bold('  LIVE TRADING ENABLED '));
-        lines.push('');
-        lines.push(chalk.bold('  Wallet stored at:'));
-        lines.push(chalk.dim(`    ~/.flash/wallets/${name}.json`));
-        lines.push('');
-        lines.push(chalk.yellow.bold('  Security Tips'));
-        lines.push(chalk.dim('    Keep this file private'));
-        lines.push(chalk.dim('    Back up this file securely'));
-        lines.push(chalk.dim('    Loss of this file means permanent loss of funds'));
-        lines.push(chalk.dim('    Never share your wallet file with anyone'));
-        lines.push(chalk.dim('    Consider using a hardware wallet for large balances'));
         lines.push('');
         lines.push(chalk.dim('  Fund with SOL (for fees) and USDC (for collateral) before trading.'));
         lines.push('');
@@ -1473,11 +1371,6 @@ export const walletImport: ToolDefinition = {
       };
     } catch (error: unknown) {
       return { success: false, message: chalk.red(`  Failed to import wallet: ${getErrorMessage(error)}`) };
-    } finally {
-      // Zero sensitive data from memory
-      if (Array.isArray(secretKey)) {
-        secretKey.fill(0);
-      }
     }
   },
 };
@@ -1504,7 +1397,7 @@ export const walletList: ToolDefinition = {
 
     const lines = [
       '',
-      chalk.bold('  Stored Wallets'),
+      chalk.bold('  Registered Wallets'),
       chalk.dim('  ─────────────────'),
     ];
 
@@ -1512,6 +1405,10 @@ export const walletList: ToolDefinition = {
       const isDefault = name === defaultName;
       const tag = isDefault ? chalk.green(' (default)') : '';
       lines.push(`  ${chalk.bold(name)}${tag}`);
+      try {
+        const entry = walletStore.getWalletEntry(name);
+        lines.push(chalk.dim(`    ${entry.path}`));
+      } catch { /* skip */ }
     }
 
     lines.push('');
@@ -1569,7 +1466,7 @@ export const walletUse: ToolDefinition = {
 
 export const walletRemove: ToolDefinition = {
   name: 'wallet_remove',
-  description: 'Remove a stored wallet',
+  description: 'Remove a registered wallet (does not delete the keypair file)',
   parameters: z.object({
     name: z.string(),
   }),
@@ -1579,7 +1476,10 @@ export const walletRemove: ToolDefinition = {
       walletStore.removeWallet(name);
       return {
         success: true,
-        message: chalk.green(`  Wallet "${name}" removed.`),
+        message: [
+          chalk.green(`  Wallet "${name}" removed.`),
+          chalk.dim('  Your keypair file was not deleted.'),
+        ].join('\n'),
       };
     } catch (error: unknown) {
       return { success: false, message: chalk.red(`  Failed to remove wallet: ${getErrorMessage(error)}`) };
@@ -1612,7 +1512,7 @@ export const walletStatus: ToolDefinition = {
       lines.push(theme.pair('Connected', theme.negative('No')));
     }
 
-    lines.push(theme.pair('Stored', `${storedCount} wallet(s)`));
+    lines.push(theme.pair('Registered', `${storedCount} wallet(s)`));
     lines.push('');
 
     if (!wm?.isConnected && storedCount === 0) {

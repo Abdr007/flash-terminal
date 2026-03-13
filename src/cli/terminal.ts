@@ -765,35 +765,62 @@ export class FlashTerminal {
       return null;
     }
 
+    const defaultPath = join(homedir(), '.config', 'solana', `${name}.json`);
+    console.log('');
+    console.log(chalk.dim(`  Where should the keypair be saved?`));
+    console.log(chalk.dim(`  Default: ${defaultPath}`));
+    const rawSavePath = (await this.ask(`  ${chalk.yellow('Save path:')} `)).trim();
+    const savePath = rawSavePath || defaultPath;
+
+    const expandedPath = savePath.startsWith('~')
+      ? join(homedir(), savePath.slice(1))
+      : resolve(savePath);
+
     try {
       const { Keypair } = await import('@solana/web3.js');
+      const { writeFileSync, mkdirSync } = await import('fs');
+      const { dirname } = await import('path');
+
+      // Ensure parent directory exists
+      const dir = dirname(expandedPath);
+      if (!existsSync(dir)) {
+        mkdirSync(dir, { recursive: true, mode: 0o700 });
+      }
+
+      if (existsSync(expandedPath)) {
+        console.log(chalk.red(`  File already exists: ${expandedPath}`));
+        return null;
+      }
+
       const keypair = Keypair.generate();
       const secretKeyArray = Array.from(keypair.secretKey);
       const address = keypair.publicKey.toBase58();
 
-      const result = store.importWallet(name, secretKeyArray);
+      // Write keypair to the user-chosen location
+      writeFileSync(expandedPath, JSON.stringify(secretKeyArray), { mode: 0o600 });
+
+      // Zero sensitive data from memory
+      secretKeyArray.fill(0);
+
+      // Register the wallet path (no key material stored by Flash)
+      const result = store.registerWallet(name, expandedPath);
       store.setDefault(name);
 
       // Connect the wallet
       this.walletManager.loadFromFile(result.path);
       updateLastWallet(name);
 
-      // Zero sensitive data
-      secretKeyArray.fill(0);
-
       console.log('');
       console.log(chalk.green(`  Wallet "${name}" created successfully`));
-      console.log(`  Address: ${chalk.cyan(address)}`);
       console.log('');
-      console.log(chalk.bold('  Wallet stored at:'));
-      console.log(chalk.dim(`    ~/.flash/wallets/${name}.json`));
+      console.log(`  ${chalk.bold('Name:')}    ${name}`);
+      console.log(`  ${chalk.bold('Address:')} ${chalk.cyan(address)}`);
+      console.log(`  ${chalk.bold('Saved to:')} ${chalk.dim(expandedPath)}`);
       console.log('');
-      console.log(chalk.yellow.bold('  Security Tips'));
-      console.log(chalk.dim('    Keep this file private'));
+      console.log(chalk.yellow.bold('  Security'));
       console.log(chalk.dim('    Back up this file securely'));
       console.log(chalk.dim('    Loss of this file means permanent loss of funds'));
-      console.log(chalk.dim('    Never share your wallet file with anyone'));
-      console.log(chalk.dim('    Consider using a hardware wallet for large balances'));
+      console.log(chalk.dim('    Flash Terminal does not store a copy of this key'));
       console.log('');
       console.log(chalk.dim('  Fund this wallet with SOL (for fees) and USDC (for collateral).'));
       console.log('');
@@ -1102,9 +1129,8 @@ export class FlashTerminal {
   }
 
   /**
-   * Interactive wallet import: prompts for name and private key,
-   * accepts base58 string, JSON array, or file path.
-   * Stores to ~/.flash/wallets/ and connects.
+   * Interactive wallet import: prompts for name and wallet file path.
+   * Registers the path in ~/.flash/wallets.json — never copies the private key.
    */
   private async handleWalletImportFlow(store: WalletStore): Promise<string | null> {
     console.log('');
@@ -1121,122 +1147,37 @@ export class FlashTerminal {
     }
 
     console.log('');
-    console.log(chalk.dim('  Paste your private key (base58 or JSON array)'));
-    console.log(chalk.dim('  or enter path to wallet JSON file.'));
-    console.log(chalk.dim('  Input is hidden for security.'));
-    const keyInput = await this.readHidden(`  ${chalk.yellow('>')} `);
+    console.log(chalk.dim('  Enter path to your Solana wallet JSON file'));
+    console.log(chalk.dim('  Example: ~/.config/solana/id.json'));
+    const rawPath = (await this.ask(`  ${chalk.yellow('Path:')} `)).trim();
 
-    if (!keyInput) {
-      console.log(chalk.red('  No input provided.'));
+    if (!rawPath) {
+      console.log(chalk.red('  No path provided.'));
       return null;
-    }
-
-    // Reject excessively long input (keypairs are ~88 chars base58 or ~200 chars JSON)
-    if (keyInput.length > 2048) {
-      console.log(chalk.red('  Input too long. Expected a keypair (base58, JSON array, or file path).'));
-      return null;
-    }
-
-    let secretKey: number[] | undefined;
-    const trimmed = keyInput.trim();
-
-    // Try JSON array first (e.g. [1,2,3,...])
-    if (trimmed.startsWith('[')) {
-      try {
-        const parsed: unknown = JSON.parse(trimmed);
-        if (Array.isArray(parsed)) {
-          secretKey = parsed as number[];
-        }
-      } catch {
-        // Not valid JSON array
-      }
-    }
-
-    // Try as a file path (e.g. ~/.config/solana/id.json)
-    if (!secretKey && (trimmed.startsWith('/') || trimmed.startsWith('~') || trimmed.startsWith('.'))) {
-      try {
-        const expandedPath = trimmed.startsWith('~')
-          ? join(homedir(), trimmed.slice(1))
-          : resolve(trimmed);
-
-        // Security: restrict file reads to home directory (same as walletManager)
-        const home = homedir();
-        const homePrefix = home.endsWith('/') ? home : home + '/';
-        if (expandedPath !== home && !expandedPath.startsWith(homePrefix)) {
-          console.log(chalk.red('  Wallet path must be within home directory.'));
-        } else if (existsSync(expandedPath)) {
-          // Resolve symlinks to prevent traversal
-          const { realpathSync: realpath } = await import('fs');
-          const realPath = realpath(expandedPath);
-          if (realPath !== home && !realPath.startsWith(homePrefix)) {
-            console.log(chalk.red('  Wallet path resolves outside home directory (symlink?).'));
-          } else {
-            // Reject suspiciously large files (keypair JSON should be < 1KB)
-            const { statSync: stat } = await import('fs');
-            const fileSize = stat(realPath).size;
-            if (fileSize > 1024) {
-              console.log(chalk.red(`  File too large (${fileSize} bytes). Expected a keypair JSON.`));
-            } else {
-              const raw = readFileSync(realPath, 'utf-8');
-              const parsed: unknown = JSON.parse(raw);
-              if (Array.isArray(parsed)) {
-                secretKey = parsed as number[];
-              }
-            }
-          }
-        }
-      } catch {
-        // Not a valid file
-      }
-    }
-
-    // Try base58 decode (Phantom/Solflare export format)
-    if (!secretKey) {
-      try {
-        const bs58 = await import('bs58');
-        const decoded = bs58.default.decode(trimmed);
-        if (decoded.length === 64) {
-          secretKey = Array.from(decoded);
-        } else {
-          console.log(chalk.red(`  Invalid key length: expected 64 bytes, got ${decoded.length}.`));
-          return null;
-        }
-      } catch {
-        console.log(chalk.red('  Invalid key format.'));
-        console.log(chalk.dim('  Accepted: base58 string, JSON array [1,2,...], or file path.'));
-        return null;
-      }
     }
 
     try {
-      const result = store.importWallet(name, secretKey!);
+      const result = store.registerWallet(name, rawPath);
       store.setDefault(name);
 
-      // Connect the wallet
+      // Connect the wallet directly from the original file
       this.walletManager.loadFromFile(result.path);
 
       console.log('');
       console.log(chalk.green(`  Wallet "${name}" imported successfully`));
       console.log('');
-      console.log(chalk.bold('  Wallet stored at:'));
-      console.log(chalk.dim(`    ~/.flash/wallets/${name}.json`));
+      console.log(`  ${chalk.bold('Name:')}    ${name}`);
+      console.log(`  ${chalk.bold('Path:')}    ${chalk.dim(result.path)}`);
+      console.log(`  ${chalk.bold('Address:')} ${chalk.cyan(result.address)}`);
       console.log('');
-      console.log(chalk.yellow.bold('  Security Tips'));
-      console.log(chalk.dim('    Keep this file private'));
-      console.log(chalk.dim('    Back up this file securely'));
-      console.log(chalk.dim('    Loss of this file means permanent loss of funds'));
-      console.log(chalk.dim('    Never share your wallet file with anyone'));
-      console.log(chalk.dim('    Consider using a hardware wallet for large balances'));
+      console.log(chalk.dim('  No key material stored by Flash Terminal.'));
+      console.log(chalk.dim('  Your private key remains only in its original file.'));
       console.log('');
 
       return name;
     } catch (error: unknown) {
       console.log(chalk.red(`  Import failed: ${getErrorMessage(error)}`));
       return null;
-    } finally {
-      if (secretKey) {
-        secretKey.fill(0);
-      }
     }
   }
 

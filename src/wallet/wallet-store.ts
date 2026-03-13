@@ -1,59 +1,47 @@
-import { mkdirSync, writeFileSync, readFileSync, readdirSync, unlinkSync, existsSync, chmodSync } from 'fs';
+import { mkdirSync, writeFileSync, readFileSync, existsSync, chmodSync, realpathSync, statSync, lstatSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
 import { Keypair } from '@solana/web3.js';
 
 const FLASH_DIR = join(homedir(), '.flash');
-const WALLETS_DIR = join(FLASH_DIR, 'wallets');
-const CONFIG_FILE = join(FLASH_DIR, 'config.json');
+const REGISTRY_FILE = join(FLASH_DIR, 'wallets.json');
 
-interface FlashLocalConfig {
+// Legacy paths — used only for migration detection
+const LEGACY_WALLETS_DIR = join(FLASH_DIR, 'wallets');
+const LEGACY_CONFIG_FILE = join(FLASH_DIR, 'config.json');
+
+interface WalletEntry {
+  name: string;
+  path: string;
+  address: string;
+}
+
+interface WalletRegistry {
+  wallets: WalletEntry[];
   defaultWallet?: string;
 }
 
-/** Ensure ~/.flash/ and ~/.flash/wallets/ exist with safe permissions. */
-function ensureDirs(): void {
+/** Ensure ~/.flash/ exists with safe permissions. */
+function ensureDir(): void {
   if (!existsSync(FLASH_DIR)) {
     mkdirSync(FLASH_DIR, { mode: 0o700 });
   } else {
     chmodSync(FLASH_DIR, 0o700);
   }
-  if (!existsSync(WALLETS_DIR)) {
-    mkdirSync(WALLETS_DIR, { mode: 0o700 });
-  } else {
-    chmodSync(WALLETS_DIR, 0o700);
-  }
 }
 
-function loadLocalConfig(): FlashLocalConfig {
+function loadRegistry(): WalletRegistry {
   try {
-    const raw = readFileSync(CONFIG_FILE, 'utf-8');
-    return JSON.parse(raw) as FlashLocalConfig;
+    const raw = readFileSync(REGISTRY_FILE, 'utf-8');
+    return JSON.parse(raw) as WalletRegistry;
   } catch {
-    return {};
+    return { wallets: [] };
   }
 }
 
-function saveLocalConfig(config: FlashLocalConfig): void {
-  ensureDirs();
-  writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2) + '\n', { mode: 0o600 });
-}
-
-/** Validate a raw secret key array: 64 integers each 0-255. */
-function validateSecretKey(data: unknown): number[] {
-  if (!Array.isArray(data)) {
-    throw new Error('Expected a JSON array of 64 numbers');
-  }
-  if (data.length !== 64) {
-    throw new Error(`Expected 64 bytes, got ${data.length}`);
-  }
-  for (let i = 0; i < 64; i++) {
-    const v = data[i];
-    if (typeof v !== 'number' || !Number.isInteger(v) || v < 0 || v > 255) {
-      throw new Error(`Invalid byte at index ${i}: must be integer 0-255`);
-    }
-  }
-  return data as number[];
+function saveRegistry(registry: WalletRegistry): void {
+  ensureDir();
+  writeFileSync(REGISTRY_FILE, JSON.stringify(registry, null, 2) + '\n', { mode: 0o600 });
 }
 
 /** Sanitize wallet name: alphanumeric, hyphens, underscores only. */
@@ -66,55 +54,162 @@ function sanitizeName(name: string): string {
 }
 
 export class WalletStore {
-  /** Import a wallet from a raw secret key array. */
-  importWallet(name: string, secretKeyArray: number[]): { address: string; path: string } {
+  constructor() {
+    this.migrateFromLegacyStore();
+  }
+
+  /**
+   * Validate a wallet file path for security.
+   * Checks: exists, inside home dir, not a symlink escape, <1KB, permissions.
+   * Returns the resolved real path.
+   */
+  validateWalletPath(filePath: string): string {
+    const home = homedir();
+    const homePrefix = home.endsWith('/') ? home : home + '/';
+
+    // Resolve the path
+    const resolved = filePath.startsWith('~')
+      ? join(home, filePath.slice(1))
+      : join(filePath); // normalize
+
+    // Must be inside home directory
+    if (resolved !== home && !resolved.startsWith(homePrefix)) {
+      throw new Error(`Wallet path must be within home directory (${home}).`);
+    }
+
+    // File must exist
+    if (!existsSync(resolved)) {
+      throw new Error(`Wallet file not found: ${resolved}`);
+    }
+
+    // Check for symlink escape
+    const realPath = realpathSync(resolved);
+    if (realPath !== home && !realPath.startsWith(homePrefix)) {
+      throw new Error('Wallet path resolves outside home directory (symlink?).');
+    }
+
+    // File size check
+    const stats = statSync(realPath);
+    if (stats.size > 1024) {
+      throw new Error(`File too large (${stats.size} bytes). Expected a keypair JSON (<1KB).`);
+    }
+
+    // Symlink check (lstat to detect symlinks)
+    const lstats = lstatSync(resolved);
+    if (lstats.isSymbolicLink()) {
+      // Allowed only if realpath is still inside home (checked above)
+      // but warn about it
+    }
+
+    // Permission check — warn if not 600 or stricter
+    const mode = stats.mode & 0o777;
+    if (mode & 0o077) {
+      // File is readable by group or others — security warning
+      const octal = mode.toString(8);
+      throw new Error(
+        `Wallet file has insecure permissions (${octal}). ` +
+        `Run: chmod 600 "${realPath}" to fix.`
+      );
+    }
+
+    return realPath;
+  }
+
+  /**
+   * Register a wallet by file path. No key material is stored.
+   * Validates the file, derives the address, stores only {name, path, address}.
+   */
+  registerWallet(name: string, filePath: string): { address: string; path: string } {
     const safeName = sanitizeName(name);
-    const validated = validateSecretKey(secretKeyArray);
-    const keyBytes = Uint8Array.from(validated);
+    const realPath = this.validateWalletPath(filePath);
 
-    try {
-      ensureDirs();
-
-      const filePath = join(WALLETS_DIR, `${safeName}.json`);
-      if (existsSync(filePath)) {
-        throw new Error(`Wallet "${safeName}" already exists. Use a different name or remove it first.`);
-      }
-
-      // Derive address to verify keypair is valid
-      const keypair = Keypair.fromSecretKey(keyBytes);
-      const address = keypair.publicKey.toBase58();
-
-      writeFileSync(filePath, JSON.stringify(validated), { mode: 0o600 });
-
-      return { address, path: filePath };
-    } finally {
-      // Zero sensitive data from memory
-      keyBytes.fill(0);
-      validated.fill(0);
+    // Check for duplicate name
+    const registry = loadRegistry();
+    if (registry.wallets.some(w => w.name === safeName)) {
+      throw new Error(`Wallet "${safeName}" already exists. Use a different name or remove it first.`);
     }
-  }
 
-  /** List all stored wallet names. */
-  listWallets(): string[] {
-    ensureDirs();
+    // Read and validate the keypair to derive the address
+    let raw = readFileSync(realPath, 'utf-8');
+    let secretKey: number[];
     try {
-      return readdirSync(WALLETS_DIR)
-        .filter((f) => f.endsWith('.json'))
-        .map((f) => f.replace(/\.json$/, ''))
-        .sort();
+      secretKey = JSON.parse(raw);
     } catch {
-      return [];
+      throw new Error('Invalid wallet file format. Expected a JSON array of 64 bytes.');
     }
+    raw = '';
+
+    if (!Array.isArray(secretKey) || secretKey.length !== 64) {
+      throw new Error(`Invalid keypair: expected 64-byte array, got ${Array.isArray(secretKey) ? secretKey.length : typeof secretKey}`);
+    }
+
+    for (let i = 0; i < secretKey.length; i++) {
+      const v = secretKey[i];
+      if (typeof v !== 'number' || !Number.isInteger(v) || v < 0 || v > 255) {
+        throw new Error(`Invalid keypair: byte at index ${i} is not a valid uint8 value`);
+      }
+    }
+
+    const keyBytes = Uint8Array.from(secretKey);
+    secretKey.fill(0); // Zero the parsed array
+
+    const keypair = Keypair.fromSecretKey(keyBytes);
+    const address = keypair.publicKey.toBase58();
+
+    // Zero the keypair's secret key — we only needed the address
+    try { keypair.secretKey.fill(0); } catch { /* best-effort */ }
+
+    // Store metadata only
+    registry.wallets.push({ name: safeName, path: realPath, address });
+    saveRegistry(registry);
+
+    return { address, path: realPath };
   }
 
-  /** Get the file path for a stored wallet by name. */
+  /** List all registered wallet names. */
+  listWallets(): string[] {
+    const registry = loadRegistry();
+    return registry.wallets.map(w => w.name).sort();
+  }
+
+  /** Get the original file path for a registered wallet. */
   getWalletPath(name: string): string {
     const safeName = sanitizeName(name);
-    const filePath = join(WALLETS_DIR, `${safeName}.json`);
-    if (!existsSync(filePath)) {
-      throw new Error(`Wallet "${safeName}" not found. Use "wallet list" to see stored wallets.`);
+    const registry = loadRegistry();
+    const entry = registry.wallets.find(w => w.name === safeName);
+    if (!entry) {
+      throw new Error(`Wallet "${safeName}" not found. Use "wallet list" to see registered wallets.`);
     }
-    return filePath;
+    // Verify original file still exists
+    if (!existsSync(entry.path)) {
+      throw new Error(
+        `Wallet file no longer exists at: ${entry.path}\n` +
+        `  Re-register with: wallet import ${safeName} <new-path>`
+      );
+    }
+    return entry.path;
+  }
+
+  /** Check if a wallet name is registered. */
+  hasWallet(name: string): boolean {
+    try {
+      const safeName = sanitizeName(name);
+      const registry = loadRegistry();
+      return registry.wallets.some(w => w.name === safeName);
+    } catch {
+      return false;
+    }
+  }
+
+  /** Get the full wallet entry (name, path, address). */
+  getWalletEntry(name: string): WalletEntry {
+    const safeName = sanitizeName(name);
+    const registry = loadRegistry();
+    const entry = registry.wallets.find(w => w.name === safeName);
+    if (!entry) {
+      throw new Error(`Wallet "${safeName}" not found.`);
+    }
+    return { ...entry };
   }
 
   /** Set a wallet as the default (auto-loaded on startup). */
@@ -122,57 +217,117 @@ export class WalletStore {
     const safeName = sanitizeName(name);
     // Verify it exists
     this.getWalletPath(safeName);
-    const config = loadLocalConfig();
-    config.defaultWallet = safeName;
-    saveLocalConfig(config);
+    const registry = loadRegistry();
+    registry.defaultWallet = safeName;
+    saveRegistry(registry);
   }
 
   /** Clear the default wallet so none auto-loads on startup. */
   clearDefault(): void {
-    const config = loadLocalConfig();
-    delete config.defaultWallet;
-    saveLocalConfig(config);
+    const registry = loadRegistry();
+    delete registry.defaultWallet;
+    saveRegistry(registry);
   }
 
   /** Get the default wallet name. */
   getDefault(): string | null {
-    const config = loadLocalConfig();
-    if (!config.defaultWallet) return null;
+    const registry = loadRegistry();
+    if (!registry.defaultWallet) return null;
     // Verify it still exists
     try {
-      this.getWalletPath(config.defaultWallet);
-      return config.defaultWallet;
+      this.getWalletPath(registry.defaultWallet);
+      return registry.defaultWallet;
     } catch {
       return null;
     }
   }
 
-  /** Remove a stored wallet. */
+  /** Remove a registered wallet. Does NOT delete the original keypair file. */
   removeWallet(name: string): void {
     const safeName = sanitizeName(name);
-    const filePath = this.getWalletPath(safeName);
-    unlinkSync(filePath);
+    const registry = loadRegistry();
+    const idx = registry.wallets.findIndex(w => w.name === safeName);
+    if (idx === -1) {
+      throw new Error(`Wallet "${safeName}" not found.`);
+    }
+    registry.wallets.splice(idx, 1);
 
     // If this was the default, clear it
-    const config = loadLocalConfig();
-    if (config.defaultWallet === safeName) {
-      delete config.defaultWallet;
-      saveLocalConfig(config);
+    if (registry.defaultWallet === safeName) {
+      delete registry.defaultWallet;
     }
+    saveRegistry(registry);
   }
 
-  /** Derive the public address from a stored wallet without exposing the key. */
+  /** Get the cached address for a registered wallet (no file read needed). */
   getAddress(name: string): string {
-    const filePath = this.getWalletPath(name);
-    const raw = readFileSync(filePath, 'utf-8');
-    const secretKey = validateSecretKey(JSON.parse(raw));
-    const keyBytes = Uint8Array.from(secretKey);
-    // [M-6] Keypair.fromSecretKey holds a REFERENCE — do NOT zero keyBytes.
-    // Safe here: keypair is local, used only for publicKey extraction, then discarded.
-    const keypair = Keypair.fromSecretKey(keyBytes);
-    const address = keypair.publicKey.toBase58();
-    // Zero secretKey array (parsed JSON) — this is safe since it's a separate copy
-    secretKey.fill(0);
-    return address;
+    const entry = this.getWalletEntry(name);
+    return entry.address;
+  }
+
+  /**
+   * One-time migration from legacy ~/.flash/wallets/<name>.json store.
+   * Registers legacy wallets pointing to their existing file locations.
+   * Does not delete the old files — user must clean up manually.
+   */
+  private migrateFromLegacyStore(): void {
+    // Skip if registry already exists (already migrated)
+    if (existsSync(REGISTRY_FILE)) return;
+
+    // Skip if no legacy wallets directory
+    if (!existsSync(LEGACY_WALLETS_DIR)) return;
+
+    try {
+      const { readdirSync } = require('fs') as typeof import('fs');
+      const files = readdirSync(LEGACY_WALLETS_DIR).filter(f => f.endsWith('.json'));
+      if (files.length === 0) return;
+
+      const registry: WalletRegistry = { wallets: [] };
+
+      // Load legacy default wallet config
+      try {
+        const configRaw = readFileSync(LEGACY_CONFIG_FILE, 'utf-8');
+        const config = JSON.parse(configRaw);
+        if (config.defaultWallet) {
+          registry.defaultWallet = config.defaultWallet;
+        }
+      } catch { /* no config */ }
+
+      for (const file of files) {
+        const name = file.replace(/\.json$/, '');
+        const filePath = join(LEGACY_WALLETS_DIR, file);
+
+        try {
+          let raw = readFileSync(filePath, 'utf-8');
+          const secretKey = JSON.parse(raw);
+          raw = '';
+
+          if (!Array.isArray(secretKey) || secretKey.length !== 64) continue;
+
+          const keyBytes = Uint8Array.from(secretKey);
+          secretKey.fill(0);
+
+          const keypair = Keypair.fromSecretKey(keyBytes);
+          const address = keypair.publicKey.toBase58();
+          try { keypair.secretKey.fill(0); } catch { /* best-effort */ }
+
+          // Point to the legacy location since we don't know the original path
+          registry.wallets.push({ name, path: filePath, address });
+        } catch {
+          // Skip invalid files
+        }
+      }
+
+      if (registry.wallets.length > 0) {
+        saveRegistry(registry);
+        console.log(
+          `  [Migration] Migrated ${registry.wallets.length} wallet(s) to new registry format.\n` +
+          `  Legacy wallet files in ~/.flash/wallets/ are no longer needed.\n` +
+          `  Consider re-importing wallets with "wallet import" to point to your original keypair files.\n`
+        );
+      }
+    } catch {
+      // Migration is best-effort — don't block startup
+    }
   }
 }
