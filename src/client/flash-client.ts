@@ -1178,7 +1178,11 @@ export class FlashClient implements IFlashClient {
       const ataIxs = buildATAIdempotentIxs(this.wallet.publicKey, [targetToken.mintKey]);
       const allInstructions = [...ataIxs, ...result.instructions];
 
-      const txSignature = await this.sendTx(allInstructions, result.additionalSigners, poolConfig);
+      // swapAndOpen does more work (swap + open in one ix) → needs higher CU than simple openPosition
+      const isSwapAndOpen = inputToken.symbol !== marketCollateralSymbol && !existingPositionPubkey;
+      const cuOverride = isSwapAndOpen ? Math.max(this.config.computeUnitLimit, 450_000) : undefined;
+
+      const txSignature = await this.sendTx(allInstructions, result.additionalSigners, poolConfig, undefined, cuOverride);
       this.recordRecentTrade(cacheKey);
 
       // Compute SDK-exact liquidation price for the return value

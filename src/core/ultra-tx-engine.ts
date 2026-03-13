@@ -597,6 +597,13 @@ export class UltraTxEngine {
 
       if (simResult.value.err) {
         const simErr = JSON.stringify(simResult.value.err);
+        getLogger().warn('TX-ENGINE', `Simulation error: ${simErr}`);
+        if (simResult.value.logs) {
+          const programLogs = simResult.value.logs.filter((l: string) => l.includes('Error') || l.includes('failed') || l.includes('custom program error'));
+          if (programLogs.length > 0) {
+            getLogger().warn('TX-ENGINE', `Program logs: ${programLogs.join(' | ')}`);
+          }
+        }
         // Program errors are terminal — don't retry
         if (simErr.includes('InstructionError') || simErr.includes('Custom')) {
           throw new Error(this.mapProgramError(simErr));
@@ -1105,7 +1112,7 @@ export class UltraTxEngine {
     if (customMatch) {
       return `Trade rejected by Flash protocol (error ${customMatch[1]}). The transaction did not execute.`;
     }
-    return 'Transaction rejected by program. The transaction did not execute.';
+    return `Transaction rejected by program: ${rawError.slice(0, 300)}`;
   }
 
   // ─── Shutdown ────────────────────────────────────────────────────────────
