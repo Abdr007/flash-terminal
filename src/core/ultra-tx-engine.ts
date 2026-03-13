@@ -36,11 +36,11 @@ import { getJitoClient } from '../network/jito-client.js';
 
 // ─── Configuration ───────────────────────────────────────────────────────────
 
-/** Blockhash refresh interval — 300ms for ultra-low latency access */
-const BLOCKHASH_REFRESH_MS = 300;
+/** Blockhash refresh interval — 2s balances freshness vs RPC rate limits */
+const BLOCKHASH_REFRESH_MS = 2_000;
 
 /** Maximum age before a cached blockhash is considered stale */
-const BLOCKHASH_MAX_AGE_MS = 2_000;
+const BLOCKHASH_MAX_AGE_MS = 5_000;
 
 /** Fork protection: reject blockhash if slot drops by more than this amount */
 const BLOCKHASH_FORK_SLOT_DROP = 5;
