@@ -1172,14 +1172,22 @@ export class FlashClient implements IFlashClient {
         );
       }
 
-      // Ensure target token ATA exists (matches Flash Trade website behavior).
-      // Website always prepends createAssociatedTokenAccountIdempotent for the
-      // target token before swap_and_open. Idempotent = no-op if ATA exists.
-      const ataIxs = buildATAIdempotentIxs(this.wallet.publicKey, [targetToken.mintKey]);
-      const allInstructions = [...ataIxs, ...result.instructions];
-
-      // swapAndOpen does more work (swap + open in one ix) → needs higher CU than simple openPosition
+      // Prepend ATA createIdempotent only for direct openPosition/increaseSize.
+      // swapAndOpen manages its own intermediate token accounts internally —
+      // prepending ATA for the target token causes IllegalOwner errors because
+      // the SDK expects to set up the account itself.
       const isSwapAndOpen = inputToken.symbol !== marketCollateralSymbol && !existingPositionPubkey;
+      let allInstructions: TransactionInstruction[];
+      if (isSwapAndOpen) {
+        // swapAndOpen handles ATA internally — don't prepend
+        allInstructions = [...result.instructions];
+      } else {
+        // Direct open/increaseSize — prepend ATA for target token (matches website)
+        const ataIxs = buildATAIdempotentIxs(this.wallet.publicKey, [targetToken.mintKey]);
+        allInstructions = [...ataIxs, ...result.instructions];
+      }
+
+      // swapAndOpen does more work (swap + open in one ix) → needs higher CU
       const cuOverride = isSwapAndOpen ? Math.max(this.config.computeUnitLimit, 450_000) : undefined;
 
       const txSignature = await this.sendTx(allInstructions, result.additionalSigners, poolConfig, undefined, cuOverride);
