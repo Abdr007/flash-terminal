@@ -11,6 +11,8 @@ const FAILURE_RATE_THRESHOLD = 0.5; // 50% failure rate triggers failover
 const FAILOVER_COOLDOWN_MS = 60_000; // Minimum 60s between failovers to prevent oscillation
 const SLOT_LAG_THRESHOLD = 50; // Slots behind network tip before endpoint is considered stale
 const SLOT_CONSENSUS_DIVERGENCE = 3; // Max slot divergence for consensus
+const PARTITION_SLOT_DIVERGENCE = 10; // Slot divergence threshold to declare network partition
+const PARTITION_COOLDOWN_MS = 5_000; // Minimum time to stay in partition state before clearing
 
 export interface RpcEndpoint {
   url: string;
@@ -52,6 +54,10 @@ export class RpcManager {
   private slotHistory: Map<string, number> = new Map();
   /** Consecutive monitor failures — suppress log spam during prolonged outages */
   private consecutiveMonitorFailures = 0;
+  /** Network partition state — true = partition detected, broadcast should pause */
+  private _partitionDetected = false;
+  /** When partition was first detected */
+  private partitionDetectedAt = 0;
 
   constructor(endpoints: RpcEndpoint[]) {
     if (endpoints.length === 0) {
@@ -399,6 +405,9 @@ export class RpcManager {
           }
           this.consecutiveMonitorFailures = 0;
         }
+
+        // Run partition detection on every health check cycle
+        this.detectPartition();
       } catch {
         // Monitor must never crash
         this.consecutiveMonitorFailures++;
@@ -456,6 +465,55 @@ export class RpcManager {
       inConsensus: divergent.length === 0,
       divergentEndpoints: divergent,
     };
+  }
+
+  /**
+   * Detect network partition: endpoints disagree on slot height by > PARTITION_SLOT_DIVERGENCE.
+   * When a partition is detected, transaction broadcast should be paused.
+   */
+  detectPartition(): boolean {
+    if (this.endpoints.length < 2) {
+      // Can't detect partition with a single endpoint
+      this._partitionDetected = false;
+      return false;
+    }
+
+    const slots: number[] = [];
+    for (const ep of this.endpoints) {
+      const slot = this.slotHistory.get(ep.url);
+      if (slot !== undefined && slot > 0) slots.push(slot);
+    }
+
+    if (slots.length < 2) {
+      this._partitionDetected = false;
+      return false;
+    }
+
+    const maxSlot = Math.max(...slots);
+    const minSlot = Math.min(...slots);
+    const divergence = maxSlot - minSlot;
+
+    if (divergence > PARTITION_SLOT_DIVERGENCE) {
+      if (!this._partitionDetected) {
+        this._partitionDetected = true;
+        this.partitionDetectedAt = Date.now();
+        getLogger().warn('RPC', `Network partition detected: slot divergence ${divergence} (${minSlot}..${maxSlot})`);
+      }
+      return true;
+    }
+
+    // Clear partition state only after cooldown
+    if (this._partitionDetected && (Date.now() - this.partitionDetectedAt) > PARTITION_COOLDOWN_MS) {
+      this._partitionDetected = false;
+      getLogger().info('RPC', `Network partition cleared: slot divergence ${divergence}`);
+    }
+
+    return this._partitionDetected;
+  }
+
+  /** Whether a network partition is currently detected */
+  get partitionDetected(): boolean {
+    return this._partitionDetected;
   }
 
   /**

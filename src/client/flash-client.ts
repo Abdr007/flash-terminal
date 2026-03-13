@@ -52,6 +52,8 @@ import type { WalletManager } from '../wallet/walletManager.js';
 import { getRpcManagerInstance } from '../network/rpc-manager.js';
 import { getUltraTxEngine, initUltraTxEngine } from '../core/ultra-tx-engine.js';
 import { initStateCache, getStateCache, shutdownStateCache } from '../core/state-cache.js';
+import { initStateSnapshot, shutdownStateSnapshot } from '../core/state-snapshot.js';
+import { initTpuClient, getTpuClient, shutdownTpuClient } from '../network/tpu-client.js';
 import { getEngineRouter } from '../execution/engine-router.js';
 import { createBatch, appendToBatch, isBatchWithinLimit, batchSummary, type SdkResult } from '../transaction/instruction-aggregator.js';
 import { resolveALTs, verifyALTAccountOverlap, logMessageALTDiagnostics } from '../transaction/alt-resolver.js';
@@ -403,6 +405,12 @@ export class FlashClient implements IFlashClient {
     // Initialize state prewarming cache (3s background refresh)
     initStateCache(this.connection);
 
+    // Initialize state snapshot service (30s periodic snapshots)
+    initStateSnapshot();
+
+    // Initialize TPU direct forwarding client
+    initTpuClient(this.connection);
+
     // Initialize ultra-low latency execution engine (handles its own blockhash refresh at 300ms)
     initUltraTxEngine(this.connection, this.wallet, {
       computeUnitPrice: config.computeUnitPrice,
@@ -514,6 +522,8 @@ export class FlashClient implements IFlashClient {
     if (txEngine) txEngine.updateConnection(connection);
     const stateCache = getStateCache();
     if (stateCache) stateCache.updateConnection(connection);
+    const tpuClient = getTpuClient();
+    if (tpuClient) tpuClient.updateConnection(connection);
     this.walletMgr.setConnection(connection);
     getLogger().info('CLIENT', 'Connection replaced (RPC failover)');
   }

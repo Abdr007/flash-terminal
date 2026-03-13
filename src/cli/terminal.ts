@@ -23,7 +23,10 @@ import { RpcManager, buildRpcEndpoints, initRpcManager } from '../network/rpc-ma
 import { initSystemDiagnostics } from '../system/system-diagnostics.js';
 import { initReconciler, getReconciler } from '../core/state-reconciliation.js';
 import { shutdownStateCache } from '../core/state-cache.js';
+import { shutdownStateSnapshot } from '../core/state-snapshot.js';
 import { shutdownUltraTxEngine } from '../core/ultra-tx-engine.js';
+import { shutdownTpuClient } from '../network/tpu-client.js';
+import { shutdownJitoClient } from '../network/jito-client.js';
 import { loadPlugins, shutdownPlugins } from '../plugins/plugin-loader.js';
 import { StatusBar } from './status-bar.js';
 import { runDoctor } from '../tools/doctor.js';
@@ -1390,7 +1393,22 @@ export class FlashTerminal {
       // Best-effort cleanup
     }
     try {
+      shutdownStateSnapshot();
+    } catch {
+      // Best-effort cleanup
+    }
+    try {
       shutdownStateCache();
+    } catch {
+      // Best-effort cleanup
+    }
+    try {
+      shutdownTpuClient();
+    } catch {
+      // Best-effort cleanup
+    }
+    try {
+      shutdownJitoClient();
     } catch {
       // Best-effort cleanup
     }

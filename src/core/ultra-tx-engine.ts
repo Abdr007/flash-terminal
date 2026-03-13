@@ -31,6 +31,8 @@ import { getRpcManagerInstance } from '../network/rpc-manager.js';
 import { createConnection } from '../wallet/connection.js';
 import { getErrorMessage } from '../utils/retry.js';
 import { getLeaderRouter, initLeaderRouter, shutdownLeaderRouter } from './leader-router.js';
+import { getTpuClient } from '../network/tpu-client.js';
+import { getJitoClient } from '../network/jito-client.js';
 
 // ─── Configuration ───────────────────────────────────────────────────────────
 
@@ -73,6 +75,9 @@ const PRIORITY_FEE_CACHE_MS = 5_000;
 /** Congestion detection: uplift % when >50% of recent fees exceed baseline */
 const CONGESTION_UPLIFT_PCT = 0.20;
 
+/** Broadcast quorum: minimum endpoints that must accept for success */
+const BROADCAST_QUORUM = 2;
+
 /** Maximum number of metrics entries to retain */
 const MAX_METRICS_ENTRIES = 100;
 
@@ -89,6 +94,12 @@ export interface TxEngineConfig {
   multiBroadcast: boolean;
   /** Enable WebSocket confirmation */
   wsConfirmation: boolean;
+  /** Enable TPU direct forwarding (best-effort, parallel with RPC) */
+  tpuForwarding: boolean;
+  /** Enable Jito bundle submission (parallel with RPC) */
+  jitoBundle: boolean;
+  /** Require broadcast quorum (>=2 endpoints accept) before confirming */
+  requireQuorum: boolean;
 }
 
 export interface TxSubmitResult {
@@ -130,6 +141,12 @@ export interface TxMetrics {
   submittedAtSlot: number;
   /** Time from submit call to broadcast completion */
   submissionLatencyMs: number;
+  /** Whether TPU direct forwarding was used */
+  tpuForwarded: boolean;
+  /** Whether Jito bundle submission was used */
+  jitoSubmitted: boolean;
+  /** RPC endpoint(s) used for broadcast */
+  rpcEndpointsUsed: number;
 }
 
 interface CachedBlockhash {
@@ -204,6 +221,9 @@ export class UltraTxEngine {
       dynamicPriorityFee: config.dynamicPriorityFee ?? true,
       multiBroadcast: config.multiBroadcast ?? true,
       wsConfirmation: config.wsConfirmation ?? true,
+      tpuForwarding: config.tpuForwarding ?? true,
+      jitoBundle: config.jitoBundle ?? false, // Opt-in — requires Jito client init
+      requireQuorum: config.requireQuorum ?? false, // Opt-in — needs multiple endpoints
     };
 
     this.startBlockhashPipeline();
@@ -716,6 +736,8 @@ export class UltraTxEngine {
     let leaderRouted = false;
     let submittedAtSlot = 0;
     let submissionLatencyMs = 0;
+    let tpuForwarded = false;
+    let jitoSubmitted = false;
 
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
       const conn = this.primaryConnection;
@@ -735,7 +757,7 @@ export class UltraTxEngine {
               totalLatencyMs: Date.now() - pipelineStart,
               broadcastCount: totalBroadcastCount, rebroadcastCount,
               confirmedViaWs: false, priorityFee, successAttempt: attempt - 1,
-              leaderRouted, submittedAtSlot, submissionLatencyMs,
+              leaderRouted, submittedAtSlot, submissionLatencyMs, tpuForwarded, jitoSubmitted, rpcEndpointsUsed: totalBroadcastCount,
             });
             return { signature: lastSignature, confirmationTimeMs: Date.now() - pipelineStart, attempts: attempt - 1, broadcastEndpoints: totalBroadcastCount, metrics };
           }
@@ -803,6 +825,25 @@ export class UltraTxEngine {
         const txBytes = Buffer.from(vtx.serialize());
         const confirmStart = Date.now();
 
+        // ── Partition Guard ──
+        const rpcMgr = getRpcManagerInstance();
+        if (rpcMgr?.partitionDetected) {
+          logger.warn('TX-ENGINE', 'Network partition detected — pausing broadcast');
+          // Wait up to 5s for partition to clear
+          let partitionCleared = false;
+          for (let wait = 0; wait < 5; wait++) {
+            await new Promise(r => setTimeout(r, 1_000));
+            rpcMgr.detectPartition();
+            if (!rpcMgr.partitionDetected) {
+              partitionCleared = true;
+              break;
+            }
+          }
+          if (!partitionCleared) {
+            logger.warn('TX-ENGINE', 'Partition persists — proceeding with broadcast (best-effort)');
+          }
+        }
+
         process.stdout.write('  Broadcasting...          \r');
 
         // Record slot at broadcast time for inclusion tracking
@@ -811,13 +852,53 @@ export class UltraTxEngine {
 
         let signature: string;
         let broadcastCount: number;
+        let tpuForwarded = false;
+        let jitoSubmitted = false;
 
         const broadcastStart = Date.now();
+
+        // ── TPU Direct Forwarding (fire-and-forget, parallel with RPC) ──
+        if (this.config.tpuForwarding) {
+          const tpuClient = getTpuClient();
+          if (tpuClient?.isOperational) {
+            // Non-blocking — don't await, just fire
+            tpuClient.forwardToUpcomingLeaders(txBytes)
+              .then(result => {
+                if (result.attempted) tpuForwarded = true;
+              })
+              .catch(() => {}); // TPU is best-effort
+          }
+        }
+
+        // ── Jito Bundle Submission (parallel with RPC) ──
+        if (this.config.jitoBundle) {
+          const jitoClient = getJitoClient();
+          if (jitoClient?.isOperational) {
+            // Non-blocking — fire in parallel
+            jitoClient.sendBundle(txBytes)
+              .then(result => {
+                if (result.accepted) jitoSubmitted = true;
+              })
+              .catch(() => {}); // Jito is best-effort
+          }
+        }
+
+        // ── RPC Broadcast ──
         if (this.config.multiBroadcast && this.broadcastConnections.length > 1) {
           const result = await this.broadcastToAll(txBytes);
           signature = result.signature;
           broadcastCount = result.broadcastCount;
           leaderRouted = result.leaderRouted;
+
+          // ── Broadcast Quorum Check ──
+          if (this.config.requireQuorum && broadcastCount < BROADCAST_QUORUM && this.broadcastConnections.length >= BROADCAST_QUORUM) {
+            logger.warn('TX-ENGINE', `Broadcast quorum not met: ${broadcastCount}/${BROADCAST_QUORUM} — retrying`);
+            // One retry attempt for quorum
+            const retry = await this.broadcastToAll(txBytes).catch(() => null);
+            if (retry && retry.broadcastCount > broadcastCount) {
+              broadcastCount = retry.broadcastCount;
+            }
+          }
         } else {
           signature = await conn.sendRawTransaction(txBytes, {
             skipPreflight: true,
@@ -860,6 +941,7 @@ export class UltraTxEngine {
           broadcastCount: totalBroadcastCount, rebroadcastCount,
           confirmedViaWs, priorityFee, successAttempt: attempt,
           leaderRouted, submittedAtSlot, submissionLatencyMs,
+          tpuForwarded, jitoSubmitted, rpcEndpointsUsed: totalBroadcastCount,
         });
 
         return {
@@ -1069,6 +1151,7 @@ export class UltraTxEngine {
             confirmedViaWs: confirmResult.confirmedViaWs,
             priorityFee, successAttempt: 1,
             leaderRouted, submittedAtSlot, submissionLatencyMs: 0,
+            tpuForwarded: false, jitoSubmitted: false, rpcEndpointsUsed: broadcastCount,
           });
 
           return {
@@ -1130,6 +1213,8 @@ export class UltraTxEngine {
     avgBroadcastCount: number;
     avgRebroadcastCount: number;
     leaderRoutedPct: number;
+    tpuForwardedPct: number;
+    jitoSubmittedPct: number;
     avgSlotDelay: number;
     fastestEndpoint: string | null;
   } {
@@ -1141,7 +1226,8 @@ export class UltraTxEngine {
         avgCompileTimeMs: 0, avgSignTimeMs: 0, avgBroadcastTimeMs: 0, avgSubmissionLatencyMs: 0,
         p50ConfirmMs: 0, p95ConfirmMs: 0, wsConfirmPct: 0,
         avgBroadcastCount: 0, avgRebroadcastCount: 0,
-        leaderRoutedPct: 0, avgSlotDelay: 0, fastestEndpoint: null,
+        leaderRoutedPct: 0, tpuForwardedPct: 0, jitoSubmittedPct: 0,
+        avgSlotDelay: 0, fastestEndpoint: null,
       };
     }
 
@@ -1176,6 +1262,8 @@ export class UltraTxEngine {
       avgBroadcastCount: Math.round(avg(h.map(m => m.broadcastCount)) * 10) / 10,
       avgRebroadcastCount: Math.round(avg(h.map(m => m.rebroadcastCount)) * 10) / 10,
       leaderRoutedPct: Math.round((leaderCount / h.length) * 100),
+      tpuForwardedPct: Math.round((h.filter(m => m.tpuForwarded).length / h.length) * 100),
+      jitoSubmittedPct: Math.round((h.filter(m => m.jitoSubmitted).length / h.length) * 100),
       avgSlotDelay: routerMetrics?.avgSlotDelay ?? 0,
       fastestEndpoint: routerMetrics?.fastestEndpoint ?? null,
     };
