@@ -1148,6 +1148,47 @@ export function localParse(input: string): ParsedIntent | null {
     return { action: ActionType.Help } as ParsedIntent;
   }
 
+  // ─── FAF Token Commands ────────────────────────────────────────────────
+  if (/^faf\b/.test(lower)) {
+    // "faf" or "faf status"
+    if (/^faf(?:\s+status)?$/.test(lower)) {
+      return { action: ActionType.FafStatus };
+    }
+    // "faf stake 1000"
+    const fafStakeMatch = lower.match(/^faf\s+stake\s+\$?(\d+(?:\.\d+)?)$/);
+    if (fafStakeMatch) {
+      return { action: ActionType.FafStake, amount: parseFloat(fafStakeMatch[1]) } as ParsedIntent;
+    }
+    // "faf unstake 1000"
+    const fafUnstakeMatch = lower.match(/^faf\s+unstake\s+\$?(\d+(?:\.\d+)?)$/);
+    if (fafUnstakeMatch) {
+      return { action: ActionType.FafUnstake, amount: parseFloat(fafUnstakeMatch[1]) } as ParsedIntent;
+    }
+    // "faf claim" / "faf claim rewards" / "faf claim revenue" / "faf claim rebate"
+    if (/^faf\s+claim\s+rewards?$/.test(lower)) {
+      return { action: ActionType.FafClaim, type: 'rewards' } as ParsedIntent;
+    }
+    if (/^faf\s+claim\s+revenue$/.test(lower)) {
+      return { action: ActionType.FafClaim, type: 'revenue' } as ParsedIntent;
+    }
+    if (/^faf\s+claim\s+rebate$/.test(lower)) {
+      return { action: ActionType.FafClaim, type: 'rebate' } as ParsedIntent;
+    }
+    if (/^faf\s+claim$/.test(lower)) {
+      return { action: ActionType.FafClaim, type: 'all' } as ParsedIntent;
+    }
+    // "faf tier" / "faf tiers" / "faf vip"
+    if (/^faf\s+(?:tiers?|vip|levels?)$/.test(lower)) {
+      return { action: ActionType.FafTier };
+    }
+    // "faf rewards" / "faf pending"
+    if (/^faf\s+(?:rewards?|pending)$/.test(lower)) {
+      return { action: ActionType.FafRewards };
+    }
+    // Unknown faf subcommand → show status
+    return { action: ActionType.FafStatus };
+  }
+
   // ─── Earn Commands ─────────────────────────────────────────────────────
   // Natural language pool aliases — users type "crypto", system resolves to "Crypto.1"
 

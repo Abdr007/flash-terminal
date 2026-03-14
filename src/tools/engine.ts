@@ -11,6 +11,7 @@ import { allAgentTools } from '../agent/agent-tools.js';
 import { allSwapTools } from './swap-tools.js';
 import { allEarnTools } from './earn-tools.js';
 import { allEngineTools } from './engine-tools.js';
+import { allFafTools } from './faf-tools.js';
 import { runMiddleware } from '../core/execution-middleware.js';
 import chalk from 'chalk';
 import { theme } from '../cli/theme.js';
@@ -41,6 +42,9 @@ export class ToolEngine {
       this.registry.register(tool);
     }
     for (const tool of allEngineTools) {
+      this.registry.register(tool);
+    }
+    for (const tool of allFafTools) {
       this.registry.register(tool);
     }
     // Lock core tools — plugins cannot override them
@@ -396,6 +400,25 @@ export class ToolEngine {
 
       case ActionType.EarnRotate:
         return { toolName: 'earn_rotate', params: {} };
+
+      // ── FAF Token ──
+      case ActionType.FafStatus:
+        return { toolName: 'faf_status', params: {} };
+
+      case ActionType.FafStake:
+        return { toolName: 'faf_stake', params: { amount: intent.amount } };
+
+      case ActionType.FafUnstake:
+        return { toolName: 'faf_unstake', params: { amount: intent.amount } };
+
+      case ActionType.FafClaim:
+        return { toolName: 'faf_claim', params: { type: (intent as any).type ?? 'all' } };
+
+      case ActionType.FafTier:
+        return { toolName: 'faf_tier', params: {} };
+
+      case ActionType.FafRewards:
+        return { toolName: 'faf_rewards', params: {} };
 
       case ActionType.EngineStatus:
         return { toolName: 'engine_status', params: {} };

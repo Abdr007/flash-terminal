@@ -120,6 +120,14 @@ export enum ActionType {
   EarnPnl = 'earn_pnl',
   EarnDemand = 'earn_demand',
   EarnRotate = 'earn_rotate',
+  // FAF Token
+  FafStatus = 'faf_status',
+  FafStake = 'faf_stake',
+  FafUnstake = 'faf_unstake',
+  FafClaim = 'faf_claim',
+  FafTier = 'faf_tier',
+  FafRewards = 'faf_rewards',
+
   EngineStatus = 'engine_status',
   EngineBenchmark = 'engine_benchmark',
 }
@@ -588,6 +596,12 @@ export const ParsedIntentSchema = z.discriminatedUnion('action', [
   EarnPnlSchema,
   EarnDemandSchema,
   EarnRotateSchema,
+  z.object({ action: z.literal(ActionType.FafStatus) }),
+  z.object({ action: z.literal(ActionType.FafStake), amount: z.number().positive() }),
+  z.object({ action: z.literal(ActionType.FafUnstake), amount: z.number().positive() }),
+  z.object({ action: z.literal(ActionType.FafClaim), type: z.enum(['all', 'rewards', 'revenue', 'rebate']).optional() }),
+  z.object({ action: z.literal(ActionType.FafTier) }),
+  z.object({ action: z.literal(ActionType.FafRewards) }),
   EngineStatusSchema,
   EngineBenchmarkSchema,
 ]);

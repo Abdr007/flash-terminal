@@ -620,6 +620,52 @@ export const COMMAND_REGISTRY: CommandEntry[] = [
     description: 'Suggest liquidity rotation',
     aliases: ['earn optimize', 'earn rebalance'],
   },
+  // ── FAF Token ────────────────────────────────────────────────────────────
+  {
+    name: 'faf',
+    action: ActionType.FafStatus,
+    category: 'Trading',
+    description: 'FAF staking dashboard',
+    aliases: ['faf status'],
+  },
+  {
+    name: 'faf stake',
+    action: null,
+    category: 'Trading',
+    description: 'Stake FAF for revenue + VIP',
+    helpFormat: 'faf stake <amount>',
+    parameterized: true,
+  },
+  {
+    name: 'faf unstake',
+    action: null,
+    category: 'Trading',
+    description: 'Request FAF unstake (90-day unlock)',
+    helpFormat: 'faf unstake <amount>',
+    parameterized: true,
+  },
+  {
+    name: 'faf claim',
+    action: ActionType.FafClaim,
+    category: 'Trading',
+    description: 'Claim FAF rewards + USDC revenue',
+    aliases: ['faf claim rewards', 'faf claim revenue', 'faf claim rebate'],
+  },
+  {
+    name: 'faf tier',
+    action: ActionType.FafTier,
+    category: 'Trading',
+    description: 'VIP tier levels + benefits',
+    aliases: ['faf tiers', 'faf vip', 'faf levels'],
+  },
+  {
+    name: 'faf rewards',
+    action: ActionType.FafRewards,
+    category: 'Trading',
+    description: 'Pending FAF rewards + USDC',
+    aliases: ['faf pending'],
+  },
+
   {
     name: 'help',
     action: ActionType.Help,
