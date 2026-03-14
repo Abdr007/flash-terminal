@@ -3,6 +3,7 @@
  *
  * Verifies:
  * - Dynamic CU calculation with buffer
+ * - Safety clamp (min 120k, max 200k)
  * - Fallback when simulation fails
  * - Config fields (dynamicCompute, computeBufferPercent)
  * - Instruction order preserved
@@ -68,6 +69,42 @@ describe('Dynamic CU Calculation', () => {
     // The code checks: if (dynamicLimit < effectiveCuLimit)
     assert.ok(dynamic > configLimit, 'dynamic should exceed config in this case');
     // So dynamic CU is NOT applied — config limit stays
+  });
+});
+
+// ─── Safety Clamp ───────────────────────────────────────────────────────────
+
+describe('Dynamic CU Safety Clamp', () => {
+  const clamp = (used: number, bufferPct = 20) => {
+    const raw = Math.ceil(used * (1 + bufferPct / 100) / 10_000) * 10_000;
+    return Math.max(120_000, Math.min(raw, 200_000));
+  };
+
+  it('clamps minimum to 120000 for very low CU usage', () => {
+    assert.strictEqual(clamp(50000), 120000); // 50k * 1.2 = 60k → clamped to 120k
+    assert.strictEqual(clamp(80000), 120000); // 80k * 1.2 = 96k → clamped to 120k
+  });
+
+  it('clamps maximum to 200000 for high CU usage', () => {
+    assert.strictEqual(clamp(180000), 200000); // 180k * 1.2 = 216k → clamped to 200k
+    assert.strictEqual(clamp(200000), 200000); // 200k * 1.2 = 240k → clamped to 200k
+  });
+
+  it('passes through typical values within range', () => {
+    assert.strictEqual(clamp(104298), 130000); // 104k * 1.2 = 125k → rounded 130k, within range
+    assert.strictEqual(clamp(112000), 140000); // 112k * 1.2 = 134.4k → rounded 140k
+  });
+
+  it('clamp is applied in flash-client.ts', () => {
+    const src = readFileSync(resolve(ROOT, 'src/client/flash-client.ts'), 'utf8');
+    assert.ok(src.includes('Math.max(120_000, Math.min(rawLimit, 200_000))'),
+      'flash-client should apply safety clamp');
+  });
+
+  it('clamp is applied in ultra-tx-engine.ts', () => {
+    const src = readFileSync(resolve(ROOT, 'src/core/ultra-tx-engine.ts'), 'utf8');
+    assert.ok(src.includes('Math.max(120_000, Math.min(rawLimit, 200_000))'),
+      'ultra-tx-engine should apply safety clamp');
   });
 });
 

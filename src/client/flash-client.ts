@@ -861,7 +861,9 @@ export class FlashClient implements IFlashClient {
         // Rebuilds tx with the tighter limit — no additional RPC call.
         if (simUnitsConsumed && simUnitsConsumed > 0 && this.config.dynamicCompute !== false) {
           const bufferPct = this.config.computeBufferPercent ?? 20;
-          const dynamicLimit = Math.ceil(simUnitsConsumed * (1 + bufferPct / 100) / 10_000) * 10_000; // round up to nearest 10k
+          const rawLimit = Math.ceil(simUnitsConsumed * (1 + bufferPct / 100) / 10_000) * 10_000;
+          // Safety clamp: never below 120k (floor) or above 200k (ceiling for dynamic path)
+          const dynamicLimit = Math.max(120_000, Math.min(rawLimit, 200_000));
           // Only tighten — never exceed the configured limit (safety ceiling)
           if (dynamicLimit < effectiveCuLimit && dynamicLimit >= simUnitsConsumed) {
             logger.debug('CLIENT', `Dynamic CU: ${simUnitsConsumed} used → ${dynamicLimit} limit (was ${effectiveCuLimit})`);

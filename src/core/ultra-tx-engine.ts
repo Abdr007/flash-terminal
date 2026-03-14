@@ -834,7 +834,9 @@ export class UltraTxEngine {
         let finalVtx = vtx;
         if (simUnitsConsumed && simUnitsConsumed > 0 && this.config.dynamicCompute !== false) {
           const bufferPct = this.config.computeBufferPercent ?? 20;
-          const dynamicLimit = Math.ceil(simUnitsConsumed * (1 + bufferPct / 100) / 10_000) * 10_000;
+          const rawLimit = Math.ceil(simUnitsConsumed * (1 + bufferPct / 100) / 10_000) * 10_000;
+          // Safety clamp: never below 120k (floor) or above 200k (ceiling for dynamic path)
+          const dynamicLimit = Math.max(120_000, Math.min(rawLimit, 200_000));
           if (dynamicLimit < effectiveCuLimit && dynamicLimit >= simUnitsConsumed) {
             getLogger().debug('TX-ENGINE', `Dynamic CU: ${simUnitsConsumed} used → ${dynamicLimit} limit (was ${effectiveCuLimit})`);
             const tightCuLimitIx = ComputeBudgetProgram.setComputeUnitLimit({ units: dynamicLimit });
