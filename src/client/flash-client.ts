@@ -2085,6 +2085,25 @@ export class FlashClient implements IFlashClient {
     return this.cachedSolBalance;
   }
 
+  /** Get the user's token balance for a given mint as BN (native units). */
+  private async getTokenBalance(mint: PublicKey): Promise<BN> {
+    try {
+      const { TOKEN_PROGRAM_ID } = await import('@solana/spl-token');
+      const accounts = await this.connection.getTokenAccountsByOwner(
+        this.wallet.publicKey,
+        { mint, programId: TOKEN_PROGRAM_ID },
+      );
+      if (accounts.value.length === 0) return BN_ZERO;
+      // Parse the token amount from the first matching account
+      const data = accounts.value[0].account.data;
+      // SPL token account: amount is at offset 64, 8 bytes little-endian
+      const amount = data.readBigUInt64LE(64);
+      return new BN(amount.toString());
+    } catch {
+      return BN_ZERO;
+    }
+  }
+
   // ─── On-Chain Order Methods ──────────────────────────────────────────────
 
   /**
@@ -2893,12 +2912,25 @@ export class FlashClient implements IFlashClient {
 
     logger.info('CLIENT', `Remove liquidity: ${percent}% from ${poolConfig.poolName} (${flpSymbol})`);
 
-    const rewardTokenMint = poolConfig.compoundingTokenMint;
+    // Get user's FLP token balance to calculate withdrawal amount
+    const flpMint = poolConfig.compoundingTokenMint;
+    const flpBalance = await this.getTokenBalance(flpMint);
+    if (flpBalance.isZero()) {
+      throw new Error(`No ${flpSymbol} tokens found in wallet. Add liquidity first.`);
+    }
+
+    const withdrawAmount = flpBalance.mul(new BN(percent)).div(new BN(100));
+    if (withdrawAmount.isZero()) {
+      throw new Error(`${percent}% of ${flpSymbol} balance rounds to zero.`);
+    }
+
+    logger.debug('CLIENT', `FLP balance: ${flpBalance.toString()}, withdrawing: ${withdrawAmount.toString()} (${percent}%)`);
+
     const result = await this.perpClient.removeCompoundingLiquidity(
-      BN_ZERO, // compoundingAmountIn
-      BN_ZERO, // minAmountOut
+      withdrawAmount,
+      BN_ZERO, // minAmountOut — accept any output
       token.symbol,
-      rewardTokenMint,
+      flpMint,
       poolConfig,
     );
 
@@ -2918,15 +2950,27 @@ export class FlashClient implements IFlashClient {
     const flpSymbol = (poolConfig as any).compoundingLpTokenSymbol || 'FLP';
     const sflpSymbol = (poolConfig as any).stakedLpTokenSymbol || 'sFLP';
 
-    const nativeAmount = uiDecimalsToNative(amountUsd.toString(), poolConfig.lpDecimals);
+    // Get user's FLP token balance
+    const flpMint = poolConfig.compoundingTokenMint;
+    const flpBalance = await this.getTokenBalance(flpMint);
+    if (flpBalance.isZero()) {
+      throw new Error(`No ${flpSymbol} tokens found. Add liquidity first to receive ${flpSymbol}.`);
+    }
 
-    logger.info('CLIENT', `Stake ${flpSymbol}: $${amountUsd} → ${sflpSymbol} (${poolConfig.poolName})`);
+    // Convert the requested USD amount to FLP native units
+    const stakeAmount = uiDecimalsToNative(amountUsd.toString(), poolConfig.lpDecimals);
+    if (stakeAmount.gt(flpBalance)) {
+      const balanceUi = flpBalance.toNumber() / Math.pow(10, poolConfig.lpDecimals);
+      throw new Error(`Insufficient ${flpSymbol}: have ${balanceUi.toFixed(2)}, requested ${amountUsd}`);
+    }
+
+    logger.info('CLIENT', `Stake ${flpSymbol}: ${stakeAmount.toString()} native → ${sflpSymbol} (${poolConfig.poolName})`);
 
     const owner = this.wallet.publicKey;
     const result = await this.perpClient.depositStake(
       owner,
       owner,
-      nativeAmount,
+      stakeAmount,
       poolConfig,
     );
 
@@ -2936,7 +2980,7 @@ export class FlashClient implements IFlashClient {
       txSignature: sig,
       action: 'stake',
       amount: amountUsd,
-      message: `Staked $${amountUsd} ${flpSymbol} → ${sflpSymbol} (${poolConfig.poolName})`,
+      message: `Staked ${amountUsd} ${flpSymbol} → ${sflpSymbol} (${poolConfig.poolName})`,
     };
   }
 
@@ -2945,11 +2989,26 @@ export class FlashClient implements IFlashClient {
     const poolConfig = this.resolvePoolConfig(pool);
     const sflpSymbol = (poolConfig as any).stakedLpTokenSymbol || 'sFLP';
 
-    logger.info('CLIENT', `Unstake ${sflpSymbol}: ${percent}% (${poolConfig.poolName})`);
+    // Get user's staked FLP (sFLP) balance
+    const sflpMint = (poolConfig as any).stakedLpTokenMint;
+    if (!sflpMint) {
+      throw new Error(`Staking not available for ${poolConfig.poolName}`);
+    }
+    const sflpBalance = await this.getTokenBalance(sflpMint);
+    if (sflpBalance.isZero()) {
+      throw new Error(`No ${sflpSymbol} tokens found. Stake FLP first.`);
+    }
+
+    const unstakeAmount = sflpBalance.mul(new BN(percent)).div(new BN(100));
+    if (unstakeAmount.isZero()) {
+      throw new Error(`${percent}% of ${sflpSymbol} balance rounds to zero.`);
+    }
+
+    logger.info('CLIENT', `Unstake ${sflpSymbol}: ${unstakeAmount.toString()} native (${percent}%) from ${poolConfig.poolName}`);
 
     const result = await this.perpClient.unstakeInstant(
       'USDC',
-      BN_ZERO,
+      unstakeAmount,
       poolConfig,
     );
 
@@ -2967,6 +3026,13 @@ export class FlashClient implements IFlashClient {
     const poolConfig = this.resolvePoolConfig(pool);
 
     logger.info('CLIENT', `Claim rewards from ${poolConfig.poolName}`);
+
+    // Check if user has a staking position before attempting to claim
+    try {
+      await this.perpClient.getTokenStakeAccount(poolConfig, this.wallet.publicKey);
+    } catch {
+      throw new Error(`No staking position found for ${poolConfig.poolName}. Stake FLP first to earn rewards.`);
+    }
 
     const result = await this.perpClient.collectStakeFees(
       'USDC',
