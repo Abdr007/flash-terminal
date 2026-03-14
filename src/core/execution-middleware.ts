@@ -10,6 +10,18 @@ const TRADING_ACTIONS = new Set<ActionType>([
   ActionType.ClosePosition,
   ActionType.AddCollateral,
   ActionType.RemoveCollateral,
+  ActionType.CloseAll,
+  ActionType.Swap,
+  ActionType.LimitOrder,
+  ActionType.CancelOrder,
+  ActionType.EditLimitOrder,
+  ActionType.SetTpSl,
+  ActionType.RemoveTpSl,
+  ActionType.EarnAddLiquidity,
+  ActionType.EarnRemoveLiquidity,
+  ActionType.EarnStake,
+  ActionType.EarnUnstake,
+  ActionType.EarnClaimRewards,
 ]);
 
 const READ_ONLY_ALLOWED = new Set<ActionType>([
@@ -74,29 +86,74 @@ type Middleware = (intent: ParsedIntent, context: ToolContext) => MiddlewareResu
 // ─── Middleware Definitions ──────────────────────────────────────────────────
 
 /**
+ * Attempt to restore the wallet session from the WalletStore.
+ * Called when the walletManager reports isConnected=false (e.g. after idle timeout).
+ * Returns true if restoration succeeded.
+ */
+function tryRestoreWalletSession(context: ToolContext): boolean {
+  const wm = context.walletManager;
+  if (!wm) return false;
+
+  try {
+    // Try to reload the last-used wallet from the wallet store
+    const { WalletStore } = require('../wallet/wallet-store.js');
+    const { getLastWallet } = require('../wallet/session.js');
+    const store = new WalletStore();
+
+    // Priority: last session wallet → default wallet → single wallet
+    const lastWallet = getLastWallet();
+    const defaultWallet = store.getDefault();
+    const wallets = store.listWallets();
+
+    const target = lastWallet ?? defaultWallet ?? (wallets.length === 1 ? wallets[0] : null);
+    if (!target || !wallets.includes(target)) return false;
+
+    const walletPath = store.getWalletPath(target);
+    const result = wm.loadFromFile(walletPath);
+
+    if (result && wm.isConnected) {
+      context.walletAddress = result.address;
+      context.walletName = target;
+      const logger = getLogger();
+      logger.info('WALLET', `Session restored: ${target} (${result.address.slice(0, 8)}...)`);
+      return true;
+    }
+  } catch {
+    // Restoration failed — proceed to block
+  }
+  return false;
+}
+
+/**
  * Wallet middleware: block trading commands when no wallet is connected (live mode).
+ * Attempts automatic session restoration before blocking.
  */
 function walletMiddleware(intent: ParsedIntent, context: ToolContext): MiddlewareResult {
   if (context.simulationMode) return { pass: true };
   if (!TRADING_ACTIONS.has(intent.action)) return { pass: true };
 
   const wm = context.walletManager;
-  if (!wm || !wm.isConnected) {
-    return {
-      pass: false,
-      blocked: {
-        success: false,
-        message: [
-          '',
-          chalk.red('  Trade blocked: no wallet connected.'),
-          chalk.dim('  Use "wallet import", "wallet use", or "wallet connect" first.'),
-          '',
-        ].join('\n'),
-      },
-    };
+  if (wm?.isConnected) return { pass: true };
+
+  // Wallet not connected — attempt automatic restoration from stored wallets
+  if (wm && tryRestoreWalletSession(context)) {
+    // Restoration succeeded — print a notice and continue
+    process.stdout.write(chalk.yellow('  Wallet session restored.\n'));
+    return { pass: true };
   }
 
-  return { pass: true };
+  return {
+    pass: false,
+    blocked: {
+      success: false,
+      message: [
+        '',
+        chalk.red('  Trade blocked: no wallet connected.'),
+        chalk.dim('  Use "wallet import", "wallet use", or "wallet connect" first.'),
+        '',
+      ].join('\n'),
+    },
+  };
 }
 
 /**

@@ -1031,7 +1031,7 @@ export interface ToolContext {
   degenMode: boolean;
   walletAddress: string;
   walletName: string;
-  walletManager?: WalletManager;
+  walletManager: WalletManager;
   /** In-memory log of trades executed during this session (live + sim). */
   sessionTrades?: SessionTrade[];
 }
