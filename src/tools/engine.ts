@@ -401,6 +401,12 @@ export class ToolEngine {
       case ActionType.EarnRotate:
         return { toolName: 'earn_rotate', params: {} };
 
+      case ActionType.EarnIntegrations:
+        return { toolName: 'earn_integrations', params: {} };
+
+      case ActionType.EarnHistory:
+        return { toolName: 'earn_history', params: { pool: intent.pool } };
+
       // ── FAF Token ──
       case ActionType.FafStatus:
         return { toolName: 'faf_status', params: {} };
@@ -419,6 +425,18 @@ export class ToolEngine {
 
       case ActionType.FafRewards:
         return { toolName: 'faf_rewards', params: {} };
+
+      case ActionType.FafReferral:
+        return { toolName: 'faf_referral', params: {} };
+
+      case ActionType.FafPoints:
+        return { toolName: 'faf_points', params: {} };
+
+      case ActionType.FafUnstakeRequests:
+        return { toolName: 'faf_unstake_requests', params: {} };
+
+      case ActionType.FafCancelUnstake:
+        return { toolName: 'faf_cancel_unstake', params: { requestId: (intent as any).requestId } };
 
       case ActionType.EngineStatus:
         return { toolName: 'engine_status', params: {} };

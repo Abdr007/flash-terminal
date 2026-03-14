@@ -884,6 +884,93 @@ export const earnRotateTool: ToolDefinition = {
   },
 };
 
+// ─── earn integrations ──────────────────────────────────────────────────────
+
+export const earnIntegrationsTool: ToolDefinition = {
+  name: 'earn_integrations',
+  description: 'FLP integration partners (Loopscale, Carrot, RateX, Kamino)',
+  parameters: z.object({}),
+  execute: async (_params, _context): Promise<ToolResult> => {
+    const { FLP_INTEGRATIONS } = await import('../earn/earn-integrations.js');
+
+    if (IS_AGENT) {
+      return { success: true, message: JSON.stringify({ action: 'earn_integrations', integrations: FLP_INTEGRATIONS }) };
+    }
+
+    const lines = [
+      '',
+      `  ${theme.accentBold('FLP INTEGRATIONS')}`,
+      `  ${theme.dim('Earn higher APY, hedge or trade yield')}`,
+      `  ${theme.separator(55)}`,
+      '',
+    ];
+
+    for (let i = 0; i < FLP_INTEGRATIONS.length; i++) {
+      const p = FLP_INTEGRATIONS[i];
+      lines.push(`  ${chalk.bold(`${i + 1}.`)} ${chalk.cyan(p.name)}`);
+      lines.push(`     ${p.description}`);
+      lines.push(`     ${chalk.dim(p.supportedToken + ' · ' + p.detail)}`);
+      lines.push('');
+    }
+
+    return { success: true, message: lines.join('\n') };
+  },
+};
+
+// ─── earn history ───────────────────────────────────────────────────────────
+
+export const earnHistoryTool: ToolDefinition = {
+  name: 'earn_history',
+  description: 'Historical APY data for a pool',
+  parameters: z.object({
+    pool: z.string().max(30).optional(),
+  }),
+  execute: async (params, _context): Promise<ToolResult> => {
+    const { pool: poolAlias } = params as { pool?: string };
+    const poolName = poolAlias ?? 'crypto';
+    const pool = resolvePool(poolName);
+    if (!pool) return poolNotFound(poolName);
+
+    // Fetch from fstats historical endpoint
+    try {
+      const res = await fetch(`https://fstats.io/api/v1/pool-apy-history?pool=${encodeURIComponent(pool.poolId)}`, {
+        signal: AbortSignal.timeout(8000),
+      });
+
+      if (!res.ok) {
+        return { success: true, message: chalk.dim('  Historical APY data unavailable for this endpoint.') };
+      }
+
+      const data = await res.json() as Array<{ date: string; apy: number }>;
+      if (!Array.isArray(data) || data.length === 0) {
+        return { success: true, message: chalk.dim('  Historical data unavailable.') };
+      }
+
+      if (IS_AGENT) {
+        return { success: true, message: JSON.stringify({ action: 'earn_history', pool: pool.aliases[0], data }) };
+      }
+
+      const lines = [
+        '',
+        `  ${theme.accentBold(`${pool.displayName} — APY History`)}`,
+        `  ${theme.separator(40)}`,
+        '',
+      ];
+
+      // Show last 10 data points
+      const recent = data.slice(-10);
+      for (const point of recent) {
+        lines.push(`  ${chalk.dim(point.date)}  ${chalk.green(point.apy.toFixed(1) + '%')}`);
+      }
+
+      lines.push('');
+      return { success: true, message: lines.join('\n') };
+    } catch {
+      return { success: true, message: chalk.dim('  Historical data unavailable.') };
+    }
+  },
+};
+
 // ─── Export All ──────────────────────────────────────────────────────────────
 
 export const allEarnTools: ToolDefinition[] = [
@@ -901,4 +988,6 @@ export const allEarnTools: ToolDefinition[] = [
   earnPnlTool,
   earnDemandTool,
   earnRotateTool,
+  earnIntegrationsTool,
+  earnHistoryTool,
 ];

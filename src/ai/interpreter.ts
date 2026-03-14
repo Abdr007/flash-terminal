@@ -1181,9 +1181,26 @@ export function localParse(input: string): ParsedIntent | null {
     if (/^faf\s+(?:tiers?|vip|levels?)$/.test(lower)) {
       return { action: ActionType.FafTier };
     }
-    // "faf rewards" / "faf pending"
-    if (/^faf\s+(?:rewards?|pending)$/.test(lower)) {
+    // "faf rewards"
+    if (/^faf\s+rewards?$/.test(lower)) {
       return { action: ActionType.FafRewards };
+    }
+    // "faf referral"
+    if (/^faf\s+referrals?$/.test(lower)) {
+      return { action: ActionType.FafReferral };
+    }
+    // "faf points" / "faf voltage"
+    if (/^faf\s+(?:points?|voltage)$/.test(lower)) {
+      return { action: ActionType.FafPoints };
+    }
+    // "faf unstake requests" / "faf requests" / "faf pending"
+    if (/^faf\s+(?:unstake\s+requests?|requests?|pending)$/.test(lower)) {
+      return { action: ActionType.FafUnstakeRequests };
+    }
+    // "faf cancel <number>"
+    const fafCancelMatch = lower.match(/^faf\s+cancel\s+(\d+)$/);
+    if (fafCancelMatch) {
+      return { action: ActionType.FafCancelUnstake, requestId: parseInt(fafCancelMatch[1], 10) } as ParsedIntent;
     }
     // Unknown faf subcommand → show status
     return { action: ActionType.FafStatus };
@@ -1380,6 +1397,17 @@ export function localParse(input: string): ParsedIntent | null {
     // "earn positions", "earn pos"
     if (/^earn\s+(?:positions?|pos)$/.test(earnBody)) {
       return { action: ActionType.EarnPositions };
+    }
+
+    // "earn integrations" / "earn partners"
+    if (/^earn\s+(?:integrations?|partners?)$/.test(earnBody)) {
+      return { action: ActionType.EarnIntegrations };
+    }
+
+    // "earn history crypto" / "earn apy history"
+    const earnHistMatch = earnBody.match(/^earn\s+(?:history|apy)\s*$/);
+    if (earnHistMatch) {
+      return { action: ActionType.EarnHistory, pool: earnPool } as ParsedIntent;
     }
 
     // "earn pools" — same as earn status

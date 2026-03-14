@@ -16,7 +16,7 @@ import {
   VIP_TIERS, VOLTAGE_TIERS, getVipTier, getNextTier, formatFaf,
   FAF_DECIMALS, UNSTAKE_UNLOCK_DAYS,
 } from '../token/faf-registry.js';
-import { getFafStakeInfo, getFafBalance } from '../token/faf-data.js';
+import { getFafStakeInfo, getFafBalance, getFafUnstakeRequests, getVoltageInfo } from '../token/faf-data.js';
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -386,6 +386,237 @@ export const fafRewardsTool: ToolDefinition = {
   },
 };
 
+// ─── faf referral ──────────────────────────────────────────────────────────
+
+export const fafReferralTool: ToolDefinition = {
+  name: 'faf_referral',
+  description: 'Show referral status and claimable rebates',
+  parameters: z.object({}),
+  execute: async (_params, context): Promise<ToolResult> => {
+    const ctx = await getStakeContext(context);
+    if ('error' in ctx) return { success: true, message: ctx.error as string };
+
+    const { perpClient, poolConfig, userPk } = ctx;
+    const info = await getFafStakeInfo(perpClient, poolConfig, userPk);
+
+    // Read claimable rebate from raw account
+    let claimableRebateUsd = 0;
+    try {
+      const raw = info?.rawAccount as any;
+      if (raw?.claimableRebateUsd) {
+        const BN = (await import('bn.js')).default;
+        claimableRebateUsd = new BN(raw.claimableRebateUsd.toString()).toNumber() / Math.pow(10, 6);
+      }
+    } catch { /* non-critical */ }
+
+    const tier = info?.tier;
+    const rebateRate = tier?.referralRebate ?? 2;
+
+    if (IS_AGENT) {
+      return {
+        success: true,
+        message: JSON.stringify({
+          action: 'faf_referral',
+          claimable_rebate_usd: claimableRebateUsd,
+          referral_rebate_rate: rebateRate,
+          vip_level: info?.level ?? 0,
+        }),
+      };
+    }
+
+    const lines = [
+      '',
+      `  ${theme.accentBold('REFERRAL STATUS')}`,
+      `  ${theme.separator(40)}`,
+      '',
+      theme.pair('Referral Rebate Rate', `${rebateRate}%`),
+      theme.pair('VIP Level', `${info?.level ?? 0}`),
+      theme.pair('Claimable Rebates', claimableRebateUsd > 0 ? chalk.green(formatUsd(claimableRebateUsd)) : chalk.dim('$0.00')),
+      '',
+    ];
+
+    if (claimableRebateUsd > 0) {
+      lines.push(chalk.dim('  Use "faf claim rebate" to collect referral rebates.'));
+      lines.push('');
+    }
+
+    return { success: true, message: lines.join('\n') };
+  },
+};
+
+// ─── faf points (voltage) ──────────────────────────────────────────────────
+
+export const fafPointsTool: ToolDefinition = {
+  name: 'faf_points',
+  description: 'Show voltage points tier and trade counter',
+  parameters: z.object({}),
+  execute: async (_params, context): Promise<ToolResult> => {
+    const ctx = await getStakeContext(context);
+    if ('error' in ctx) return { success: true, message: ctx.error as string };
+
+    const { perpClient, poolConfig, userPk } = ctx;
+    const voltage = await getVoltageInfo(perpClient, poolConfig, userPk);
+
+    if (!voltage) {
+      return { success: true, message: chalk.dim('  No staking position found. Stake FAF to start earning voltage points.') };
+    }
+
+    if (IS_AGENT) {
+      return {
+        success: true,
+        message: JSON.stringify({
+          action: 'faf_points',
+          tier_name: voltage.tierName,
+          multiplier: voltage.multiplier,
+          trade_counter: voltage.tradeCounter,
+          level: voltage.level,
+        }),
+      };
+    }
+
+    const lines = [
+      '',
+      `  ${theme.accentBold('VOLTAGE POINTS')}`,
+      `  ${theme.separator(40)}`,
+      '',
+      theme.pair('Tier', chalk.cyan(voltage.tierName)),
+      theme.pair('Multiplier', `${voltage.multiplier}x`),
+      theme.pair('Trade Counter', `${voltage.tradeCounter}`),
+      '',
+    ];
+
+    // Show all tiers
+    lines.push(`  ${'Tier'.padEnd(16)} Multiplier`);
+    lines.push(`  ${theme.separator(30)}`);
+    for (let i = 0; i < VOLTAGE_TIERS.length; i++) {
+      const vt = VOLTAGE_TIERS[i];
+      const marker = i === voltage.level ? chalk.green(' ←') : '';
+      lines.push(`  ${vt.name.padEnd(16)} ${vt.multiplier}x${marker}`);
+    }
+    lines.push('');
+
+    return { success: true, message: lines.join('\n') };
+  },
+};
+
+// ─── faf unstake requests ──────────────────────────────────────────────────
+
+export const fafUnstakeRequestsTool: ToolDefinition = {
+  name: 'faf_unstake_requests',
+  description: 'Show pending unstake requests and progress',
+  parameters: z.object({}),
+  execute: async (_params, context): Promise<ToolResult> => {
+    const ctx = await getStakeContext(context);
+    if ('error' in ctx) return { success: true, message: ctx.error as string };
+
+    const { perpClient, poolConfig, userPk } = ctx;
+    const requests = await getFafUnstakeRequests(perpClient, poolConfig, userPk);
+
+    if (requests.length === 0) {
+      return { success: true, message: chalk.dim('  No pending unstake requests.') };
+    }
+
+    const unlockMs = UNSTAKE_UNLOCK_DAYS * 24 * 60 * 60 * 1000;
+    const now = Date.now();
+
+    if (IS_AGENT) {
+      return {
+        success: true,
+        message: JSON.stringify({
+          action: 'faf_unstake_requests',
+          requests: requests.map(r => ({
+            index: r.index,
+            amount: r.amount,
+            start_timestamp: r.timestamp,
+            end_timestamp: r.timestamp * 1000 + unlockMs,
+            progress_pct: Math.min(100, ((now - r.timestamp * 1000) / unlockMs) * 100),
+          })),
+        }),
+      };
+    }
+
+    const lines = [
+      '',
+      `  ${theme.accentBold('PENDING UNSTAKE REQUESTS')}`,
+      `  ${theme.separator(60)}`,
+      '',
+      `  ${'#'.padEnd(5)} ${'Amount'.padEnd(16)} ${'Started'.padEnd(14)} ${'Est. Complete'.padEnd(14)} Progress`,
+      `  ${theme.separator(60)}`,
+    ];
+
+    for (const req of requests) {
+      const startMs = req.timestamp * 1000;
+      const endMs = startMs + unlockMs;
+      const elapsed = now - startMs;
+      const progress = Math.min(100, Math.max(0, (elapsed / unlockMs) * 100));
+
+      const startDate = new Date(startMs).toLocaleDateString();
+      const endDate = new Date(endMs).toLocaleDateString();
+      const progressStr = progress >= 100 ? chalk.green('READY') : `${progress.toFixed(1)}%`;
+
+      lines.push(
+        `  ${String(req.index).padEnd(5)} ${formatFaf(req.amount).padEnd(16)} ${startDate.padEnd(14)} ${endDate.padEnd(14)} ${progressStr}`
+      );
+    }
+
+    lines.push('');
+    lines.push(chalk.dim(`  Unstake period: ${UNSTAKE_UNLOCK_DAYS} days linear unlock.`));
+    lines.push(chalk.dim('  Use "faf cancel <index>" to cancel a request.'));
+    lines.push('');
+
+    return { success: true, message: lines.join('\n') };
+  },
+};
+
+// ─── faf cancel unstake ────────────────────────────────────────────────────
+
+export const fafCancelUnstakeTool: ToolDefinition = {
+  name: 'faf_cancel_unstake',
+  description: 'Cancel a pending unstake request by index',
+  parameters: z.object({
+    requestId: z.number().min(0).describe('Index of the unstake request to cancel'),
+  }),
+  execute: async (params, context): Promise<ToolResult> => {
+    const { requestId } = params as { requestId: number };
+    const ctx = await getStakeContext(context);
+    if ('error' in ctx) return { success: false, message: ctx.error as string };
+
+    if (!Number.isFinite(requestId) || requestId < 0) {
+      return { success: false, message: chalk.red('  Request index must be a non-negative number.') };
+    }
+
+    const { client, perpClient, poolConfig, userPk } = ctx;
+
+    // Validate the request exists
+    const requests = await getFafUnstakeRequests(perpClient, poolConfig, userPk);
+    const target = requests.find(r => r.index === requestId);
+    if (!target) {
+      return { success: false, message: chalk.red(`  No unstake request found at index ${requestId}. Use "faf requests" to list.`) };
+    }
+
+    try {
+      const result = await perpClient.cancelUnstakeTokenRequest(userPk, requestId, poolConfig);
+      const sig = await client.sendTx(result.instructions, result.additionalSigners, poolConfig);
+
+      const lines = [
+        '',
+        `  ${theme.accentBold('UNSTAKE REQUEST CANCELLED')}`,
+        '',
+        theme.pair('Request #', String(requestId)),
+        theme.pair('Amount', formatFaf(target.amount)),
+        '',
+        chalk.dim('  Tokens returned to staked balance.'),
+        '',
+        `  ${chalk.dim('Tx:')} ${sig}`,
+        '',
+      ];
+      return { success: true, message: lines.join('\n'), txSignature: sig };
+    } catch (err: unknown) {
+      return { success: false, message: chalk.red(`  Cancel unstake failed: ${getErrorMessage(err)}`) };
+    }
+  },
+};
+
 // ─── Export All ──────────────────────────────────────────────────────────────
 
 export const allFafTools: ToolDefinition[] = [
@@ -395,4 +626,8 @@ export const allFafTools: ToolDefinition[] = [
   fafClaimTool,
   fafTierTool,
   fafRewardsTool,
+  fafReferralTool,
+  fafPointsTool,
+  fafUnstakeRequestsTool,
+  fafCancelUnstakeTool,
 ];

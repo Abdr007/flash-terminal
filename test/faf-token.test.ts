@@ -182,10 +182,10 @@ describe('FAF Command Parsing', () => {
     assert.strictEqual(r.action, ActionType.FafRewards);
   });
 
-  it('faf pending → faf_rewards', () => {
+  it('faf pending → faf_unstake_requests', () => {
     const r = localParse('faf pending');
     assert.ok(r);
-    assert.strictEqual(r.action, ActionType.FafRewards);
+    assert.strictEqual(r.action, ActionType.FafUnstakeRequests);
   });
 
   it('unknown faf subcommand → faf_status', () => {

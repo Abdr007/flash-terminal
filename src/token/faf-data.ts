@@ -7,7 +7,7 @@
 
 import { Connection, PublicKey } from '@solana/web3.js';
 import { PoolConfig, PerpetualsClient, TokenStakeAccount } from 'flash-sdk';
-import { FAF_MINT, FAF_DECIMALS, FAF_TOKEN_VAULT, getVipTier, VipTier } from './faf-registry.js';
+import { FAF_MINT, FAF_DECIMALS, FAF_TOKEN_VAULT, getVipTier, VipTier, VOLTAGE_TIERS } from './faf-registry.js';
 import { getLogger } from '../utils/logger.js';
 import BN from 'bn.js';
 
@@ -84,6 +84,89 @@ export async function getFafStakeInfo(
     pendingRevenue,
     withdrawRequestCount,
     rawAccount: stakeAccount,
+  };
+}
+
+// ─── Unstake Requests ──────────────────────────────────────────────────────
+
+export interface FafUnstakeRequest {
+  /** Request index (0-based) */
+  index: number;
+  /** Amount being unstaked (UI units) */
+  amount: number;
+  /** Unix timestamp when the unstake was requested */
+  timestamp: number;
+}
+
+/**
+ * Read pending unstake (withdraw) requests from the TokenStakeAccount.
+ * Returns an empty array if no stake account or no requests.
+ */
+export async function getFafUnstakeRequests(
+  perpClient: PerpetualsClient,
+  poolConfig: PoolConfig,
+  userPublicKey: PublicKey,
+): Promise<FafUnstakeRequest[]> {
+  let stakeAccount: TokenStakeAccount | null = null;
+  try {
+    stakeAccount = await perpClient.getTokenStakeAccount(poolConfig, userPublicKey);
+  } catch {
+    return [];
+  }
+  if (!stakeAccount || !stakeAccount.isInitialized) return [];
+
+  const requests: FafUnstakeRequest[] = [];
+  const withdrawRequests = (stakeAccount as any).withdrawRequests ?? (stakeAccount as any).withdrawRequest ?? [];
+  for (let i = 0; i < withdrawRequests.length; i++) {
+    const req = withdrawRequests[i];
+    if (!req) continue;
+    const amount = new BN(req.amount?.toString() ?? '0').toNumber() / Math.pow(10, FAF_DECIMALS);
+    const timestamp = new BN(req.timestamp?.toString() ?? '0').toNumber();
+    if (amount <= 0) continue;
+    requests.push({ index: i, amount, timestamp });
+  }
+  return requests;
+}
+
+// ─── Voltage Info ──────────────────────────────────────────────────────────
+
+export interface FafVoltageInfo {
+  /** Voltage tier level (0-based index into VOLTAGE_TIERS) */
+  level: number;
+  /** Tier name (e.g. "Rookie", "Degen", etc.) */
+  tierName: string;
+  /** Points multiplier */
+  multiplier: number;
+  /** Number of trades contributing to voltage */
+  tradeCounter: number;
+}
+
+/**
+ * Read voltage points info from the TokenStakeAccount.
+ * Returns null if no stake account.
+ */
+export async function getVoltageInfo(
+  perpClient: PerpetualsClient,
+  poolConfig: PoolConfig,
+  userPublicKey: PublicKey,
+): Promise<FafVoltageInfo | null> {
+  let stakeAccount: TokenStakeAccount | null = null;
+  try {
+    stakeAccount = await perpClient.getTokenStakeAccount(poolConfig, userPublicKey);
+  } catch {
+    return null;
+  }
+  if (!stakeAccount || !stakeAccount.isInitialized) return null;
+
+  const level = Math.min((stakeAccount as any).voltageLevel ?? 0, VOLTAGE_TIERS.length - 1);
+  const tier = VOLTAGE_TIERS[level] ?? VOLTAGE_TIERS[0];
+  const tradeCounter = (stakeAccount as any).tradeCounter ?? 0;
+
+  return {
+    level,
+    tierName: tier.name,
+    multiplier: tier.multiplier,
+    tradeCounter: typeof tradeCounter === 'number' ? tradeCounter : new BN(tradeCounter.toString()).toNumber(),
   };
 }
 
