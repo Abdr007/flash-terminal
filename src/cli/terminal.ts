@@ -964,6 +964,25 @@ export class FlashTerminal {
       if (isSim) {
         readyData.balance_usdc = this.flashClient.getBalance();
       }
+      // Detect FAF stake for agent mode
+      if (!isSim && this.walletManager?.address) {
+        try {
+          const { getFafStakeInfo } = await import('../token/faf-data.js');
+          const { PublicKey } = await import('@solana/web3.js');
+          const client = this.flashClient as any;
+          if (client.perpClient && client.poolConfig) {
+            const info = await Promise.race([
+              getFafStakeInfo(client.perpClient, client.poolConfig, new PublicKey(this.walletManager.address)),
+              new Promise<null>(r => setTimeout(() => r(null), 3000)),
+            ]);
+            if (info && info.stakedAmount > 0) {
+              readyData.faf_staked = info.stakedAmount;
+              readyData.vip_tier = info.level;
+              readyData.fee_discount = info.tier.feeDiscount;
+            }
+          }
+        } catch { /* non-critical */ }
+      }
       agentOutput(readyData);
       return;
     }
@@ -1014,6 +1033,49 @@ export class FlashTerminal {
       }
       if (solBal === null && usdcBal === null) {
         console.log(theme.dim('  Run "wallet tokens" to view balances.'));
+      }
+
+      // ── FAF Stake Detection (non-blocking, 3s timeout) ──
+      try {
+        const { getFafStakeInfo, getVoltageInfo } = await import('../token/faf-data.js');
+        const { formatFaf } = await import('../token/faf-registry.js');
+        const { PublicKey } = await import('@solana/web3.js');
+
+        if (this.flashClient && 'perpClient' in this.flashClient && 'poolConfig' in this.flashClient) {
+          const client = this.flashClient as any;
+          const userPk = new PublicKey(this.walletManager.address!);
+
+          const stakeInfo = await Promise.race([
+            getFafStakeInfo(client.perpClient, client.poolConfig, userPk),
+            new Promise<null>(r => setTimeout(() => r(null), 3000)),
+          ]);
+
+          if (stakeInfo && stakeInfo.stakedAmount > 0) {
+            console.log('');
+            console.log(theme.pair('FAF Staked', theme.accent(formatFaf(stakeInfo.stakedAmount))));
+            console.log(theme.pair('VIP Tier', `Level ${stakeInfo.level} (${stakeInfo.tier.feeDiscount}% fee discount)`));
+
+            if (stakeInfo.pendingRewards > 0) {
+              console.log(theme.pair('Pending FAF', theme.positive(formatFaf(stakeInfo.pendingRewards))));
+            }
+            if (stakeInfo.pendingRevenue > 0) {
+              console.log(theme.pair('Pending USDC', theme.positive('$' + stakeInfo.pendingRevenue.toFixed(2))));
+            }
+
+            // Voltage tier
+            try {
+              const voltageInfo = await Promise.race([
+                getVoltageInfo(client.perpClient, client.poolConfig, userPk),
+                new Promise<null>(r => setTimeout(() => r(null), 2000)),
+              ]);
+              if (voltageInfo) {
+                console.log(theme.pair('Voltage Tier', `${voltageInfo.tierName} (${voltageInfo.multiplier}x)`));
+              }
+            } catch { /* voltage is non-critical */ }
+          }
+        }
+      } catch {
+        // FAF detection is non-critical — never block startup
       }
 
       console.log('');
