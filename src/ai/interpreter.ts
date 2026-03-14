@@ -216,6 +216,130 @@ function parseLimitOrder(input: string): ParsedIntent | null {
   } as ParsedIntent;
 }
 
+/**
+ * Flexible open position parser — extracts entities regardless of word order.
+ *
+ * Accepts any combination of: prefix (open/buy/enter), side (long/short),
+ * market (sol/btc/eth/...), leverage (2x/2.5x), collateral ($10/10/10 dollars).
+ * Also extracts optional TP/SL suffixes.
+ *
+ * All of these parse identically:
+ *   open 2x long sol $10     long sol 2x 10        buy sol 2x 10
+ *   sol long 2x 10           long 10 sol 2x        open sol long $10 2x
+ *   short btc 3x 50          long 2x sol 10        short 3x btc 50
+ */
+function flexParseOpen(input: string): ParsedIntent | null {
+  // Split TP/SL suffix before main parse — find first occurrence of tp or sl keyword
+  let mainPart = input;
+  let tpSlPart = '';
+  const tpSlSplit = input.match(/^(.*?)\b((?:set\s+)?(?:tp|sl)\b.*)$/);
+  if (tpSlSplit) {
+    mainPart = tpSlSplit[1].trim();
+    tpSlPart = tpSlSplit[2];
+  }
+
+  let body = mainPart;
+
+  // Strip prefix verbs
+  body = body.replace(/^(?:open|buy|enter)\s+(?:a\s+)?/, '');
+  // Strip filler words
+  body = body.replace(/\b(?:with|for|on|position|collateral|of|dollars?|usd|usdc)\b/g, ' ');
+  body = body.replace(/\s+/g, ' ').trim();
+
+  // Extract side: long/short
+  let side: TradeSide | null = null;
+  const sideMatch = body.match(/\b(long|short)\b/);
+  if (sideMatch) {
+    side = parseSide(sideMatch[1]);
+    body = body.replace(/\b(long|short)\b/, ' ').replace(/\s+/g, ' ').trim();
+  }
+
+  // If original input started with a side-implying keyword, use that
+  if (!side) {
+    if (input.startsWith('long')) side = TradeSide.Long;
+    else if (input.startsWith('short')) side = TradeSide.Short;
+    // "open" without explicit side → default to long (matches "buy" alias behavior)
+    else if (input.startsWith('open') || input.startsWith('enter')) side = TradeSide.Long;
+  }
+
+  if (!side) return null;
+
+  // Extract leverage: "2x", "2.5x", "3 x"
+  let leverage: number | null = null;
+  const levMatch = body.match(/\b(\d+(?:\.\d+)?)\s*x\b/);
+  if (levMatch) {
+    leverage = parseFloat(levMatch[1]);
+    body = body.replace(/\b\d+(?:\.\d+)?\s*x\b/, ' ').replace(/\s+/g, ' ').trim();
+  }
+
+  // Extract collateral: "$10", "10" — take the number that's NOT the leverage
+  let collateral: number | null = null;
+  const dollarMatch = body.match(/\$(\d+(?:\.\d+)?)/);
+  if (dollarMatch) {
+    collateral = parseFloat(dollarMatch[1]);
+    body = body.replace(/\$\d+(?:\.\d+)?/, ' ').replace(/\s+/g, ' ').trim();
+  } else {
+    // Find remaining numbers — the one that looks like collateral (not leverage)
+    const numbers = [...body.matchAll(/\b(\d+(?:\.\d+)?)\b/g)].map(m => parseFloat(m[1]));
+    if (numbers.length === 1) {
+      collateral = numbers[0];
+      body = body.replace(/\b\d+(?:\.\d+)?\b/, ' ').replace(/\s+/g, ' ').trim();
+    } else if (numbers.length >= 2 && !leverage) {
+      // Two numbers, no leverage yet — one is leverage, one is collateral
+      // The one with 'x' was already extracted; if both are bare numbers,
+      // smaller is likely leverage, larger is collateral
+      const sorted = [...numbers].sort((a, b) => a - b);
+      leverage = sorted[0];
+      collateral = sorted[1];
+      body = body.replace(/\b\d+(?:\.\d+)?\b/g, ' ').replace(/\s+/g, ' ').trim();
+    }
+  }
+
+  // Remaining text should be the market
+  body = body.replace(/\b(?:the|a|an|my|with|for|on)\b/g, '').replace(/\s+/g, ' ').trim();
+  if (!body) return null;
+
+  const market = resolveMarket(body);
+  if (!market || !getAllMarkets().includes(market)) return null;
+
+  if (!collateral || !Number.isFinite(collateral) || collateral <= 0) return null;
+  // If no leverage was explicitly marked with 'x', it may still be missing
+  if (!leverage) return null;
+  if (!Number.isFinite(leverage) || leverage < 1) return null;
+
+  const result: Record<string, unknown> = {
+    action: ActionType.OpenPosition,
+    market,
+    side,
+    collateral,
+    leverage,
+  };
+
+  if (tpSlPart) {
+    parseTpSlSuffix(tpSlPart, result);
+  }
+
+  return result as ParsedIntent;
+}
+
+// ─── Flexible TP/SL Shortcut Parser ──────────────────────────────────────
+// "tp sol 160" → set_tp_sl, "sl btc 60000" → set_tp_sl
+function flexParseTpSl(input: string): ParsedIntent | null {
+  const match = input.match(/^(tp|sl)\s+([a-z]+)\s+\$?(\d+(?:\.\d+)?)$/);
+  if (!match) return null;
+  const market = resolveMarket(match[2]);
+  if (!market || !getAllMarkets().includes(market)) return null;
+  const price = parseFloat(match[3]);
+  if (!Number.isFinite(price) || price <= 0) return null;
+  // Side omitted — terminal will auto-detect from open positions
+  return {
+    action: ActionType.SetTpSl,
+    market,
+    type: match[1] as 'tp' | 'sl',
+    price,
+  } as ParsedIntent;
+}
+
 // ─── Number Word Normalization ────────────────────────────────────────────
 
 const NUMBER_WORDS: Record<string, number> = {
@@ -289,6 +413,8 @@ function normalizeAssetAliases(text: string): string {
 const COMMAND_ALIASES: Record<string, string> = {
   o: 'open',
   c: 'close',
+  l: 'long',
+  s: 'short',
   p: 'positions',
   pos: 'positions',
   m: 'monitor',
@@ -297,6 +423,8 @@ const COMMAND_ALIASES: Record<string, string> = {
   b: 'portfolio',    // "b" for balance
   bal: 'portfolio',
   ca: 'close all',
+  buy: 'open',       // "buy sol 2x 10" → "open sol 2x 10"
+  sell: 'close',     // "sell sol" → "close sol"
 };
 
 /** Expand single-letter/short command aliases at the start of input. */
@@ -500,62 +628,35 @@ export function localParse(input: string): ParsedIntent | null {
     }
   }
 
-  // Open position: "open 5x long SOL $500" with optional tp/sl: "open 5x long SOL $500 tp $95 sl $80"
-  const openMatch = lower.match(
-    /^(?:open|buy|enter)\s+(?:a\s+)?(\d+(?:\.\d+)?)\s*x?\s*(long|short)\s+(?:position\s+)?(?:on\s+)?([a-z]+)\s+(?:with\s+|for\s+)?\$?(\d+(?:\.\d+)?)(?:\s+dollars?)?(.*)$/
-  );
-  if (openMatch) {
-    const side = parseSide(openMatch[2]);
-    if (side) {
-      const result: Record<string, unknown> = {
-        action: ActionType.OpenPosition,
-        market: resolveMarket(openMatch[3]),
-        side,
-        collateral: parseFloat(openMatch[4]),
-        leverage: parseFloat(openMatch[1]),
-      };
-      parseTpSlSuffix(openMatch[5], result);
-      return result as ParsedIntent;
+  // ─── Flexible Open Position Parser ────────────────────────────────────────
+  // Extracts entities (side, market, leverage, collateral) from ANY position
+  // in the input. Supports all natural orderings:
+  //   open 2x long sol $10       long sol 2x 10        buy sol 2x 10
+  //   sol long 2x 10             long 10 sol 2x        open sol long $10 2x
+  //   short btc 3x 50            open long sol with 20 dollars collateral
+  //   long 2x sol 10             short 3x btc 50       buy sol 10 dollars 2x
+  {
+    // Trigger flexParseOpen if input looks like a trade command:
+    // - starts with open/enter/long/short AND has numbers, OR
+    // - starts with a market name followed by long/short
+    const hasSide = /\b(long|short)\b/.test(lower);
+    const hasNumbers = /\d/.test(lower);
+    const openPrefixes = /^(?:open|enter|long|short)\b/.test(lower);
+    if (hasNumbers && (
+      (openPrefixes) ||                                          // "open sol 2x 10", "long sol 2x 10"
+      (hasSide && /^[a-z]+\s+(?:long|short)\b/.test(lower))     // "sol long 2x 10"
+    )) {
+      const parsed = flexParseOpen(lower);
+      if (parsed) {
+        return parsed;
+      }
     }
   }
 
-  // Alternate order: "open 2x ETH long for $10", "open 5x SOL short $500"
-  // (market before side)
-  const openMatch1b = lower.match(
-    /^(?:open|buy|enter)\s+(?:a\s+)?(\d+(?:\.\d+)?)\s*x?\s+([a-z]+)\s+(long|short)\s+(?:with\s+|for\s+)?\$?(\d+(?:\.\d+)?)(?:\s+dollars?)?(.*)$/
-  );
-  if (openMatch1b) {
-    const side = parseSide(openMatch1b[3]);
-    if (side) {
-      const result: Record<string, unknown> = {
-        action: ActionType.OpenPosition,
-        market: resolveMarket(openMatch1b[2]),
-        side,
-        collateral: parseFloat(openMatch1b[4]),
-        leverage: parseFloat(openMatch1b[1]),
-      };
-      parseTpSlSuffix(openMatch1b[5], result);
-      return result as ParsedIntent;
-    }
-  }
-
-  // Alternate: "long SOL $500 5x" with optional tp/sl
-  const openMatch2 = lower.match(
-    /^(long|short)\s+([a-z]+)\s+\$?(\d+(?:\.\d+)?)\s+(\d+(?:\.\d+)?)\s*x(.*)$/
-  );
-  if (openMatch2) {
-    const side = parseSide(openMatch2[1]);
-    if (side) {
-      const result: Record<string, unknown> = {
-        action: ActionType.OpenPosition,
-        market: resolveMarket(openMatch2[2]),
-        side,
-        collateral: parseFloat(openMatch2[3]),
-        leverage: parseFloat(openMatch2[4]),
-      };
-      parseTpSlSuffix(openMatch2[5], result);
-      return result as ParsedIntent;
-    }
+  // TP/SL shortcut: "tp sol 160", "sl btc 60000" (side auto-detected from positions)
+  if (/^(tp|sl)\s+[a-z]/.test(lower)) {
+    const tpSlShortcut = flexParseTpSl(lower);
+    if (tpSlShortcut) return tpSlShortcut;
   }
 
   // Set TP/SL: "set tp SOL long $95", "set sl SOL long $80", "set tp btc long to 75000"
