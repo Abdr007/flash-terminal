@@ -436,6 +436,201 @@ export const earnPositionsTool: ToolDefinition = {
   },
 };
 
+// ─── earn best (pool ranking) ───────────────────────────────────────────────
+
+export const earnBestTool: ToolDefinition = {
+  name: 'earn_best',
+  description: 'Rank pools by yield with risk assessment',
+  parameters: z.object({}),
+  execute: async (_params, _context): Promise<ToolResult> => {
+    const { rankPools } = await import('../earn/yield-analytics.js');
+    const ranked = await rankPools();
+
+    if (ranked.length === 0) {
+      return { success: false, message: chalk.dim('  Unable to fetch pool metrics.') };
+    }
+
+    if (IS_AGENT) {
+      return {
+        success: true,
+        message: JSON.stringify({
+          action: 'earn_best',
+          pools: ranked.map((r, i) => ({
+            rank: i + 1,
+            pool: r.pool.aliases[0],
+            pool_id: r.pool.poolId,
+            apy: r.metrics.apy7d,
+            tvl: r.metrics.tvl,
+            risk: r.risk,
+            score: r.score,
+          })),
+        }),
+      };
+    }
+
+    const riskColor = (r: string) => {
+      if (r === 'Low') return chalk.green(r);
+      if (r === 'Medium') return chalk.yellow(r);
+      if (r === 'High') return chalk.red(r);
+      return chalk.bgRed.white(` ${r} `);
+    };
+
+    const lines = [
+      '',
+      `  ${theme.accentBold('TOP YIELD POOLS')}`,
+      `  ${theme.separator(50)}`,
+      '',
+    ];
+
+    for (let i = 0; i < ranked.length; i++) {
+      const r = ranked[i];
+      lines.push(`  ${chalk.bold(`${i + 1}.`)} ${chalk.cyan(r.pool.displayName)}`);
+      lines.push(`     APY: ${chalk.green(r.metrics.apy7d.toFixed(1) + '%')}   TVL: ${formatUsd(r.metrics.tvl)}   Risk: ${riskColor(r.risk)}`);
+      lines.push(`     FLP: $${r.metrics.flpPrice.toFixed(3)}   Assets: ${r.pool.assets.slice(0, 3).join(', ')}`);
+      lines.push('');
+    }
+
+    return { success: true, message: lines.join('\n') };
+  },
+};
+
+// ─── earn simulate ──────────────────────────────────────────────────────────
+
+export const earnSimulateTool: ToolDefinition = {
+  name: 'earn_simulate',
+  description: 'Project yield returns for a deposit',
+  parameters: z.object({
+    pool: z.string().max(30).optional(),
+    amount: z.number().positive(),
+  }),
+  execute: async (params, _context): Promise<ToolResult> => {
+    const { pool: poolAlias, amount } = params as { pool?: string; amount: number };
+    const poolName = poolAlias ?? 'Crypto.1';
+    const pool = resolvePool(poolName);
+    if (!pool) return poolNotFound(poolName);
+
+    const m = await getPoolMetric(pool.poolId);
+    if (!m || m.apy7d === 0) {
+      return { success: false, message: chalk.dim('  Yield data unavailable for this pool.') };
+    }
+
+    const { simulateYield } = await import('../earn/yield-analytics.js');
+    const proj = simulateYield(amount, m.apy7d);
+
+    if (IS_AGENT) {
+      return {
+        success: true,
+        message: JSON.stringify({
+          action: 'earn_simulate',
+          pool: pool.aliases[0],
+          pool_id: pool.poolId,
+          ...proj,
+        }),
+      };
+    }
+
+    const lines = [
+      '',
+      `  ${theme.accentBold(`${pool.displayName} — Yield Projection`)}`,
+      `  ${theme.separator(45)}`,
+      '',
+      theme.pair('Deposit', formatUsd(amount)),
+      theme.pair('Current APY', chalk.green(`${m.apy7d.toFixed(2)}%`)),
+      theme.pair('FLP Price', `$${m.flpPrice.toFixed(3)}`),
+      '',
+      `  ${theme.section('Estimated Returns')}`,
+      '',
+      theme.pair('7 days', chalk.green(`+${formatUsd(proj.days7)}`)),
+      theme.pair('30 days', chalk.green(`+${formatUsd(proj.days30)}`)),
+      theme.pair('90 days', chalk.green(`+${formatUsd(proj.days90)}`)),
+      theme.pair('1 year', chalk.green(`+${formatUsd(proj.days365)}`)),
+      '',
+      chalk.dim('  * Projections based on current 7-day APY. Actual returns vary.'),
+      '',
+    ];
+
+    return { success: true, message: lines.join('\n') };
+  },
+};
+
+// ─── earn dashboard ─────────────────────────────────────────────────────────
+
+export const earnDashboardTool: ToolDefinition = {
+  name: 'earn_dashboard',
+  description: 'Liquidity portfolio overview with all positions',
+  parameters: z.object({}),
+  execute: async (_params, context): Promise<ToolResult> => {
+    const wm = context.walletManager;
+    if (!wm || !wm.isConnected) {
+      return { success: true, message: chalk.dim('  No wallet connected.') };
+    }
+
+    const registry = getPoolRegistry();
+    const metrics = await getPoolMetrics();
+
+    let tokenData: { sol: number; tokens: Array<{ mint: string; amount: number }> } | null = null;
+    try {
+      tokenData = await wm.getTokenBalances();
+    } catch {
+      return { success: false, message: chalk.red('  Failed to fetch balances.') };
+    }
+    if (!tokenData) return { success: true, message: chalk.dim('  No token data.') };
+
+    let totalValue = 0;
+    const positions: Array<{ pool: string; type: string; value: number; apy: number }> = [];
+
+    for (const token of tokenData.tokens) {
+      const resolved = resolveTokenMint(token.mint);
+      if (!resolved || token.amount < 0.001) continue;
+      const { pool, type } = resolved;
+      const m = metrics.get(pool.poolId);
+      const price = type === 'FLP' ? (m?.flpPrice ?? 0) : (m?.sflpPrice ?? 0);
+      const value = token.amount * price;
+      totalValue += value;
+      positions.push({
+        pool: pool.aliases[0],
+        type,
+        value,
+        apy: type === 'FLP' ? (m?.apy7d ?? 0) : (m?.apr7d ?? 0),
+      });
+    }
+
+    if (IS_AGENT) {
+      return {
+        success: true,
+        message: JSON.stringify({
+          action: 'earn_dashboard',
+          total_value: totalValue,
+          positions,
+        }),
+      };
+    }
+
+    const lines = [
+      '',
+      `  ${theme.accentBold('FLASH EARN PORTFOLIO')}`,
+      `  ${theme.separator(45)}`,
+      '',
+      theme.pair('Total Deposited', totalValue > 0 ? chalk.green(formatUsd(totalValue)) : formatUsd(0)),
+      '',
+    ];
+
+    if (positions.length === 0) {
+      lines.push(chalk.dim('  No active positions.'));
+      lines.push(chalk.dim('  Use "earn deposit <pool> <amount>" to start earning.'));
+    } else {
+      lines.push(`  ${'Pool'.padEnd(12)} ${'Type'.padEnd(8)} ${'Value'.padEnd(12)} APY`);
+      lines.push(`  ${theme.separator(45)}`);
+      for (const pos of positions) {
+        lines.push(`  ${chalk.cyan(pos.pool.padEnd(12))} ${pos.type.padEnd(8)} ${formatUsd(pos.value).padEnd(12)} ${chalk.green(pos.apy.toFixed(1) + '%')}`);
+      }
+    }
+
+    lines.push('');
+    return { success: true, message: lines.join('\n') };
+  },
+};
+
 // ─── Export All ──────────────────────────────────────────────────────────────
 
 export const allEarnTools: ToolDefinition[] = [
@@ -447,4 +642,7 @@ export const allEarnTools: ToolDefinition[] = [
   earnUnstakeTool,
   earnClaimRewardsTool,
   earnPositionsTool,
+  earnBestTool,
+  earnSimulateTool,
+  earnDashboardTool,
 ];

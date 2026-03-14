@@ -379,6 +379,15 @@ export class ToolEngine {
       case ActionType.EarnPositions:
         return { toolName: 'earn_positions', params: {} };
 
+      case ActionType.EarnBest:
+        return { toolName: 'earn_best', params: {} };
+
+      case ActionType.EarnSimulate:
+        return { toolName: 'earn_simulate', params: { pool: intent.pool, amount: intent.amount } };
+
+      case ActionType.EarnDashboard:
+        return { toolName: 'earn_dashboard', params: {} };
+
       case ActionType.EngineStatus:
         return { toolName: 'engine_status', params: {} };
 

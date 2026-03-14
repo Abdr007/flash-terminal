@@ -1290,6 +1290,28 @@ export function localParse(input: string): ParsedIntent | null {
       } as ParsedIntent;
     }
 
+    // "earn best" — pool ranking
+    if (/^earn\s+best$/.test(earnBody)) {
+      return { action: ActionType.EarnBest };
+    }
+
+    // "earn simulate crypto 1000", "earn sim gold 500"
+    const earnSimMatch = earnBody.match(
+      /^earn\s+sim(?:ulate)?\s+\$?(\d+(?:\.\d+)?)$/
+    );
+    if (earnSimMatch) {
+      return {
+        action: ActionType.EarnSimulate,
+        amount: parseFloat(earnSimMatch[1]),
+        pool: earnPool ?? EARN_POOL_ALIASES['crypto'],
+      } as ParsedIntent;
+    }
+
+    // "earn dashboard", "earn dash"
+    if (/^earn\s+(?:dashboard|dash)$/.test(earnBody)) {
+      return { action: ActionType.EarnDashboard };
+    }
+
     // "earn positions", "earn pos"
     if (/^earn\s+(?:positions?|pos)$/.test(earnBody)) {
       return { action: ActionType.EarnPositions };
@@ -1298,6 +1320,19 @@ export function localParse(input: string): ParsedIntent | null {
     // "earn pools" — same as earn status
     if (/^earn\s+pools?$/.test(earnBody)) {
       return { action: ActionType.EarnStatus };
+    }
+
+    // Smart shortcut: "earn 500 crypto" → earn deposit crypto 500
+    const earnShortcut = earnBody.match(
+      /^earn\s+\$?(\d+(?:\.\d+)?)$/
+    );
+    if (earnShortcut && earnPool) {
+      return {
+        action: ActionType.EarnAddLiquidity,
+        amount: parseFloat(earnShortcut[1]),
+        token: 'USDC',
+        pool: earnPool,
+      } as ParsedIntent;
     }
 
     // "earn status" or bare "earn"

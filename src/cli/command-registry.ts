@@ -579,6 +579,27 @@ export const COMMAND_REGISTRY: CommandEntry[] = [
     aliases: ['earn pos'],
   },
   {
+    name: 'earn best',
+    action: ActionType.EarnBest,
+    category: 'Trading',
+    description: 'Rank pools by yield + risk',
+  },
+  {
+    name: 'earn simulate',
+    action: null,
+    category: 'Trading',
+    description: 'Project yield returns',
+    helpFormat: 'earn simulate $1000 crypto',
+    parameterized: true,
+  },
+  {
+    name: 'earn dashboard',
+    action: ActionType.EarnDashboard,
+    category: 'Trading',
+    description: 'Liquidity portfolio overview',
+    aliases: ['earn dash'],
+  },
+  {
     name: 'help',
     action: ActionType.Help,
     category: 'Utilities',
