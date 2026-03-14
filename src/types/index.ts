@@ -117,6 +117,9 @@ export enum ActionType {
   EarnBest = 'earn_best',
   EarnSimulate = 'earn_simulate',
   EarnDashboard = 'earn_dashboard',
+  EarnPnl = 'earn_pnl',
+  EarnDemand = 'earn_demand',
+  EarnRotate = 'earn_rotate',
   EngineStatus = 'engine_status',
   EngineBenchmark = 'engine_benchmark',
 }
@@ -490,6 +493,18 @@ export const EarnDashboardSchema = z.object({
   action: z.literal(ActionType.EarnDashboard),
 });
 
+export const EarnPnlSchema = z.object({
+  action: z.literal(ActionType.EarnPnl),
+});
+
+export const EarnDemandSchema = z.object({
+  action: z.literal(ActionType.EarnDemand),
+});
+
+export const EarnRotateSchema = z.object({
+  action: z.literal(ActionType.EarnRotate),
+});
+
 export const EngineStatusSchema = z.object({
   action: z.literal(ActionType.EngineStatus),
 });
@@ -570,6 +585,9 @@ export const ParsedIntentSchema = z.discriminatedUnion('action', [
   EarnBestSchema,
   EarnSimulateSchema,
   EarnDashboardSchema,
+  EarnPnlSchema,
+  EarnDemandSchema,
+  EarnRotateSchema,
   EngineStatusSchema,
   EngineBenchmarkSchema,
 ]);

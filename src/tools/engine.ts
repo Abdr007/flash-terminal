@@ -388,6 +388,15 @@ export class ToolEngine {
       case ActionType.EarnDashboard:
         return { toolName: 'earn_dashboard', params: {} };
 
+      case ActionType.EarnPnl:
+        return { toolName: 'earn_pnl', params: {} };
+
+      case ActionType.EarnDemand:
+        return { toolName: 'earn_demand', params: {} };
+
+      case ActionType.EarnRotate:
+        return { toolName: 'earn_rotate', params: {} };
+
       case ActionType.EngineStatus:
         return { toolName: 'engine_status', params: {} };
 

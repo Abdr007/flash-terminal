@@ -600,6 +600,27 @@ export const COMMAND_REGISTRY: CommandEntry[] = [
     aliases: ['earn dash'],
   },
   {
+    name: 'earn pnl',
+    action: ActionType.EarnPnl,
+    category: 'Trading',
+    description: 'Earn profit & loss tracking',
+    aliases: ['earn profit', 'earn performance'],
+  },
+  {
+    name: 'earn demand',
+    action: ActionType.EarnDemand,
+    category: 'Trading',
+    description: 'Liquidity demand analysis',
+    aliases: ['earn utilization'],
+  },
+  {
+    name: 'earn rotate',
+    action: ActionType.EarnRotate,
+    category: 'Trading',
+    description: 'Suggest liquidity rotation',
+    aliases: ['earn optimize', 'earn rebalance'],
+  },
+  {
     name: 'help',
     action: ActionType.Help,
     category: 'Utilities',

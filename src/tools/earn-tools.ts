@@ -173,7 +173,23 @@ export const earnAddLiquidityTool: ToolDefinition = {
     const client = context.flashClient;
     if (!client.addLiquidity) return { success: false, message: NOT_AVAILABLE_MSG };
 
-    const poolName = poolAlias ?? 'Crypto.1';
+    let poolName = poolAlias ?? 'Crypto.1';
+
+    // Auto-route: "earn best 500" → deposit into top-ranked pool
+    if (poolName === '__best__') {
+      try {
+        const { rankPools } = await import('../earn/yield-analytics.js');
+        const ranked = await rankPools();
+        if (ranked.length > 0) {
+          poolName = ranked[0].pool.poolId;
+        } else {
+          poolName = 'Crypto.1'; // fallback
+        }
+      } catch {
+        poolName = 'Crypto.1';
+      }
+    }
+
     const pool = resolvePool(poolName);
     if (!pool) return poolNotFound(poolName);
 
@@ -631,6 +647,226 @@ export const earnDashboardTool: ToolDefinition = {
   },
 };
 
+// ─── earn pnl ───────────────────────────────────────────────────────────────
+
+export const earnPnlTool: ToolDefinition = {
+  name: 'earn_pnl',
+  description: 'Track liquidity profit & loss',
+  parameters: z.object({}),
+  execute: async (_params, context): Promise<ToolResult> => {
+    const wm = context.walletManager;
+    if (!wm || !wm.isConnected) return { success: true, message: chalk.dim('  No wallet connected.') };
+
+    const registry = getPoolRegistry();
+    const metrics = await getPoolMetrics();
+
+    let tokenData: { sol: number; tokens: Array<{ mint: string; amount: number }> } | null = null;
+    try { tokenData = await wm.getTokenBalances(); } catch { return { success: false, message: chalk.red('  Failed to fetch balances.') }; }
+    if (!tokenData) return { success: true, message: chalk.dim('  No token data.') };
+
+    let totalValue = 0;
+    const positions: Array<{ pool: string; type: string; tokens: number; value: number; price: number }> = [];
+
+    for (const token of tokenData.tokens) {
+      const resolved = resolveTokenMint(token.mint);
+      if (!resolved || token.amount < 0.001) continue;
+      const { pool, type } = resolved;
+      const m = metrics.get(pool.poolId);
+      const price = type === 'FLP' ? (m?.flpPrice ?? 0) : (m?.sflpPrice ?? 0);
+      const value = token.amount * price;
+      totalValue += value;
+      positions.push({ pool: pool.aliases[0], type, tokens: token.amount, value, price });
+    }
+
+    if (IS_AGENT) {
+      return { success: true, message: JSON.stringify({ action: 'earn_pnl', total_value: totalValue, positions }) };
+    }
+
+    const lines = [
+      '',
+      `  ${theme.accentBold('EARN PERFORMANCE')}`,
+      `  ${theme.separator(45)}`,
+      '',
+      theme.pair('Current Value', totalValue > 0 ? chalk.green(formatUsd(totalValue)) : formatUsd(0)),
+      '',
+    ];
+
+    if (positions.length === 0) {
+      lines.push(chalk.dim('  No active positions.'));
+    } else {
+      lines.push(`  ${'Pool'.padEnd(12)} ${'Type'.padEnd(8)} ${'Tokens'.padEnd(12)} ${'Value'.padEnd(12)} Price`);
+      lines.push(`  ${theme.separator(55)}`);
+      for (const pos of positions) {
+        lines.push(`  ${chalk.cyan(pos.pool.padEnd(12))} ${pos.type.padEnd(8)} ${pos.tokens.toFixed(2).padEnd(12)} ${formatUsd(pos.value).padEnd(12)} $${pos.price.toFixed(3)}`);
+      }
+    }
+
+    lines.push('');
+    lines.push(chalk.dim('  * PnL tracking requires comparing against deposit history.'));
+    lines.push(chalk.dim('    Current value shown — deposit tracking coming soon.'));
+    lines.push('');
+    return { success: true, message: lines.join('\n') };
+  },
+};
+
+// ─── earn demand ────────────────────────────────────────────────────────────
+
+export const earnDemandTool: ToolDefinition = {
+  name: 'earn_demand',
+  description: 'Analyze liquidity demand across pools',
+  parameters: z.object({}),
+  execute: async (_params, _context): Promise<ToolResult> => {
+    const registry = getPoolRegistry();
+    const metrics = await getPoolMetrics();
+    const { rankPools } = await import('../earn/yield-analytics.js');
+    const ranked = await rankPools();
+
+    if (IS_AGENT) {
+      return {
+        success: true,
+        message: JSON.stringify({
+          action: 'earn_demand',
+          pools: ranked.map(r => ({
+            pool: r.pool.aliases[0],
+            apy: r.metrics.apy7d,
+            apr: r.metrics.apr7d,
+            tvl: r.metrics.tvl,
+            fee_share: r.pool.feeShare,
+            risk: r.risk,
+          })),
+        }),
+      };
+    }
+
+    // Higher APY relative to TVL = higher demand per dollar of liquidity
+    const lines = [
+      '',
+      `  ${theme.accentBold('LIQUIDITY DEMAND ANALYSIS')}`,
+      `  ${theme.separator(55)}`,
+      '',
+      `  ${chalk.dim('Higher APY/TVL ratio indicates stronger demand for liquidity.')}`,
+      '',
+      `  ${'Pool'.padEnd(12)} ${'APY'.padEnd(10)} ${'TVL'.padEnd(12)} ${'Fee Share'.padEnd(12)} ${'Demand'}`,
+      `  ${theme.separator(55)}`,
+    ];
+
+    for (const r of ranked) {
+      // Demand signal: APY/TVL ratio (higher = more demand per liquidity)
+      const demandRatio = r.metrics.tvl > 0 ? r.metrics.apy7d / (r.metrics.tvl / 1_000_000) : 0;
+      let demand = 'Low';
+      if (demandRatio > 100) demand = 'Very High';
+      else if (demandRatio > 30) demand = 'High';
+      else if (demandRatio > 10) demand = 'Medium';
+
+      const demandColor = demand === 'Very High' ? chalk.green(demand) :
+        demand === 'High' ? chalk.green(demand) :
+        demand === 'Medium' ? chalk.yellow(demand) : chalk.dim(demand);
+
+      lines.push(
+        `  ${chalk.cyan(r.pool.aliases[0].padEnd(12))} ${(r.metrics.apy7d.toFixed(1) + '%').padEnd(10)} ${formatUsd(r.metrics.tvl).padEnd(12)} ${((r.pool.feeShare * 100).toFixed(0) + '%').padEnd(12)} ${demandColor}`
+      );
+    }
+
+    lines.push('');
+    lines.push(chalk.dim('  Pools with high demand and high fee share = best LP opportunity.'));
+    lines.push('');
+    return { success: true, message: lines.join('\n') };
+  },
+};
+
+// ─── earn rotate ────────────────────────────────────────────────────────────
+
+export const earnRotateTool: ToolDefinition = {
+  name: 'earn_rotate',
+  description: 'Analyze and suggest liquidity rotation',
+  parameters: z.object({}),
+  execute: async (_params, context): Promise<ToolResult> => {
+    const wm = context.walletManager;
+    if (!wm || !wm.isConnected) return { success: true, message: chalk.dim('  No wallet connected.') };
+
+    const registry = getPoolRegistry();
+    const metrics = await getPoolMetrics();
+    const { rankPools } = await import('../earn/yield-analytics.js');
+    const ranked = await rankPools();
+
+    let tokenData: { sol: number; tokens: Array<{ mint: string; amount: number }> } | null = null;
+    try { tokenData = await wm.getTokenBalances(); } catch { return { success: false, message: chalk.red('  Failed to fetch balances.') }; }
+    if (!tokenData) return { success: true, message: chalk.dim('  No token data.') };
+
+    // Find current positions
+    const currentPositions: Array<{ pool: string; poolId: string; type: string; value: number; apy: number }> = [];
+    for (const token of tokenData.tokens) {
+      const resolved = resolveTokenMint(token.mint);
+      if (!resolved || token.amount < 0.001) continue;
+      const { pool, type } = resolved;
+      const m = metrics.get(pool.poolId);
+      const price = type === 'FLP' ? (m?.flpPrice ?? 0) : (m?.sflpPrice ?? 0);
+      currentPositions.push({
+        pool: pool.aliases[0],
+        poolId: pool.poolId,
+        type,
+        value: token.amount * price,
+        apy: type === 'FLP' ? (m?.apy7d ?? 0) : (m?.apr7d ?? 0),
+      });
+    }
+
+    if (currentPositions.length === 0) {
+      return { success: true, message: chalk.dim('  No active positions to rotate. Use "earn deposit" first.') };
+    }
+
+    // Find best pool by APY
+    const bestPool = ranked[0];
+
+    if (IS_AGENT) {
+      return {
+        success: true,
+        message: JSON.stringify({
+          action: 'earn_rotate',
+          current_positions: currentPositions,
+          best_pool: { pool: bestPool.pool.aliases[0], apy: bestPool.metrics.apy7d, risk: bestPool.risk },
+        }),
+      };
+    }
+
+    const lines = [
+      '',
+      `  ${theme.accentBold('LIQUIDITY ROTATION ANALYSIS')}`,
+      `  ${theme.separator(50)}`,
+      '',
+      `  ${theme.section('Current Positions')}`,
+      '',
+    ];
+
+    for (const pos of currentPositions) {
+      lines.push(`  ${chalk.cyan(pos.pool.padEnd(12))} ${pos.type.padEnd(8)} ${formatUsd(pos.value).padEnd(12)} APY: ${pos.apy.toFixed(1)}%`);
+    }
+
+    // Find rotation opportunities
+    lines.push('');
+    lines.push(`  ${theme.section('Rotation Opportunities')}`,);
+    lines.push('');
+
+    let hasOpportunity = false;
+    for (const pos of currentPositions) {
+      if (bestPool.pool.poolId !== pos.poolId && bestPool.metrics.apy7d > pos.apy * 1.2) {
+        hasOpportunity = true;
+        lines.push(`  ${chalk.yellow('→')} ${chalk.bold(pos.pool)} (${pos.apy.toFixed(1)}%) → ${chalk.green(bestPool.pool.aliases[0])} (${bestPool.metrics.apy7d.toFixed(1)}%)`);
+        lines.push(chalk.dim(`    +${(bestPool.metrics.apy7d - pos.apy).toFixed(1)}% higher yield | Risk: ${bestPool.risk}`));
+        lines.push('');
+        lines.push(chalk.dim(`    To rotate: earn withdraw 100% ${pos.pool} && earn deposit $${pos.value.toFixed(0)} ${bestPool.pool.aliases[0]}`));
+        lines.push('');
+      }
+    }
+
+    if (!hasOpportunity) {
+      lines.push(chalk.green('  Your current allocation looks optimal. No rotation needed.'));
+    }
+
+    lines.push('');
+    return { success: true, message: lines.join('\n') };
+  },
+};
+
 // ─── Export All ──────────────────────────────────────────────────────────────
 
 export const allEarnTools: ToolDefinition[] = [
@@ -645,4 +881,7 @@ export const allEarnTools: ToolDefinition[] = [
   earnBestTool,
   earnSimulateTool,
   earnDashboardTool,
+  earnPnlTool,
+  earnDemandTool,
+  earnRotateTool,
 ];

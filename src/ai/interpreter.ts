@@ -1290,9 +1290,33 @@ export function localParse(input: string): ParsedIntent | null {
       } as ParsedIntent;
     }
 
-    // "earn best" — pool ranking
+    // "earn best" — pool ranking; "earn best 500" → auto-route deposit
     if (/^earn\s+best$/.test(earnBody)) {
       return { action: ActionType.EarnBest };
+    }
+    const earnBestAmtMatch = earnBody.match(/^earn\s+best\s+\$?(\d+(?:\.\d+)?)$/);
+    if (earnBestAmtMatch) {
+      return {
+        action: ActionType.EarnAddLiquidity,
+        amount: parseFloat(earnBestAmtMatch[1]),
+        token: 'USDC',
+        pool: '__best__', // sentinel — tool resolves to top-ranked pool
+      } as ParsedIntent;
+    }
+
+    // "earn pnl" / "earn profit" / "earn performance"
+    if (/^earn\s+(?:pnl|profit|performance|returns?)$/.test(earnBody)) {
+      return { action: ActionType.EarnPnl };
+    }
+
+    // "earn demand" / "earn utilization"
+    if (/^earn\s+(?:demand|utilization|usage)$/.test(earnBody)) {
+      return { action: ActionType.EarnDemand };
+    }
+
+    // "earn rotate" / "earn optimize" / "earn rebalance"
+    if (/^earn\s+(?:rotate|optimize|rebalance)$/.test(earnBody)) {
+      return { action: ActionType.EarnRotate };
     }
 
     // "earn simulate crypto 1000", "earn sim gold 500"
