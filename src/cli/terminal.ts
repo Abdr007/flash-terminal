@@ -1502,6 +1502,48 @@ export class FlashTerminal {
       return;
     }
 
+    // ─── Template Commands ────────────────────────────────────
+    if (lower.startsWith('template ') && lower !== 'template') {
+      const match = input.match(/^template\s+(\S+)\s*=\s*(.+)$/i);
+      if (match) {
+        const { setTemplate } = await import('./trade-templates.js');
+        if (setTemplate(match[1], match[2].trim())) {
+          console.log(chalk.green(`  Template set: ${match[1]} → ${match[2].trim()}`));
+        } else {
+          console.log(chalk.red('  Too many templates (max 100).'));
+        }
+      } else {
+        console.log(chalk.dim('  Usage: template <name> = <command>'));
+        console.log(chalk.dim('  Example: template scalp = long sol 3x 50 tp 2% sl 1%'));
+      }
+      return;
+    }
+    if (lower === 'templates') {
+      const { getAllTemplates } = await import('./trade-templates.js');
+      const templates = getAllTemplates();
+      const entries = Object.entries(templates);
+      if (entries.length === 0) {
+        console.log(chalk.dim('  No templates. Use "template <name> = <command>" to create one.'));
+      } else {
+        console.log('');
+        for (const [k, v] of entries.sort()) {
+          console.log(`  ${chalk.cyan(k.padEnd(16))} → ${v}`);
+        }
+        console.log('');
+      }
+      return;
+    }
+    if (lower.startsWith('untemplate ')) {
+      const name = input.slice(11).trim();
+      const { removeTemplate } = await import('./trade-templates.js');
+      if (removeTemplate(name)) {
+        console.log(chalk.green(`  Template removed: ${name}`));
+      } else {
+        console.log(chalk.yellow(`  Template not found: ${name}`));
+      }
+      return;
+    }
+
     // ─── Alias Commands ────────────────────────────────────────
     if (lower.startsWith('alias ') && lower !== 'alias') {
       const match = input.match(/^alias\s+(\S+)\s*=\s*(.+)$/i);

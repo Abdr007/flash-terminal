@@ -6,6 +6,8 @@ import { getLogger } from '../utils/logger.js';
 import { getErrorMessage } from '../utils/retry.js';
 import { resolveMarket, normalizeAssetText } from '../utils/market-resolver.js';
 import { expandLearnedAlias } from '../cli/learned-aliases.js';
+import { expandTemplate } from '../cli/trade-templates.js';
+import { recordTradeCommand } from '../cli/trade-predictor.js';
 import {
   detectMalformedCommand,
   invalidLeverageAlert,
@@ -600,8 +602,10 @@ export function validateIntent(intent: ParsedIntent): CommandAlert | null {
 export function localParse(input: string): ParsedIntent | null {
   // Sanitize: collapse whitespace (tabs, newlines, etc.) to single spaces, strip control chars
   const sanitized = input.replace(/[\x00-\x1f\x7f]/g, ' ').replace(/\s+/g, ' ').trim();
-  // Expand learned user aliases first (e.g. "lsol" → "long sol")
-  const userExpanded = expandLearnedAlias(sanitized);
+  // Expand trade templates first (e.g. "scalp" → "long sol 3x 50")
+  const templateExpanded = expandTemplate(sanitized) ?? sanitized;
+  // Expand learned user aliases (e.g. "lsol" → "long sol")
+  const userExpanded = expandLearnedAlias(templateExpanded);
   // Expand command aliases: "o" → "open", "c" → "close", etc.
   const aliased = expandAliases(userExpanded);
   // Pre-process: normalize number words and asset aliases
@@ -1287,6 +1291,18 @@ export class AIInterpreter {
     if ('collateral' in intent) this.context.lastCollateral = intent.collateral as number;
     this.context.lastAction = intent.action;
     this.context.updatedAt = now;
+
+    // Record trade commands for predictive suggestions (fire-and-forget)
+    if (intent.action === ActionType.OpenPosition && intent.market) {
+      try {
+        const side = ('side' in intent ? intent.side : 'long') as string;
+        const lev = ('leverage' in intent ? intent.leverage : 2) as number;
+        const coll = ('collateral' in intent ? intent.collateral : 0) as number;
+        if (coll > 0) {
+          recordTradeCommand(`${side} ${(intent.market as string).toLowerCase()} ${lev}x ${coll}`);
+        }
+      } catch { /* non-critical */ }
+    }
   }
 
   /** Get fresh context (returns undefined if expired). */
