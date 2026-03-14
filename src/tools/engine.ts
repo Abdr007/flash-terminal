@@ -373,6 +373,12 @@ export class ToolEngine {
       case ActionType.EarnStatus:
         return { toolName: 'earn_status', params: {} };
 
+      case ActionType.EarnInfo:
+        return { toolName: 'earn_info', params: { pool: intent.pool } };
+
+      case ActionType.EarnPositions:
+        return { toolName: 'earn_positions', params: {} };
+
       case ActionType.EngineStatus:
         return { toolName: 'engine_status', params: {} };
 

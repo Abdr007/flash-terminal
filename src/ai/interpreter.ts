@@ -1153,15 +1153,23 @@ export function localParse(input: string): ParsedIntent | null {
 
   const EARN_POOL_ALIASES: Record<string, string> = {
     crypto: 'Crypto.1',
+    main: 'Crypto.1',
+    bluechip: 'Crypto.1',
+    gold: 'Virtual.1',
+    xau: 'Virtual.1',
     virtual: 'Virtual.1',
+    forex: 'Virtual.1',
+    commodities: 'Virtual.1',
+    defi: 'Governance.1',
     governance: 'Governance.1',
     gov: 'Governance.1',
+    meme: 'Community.1',
     community: 'Community.1',
-    meme: 'Community.2',
+    wif: 'Community.2',
+    fart: 'Trump.1',
+    fartcoin: 'Trump.1',
     trump: 'Trump.1',
     ore: 'Ore.1',
-    ondo: 'Ondo.1',
-    stocks: 'Ondo.1',
   };
 
   /** Resolve a pool alias to protocol pool name. Also accepts pool:Name for backward compat. */
@@ -1245,6 +1253,51 @@ export function localParse(input: string): ParsedIntent | null {
     // "earn claim", "earn claim crypto", "earn claim governance"
     if (/^earn\s+claim(?:[- ]?rewards?)?$/.test(earnBody)) {
       return { action: ActionType.EarnClaimRewards, pool: earnPool } as ParsedIntent;
+    }
+
+    // "earn info crypto", "earn info gold"
+    const earnInfoMatch = earnBody.match(
+      /^earn\s+info(?:\s+(.+))?$/
+    );
+    if (earnInfoMatch) {
+      const pool = earnInfoMatch[1] ? resolveEarnPool(earnInfoMatch[1]) ?? earnInfoMatch[1] : undefined;
+      return { action: ActionType.EarnInfo, pool } as ParsedIntent;
+    }
+
+    // "earn deposit $100 crypto", "earn deposit 50 gold"
+    const earnDepositMatch = earnBody.match(
+      /^earn\s+deposit\s+\$?(\d+(?:\.\d+)?)$/
+    );
+    if (earnDepositMatch) {
+      return {
+        action: ActionType.EarnAddLiquidity,
+        amount: parseFloat(earnDepositMatch[1]),
+        token: 'USDC',
+        pool: earnPool ?? EARN_POOL_ALIASES['crypto'],
+      } as ParsedIntent;
+    }
+
+    // "earn withdraw 50% crypto", "earn withdraw 100% gold"
+    const earnWithdrawMatch = earnBody.match(
+      /^earn\s+withdraw\s+(\d+(?:\.\d+)?)\s*%?$/
+    );
+    if (earnWithdrawMatch) {
+      return {
+        action: ActionType.EarnRemoveLiquidity,
+        percent: parseFloat(earnWithdrawMatch[1]),
+        token: 'USDC',
+        pool: earnPool ?? EARN_POOL_ALIASES['crypto'],
+      } as ParsedIntent;
+    }
+
+    // "earn positions", "earn pos"
+    if (/^earn\s+(?:positions?|pos)$/.test(earnBody)) {
+      return { action: ActionType.EarnPositions };
+    }
+
+    // "earn pools" — same as earn status
+    if (/^earn\s+pools?$/.test(earnBody)) {
+      return { action: ActionType.EarnStatus };
     }
 
     // "earn status" or bare "earn"

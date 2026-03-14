@@ -112,6 +112,8 @@ export enum ActionType {
   EarnUnstake = 'earn_unstake',
   EarnClaimRewards = 'earn_claim_rewards',
   EarnStatus = 'earn_status',
+  EarnInfo = 'earn_info',
+  EarnPositions = 'earn_positions',
   EngineStatus = 'engine_status',
   EngineBenchmark = 'engine_benchmark',
 }
@@ -462,6 +464,15 @@ export const EarnStatusSchema = z.object({
   action: z.literal(ActionType.EarnStatus),
 });
 
+export const EarnInfoSchema = z.object({
+  action: z.literal(ActionType.EarnInfo),
+  pool: z.string().max(30).optional(),
+});
+
+export const EarnPositionsSchema = z.object({
+  action: z.literal(ActionType.EarnPositions),
+});
+
 export const EngineStatusSchema = z.object({
   action: z.literal(ActionType.EngineStatus),
 });
@@ -537,6 +548,8 @@ export const ParsedIntentSchema = z.discriminatedUnion('action', [
   EarnUnstakeSchema,
   EarnClaimRewardsSchema,
   EarnStatusSchema,
+  EarnInfoSchema,
+  EarnPositionsSchema,
   EngineStatusSchema,
   EngineBenchmarkSchema,
 ]);

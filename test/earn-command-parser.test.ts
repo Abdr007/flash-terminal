@@ -58,23 +58,13 @@ describe('earn add (natural language)', () => {
     expect(r.pool).toBe('Virtual.1');
   });
 
-  it('"earn add $100 meme" → Community.2', () => {
+  it('"earn add $100 meme" → Community.1', () => {
     const r = localParse('earn add $100 meme') as any;
     expect(r.action).toBe(ActionType.EarnAddLiquidity);
-    expect(r.pool).toBe('Community.2');
+    expect(r.pool).toBe('Community.1');
   });
 
-  it('"earn add $100 ondo" → Ondo.1', () => {
-    const r = localParse('earn add $100 ondo') as any;
-    expect(r.action).toBe(ActionType.EarnAddLiquidity);
-    expect(r.pool).toBe('Ondo.1');
-  });
-
-  it('"earn add $100 stocks" → Ondo.1 (alias)', () => {
-    const r = localParse('earn add $100 stocks') as any;
-    expect(r.action).toBe(ActionType.EarnAddLiquidity);
-    expect(r.pool).toBe('Ondo.1');
-  });
+  // RWA/Ondo pool excluded — tests removed
 
   it('"earn add $100" defaults to Crypto.1', () => {
     const r = localParse('earn add $100') as any;
