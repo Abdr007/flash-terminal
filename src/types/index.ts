@@ -1087,6 +1087,7 @@ export interface FlashConfig {
   maxLeverage: number;
   maxTradesPerMinute: number;
   minDelayBetweenTradesMs: number;
+  defaultLeverage: number;
   /** Disable plugin loading (--no-plugins flag) */
   noPlugins?: boolean;
 }

@@ -95,31 +95,78 @@ function validateRpcUrl(url: string): string {
   return url;
 }
 
+// ─── Config File Support (~/.flash/config.json) ──────────────────────────────
+// Priority: CLI flags > environment variables > config.json > defaults
+
+interface ConfigFileData {
+  rpc_url?: string;
+  backup_rpc_urls?: string[];
+  default_pool?: string;
+  network?: string;
+  default_slippage_bps?: number;
+  compute_unit_limit?: number;
+  compute_unit_price?: number;
+  default_leverage?: number;
+  max_collateral_per_trade?: number;
+  max_position_size?: number;
+  max_leverage?: number;
+  max_trades_per_minute?: number;
+  min_delay_between_trades_ms?: number;
+  log_level?: string;
+}
+
+function loadConfigFile(): ConfigFileData {
+  try {
+    const configPath = resolve(homedir(), '.flash', 'config.json');
+    if (!existsSync(configPath)) return {};
+    const raw = readFileSync(configPath, 'utf8');
+    const data = JSON.parse(raw);
+    if (typeof data !== 'object' || data === null || Array.isArray(data)) return {};
+    return data as ConfigFileData;
+  } catch {
+    return {};
+  }
+}
+
 export function loadConfig(): FlashConfig {
+  const file = loadConfigFile();
+
   const backupRpcUrls: string[] = [];
   if (process.env.BACKUP_RPC_1) backupRpcUrls.push(validateRpcUrl(process.env.BACKUP_RPC_1));
   if (process.env.BACKUP_RPC_2) backupRpcUrls.push(validateRpcUrl(process.env.BACKUP_RPC_2));
+  if (backupRpcUrls.length === 0 && Array.isArray(file.backup_rpc_urls)) {
+    for (const url of file.backup_rpc_urls) {
+      if (typeof url === 'string' && url.length > 0) {
+        backupRpcUrls.push(validateRpcUrl(url));
+      }
+    }
+  }
+
+  const rpcDefault = typeof file.rpc_url === 'string' && file.rpc_url.length > 0
+    ? validateRpcUrl(file.rpc_url)
+    : 'https://api.mainnet-beta.solana.com';
 
   return {
-    rpcUrl: validateRpcUrl(process.env.RPC_URL || 'https://api.mainnet-beta.solana.com'),
+    rpcUrl: validateRpcUrl(process.env.RPC_URL || rpcDefault),
     backupRpcUrls,
     pythnetUrl: process.env.PYTHNET_URL || 'https://pythnet.rpcpool.com',
     walletPath: resolveHome(process.env.WALLET_PATH || '~/.config/solana/id.json'),
     anthropicApiKey: process.env.ANTHROPIC_API_KEY || '',
     groqApiKey: process.env.GROQ_API_KEY || '',
-    defaultPool: process.env.DEFAULT_POOL || 'Crypto.1',
-    network: parseNetwork(process.env.NETWORK),
+    defaultPool: process.env.DEFAULT_POOL || (typeof file.default_pool === 'string' ? file.default_pool : 'Crypto.1'),
+    network: parseNetwork(process.env.NETWORK || (typeof file.network === 'string' ? file.network : undefined)),
     simulationMode: (process.env.SIMULATION_MODE ?? 'true').toLowerCase() !== 'false',
-    defaultSlippageBps: parseIntSafe(process.env.DEFAULT_SLIPPAGE_BPS, 150),
-    computeUnitLimit: parseIntSafe(process.env.COMPUTE_UNIT_LIMIT, 420000),
-    computeUnitPrice: parseIntSafe(process.env.COMPUTE_UNIT_PRICE, 100000),
+    defaultSlippageBps: parseIntSafe(process.env.DEFAULT_SLIPPAGE_BPS, typeof file.default_slippage_bps === 'number' ? file.default_slippage_bps : 150),
+    computeUnitLimit: parseIntSafe(process.env.COMPUTE_UNIT_LIMIT, typeof file.compute_unit_limit === 'number' ? file.compute_unit_limit : 420000),
+    computeUnitPrice: parseIntSafe(process.env.COMPUTE_UNIT_PRICE, typeof file.compute_unit_price === 'number' ? file.compute_unit_price : 100000),
     logFile: process.env.LOG_FILE || null,
     // Signing guard limits (0 = unlimited / use market defaults)
-    maxCollateralPerTrade: parseIntSafe(process.env.MAX_COLLATERAL_PER_TRADE, 0),
-    maxPositionSize: parseIntSafe(process.env.MAX_POSITION_SIZE, 0),
-    maxLeverage: parseIntSafe(process.env.MAX_LEVERAGE, 0),
-    maxTradesPerMinute: parseIntSafe(process.env.MAX_TRADES_PER_MINUTE, 10),
-    minDelayBetweenTradesMs: parseIntSafe(process.env.MIN_DELAY_BETWEEN_TRADES_MS, 3000),
+    maxCollateralPerTrade: parseIntSafe(process.env.MAX_COLLATERAL_PER_TRADE, typeof file.max_collateral_per_trade === 'number' ? file.max_collateral_per_trade : 0),
+    maxPositionSize: parseIntSafe(process.env.MAX_POSITION_SIZE, typeof file.max_position_size === 'number' ? file.max_position_size : 0),
+    maxLeverage: parseIntSafe(process.env.MAX_LEVERAGE, typeof file.max_leverage === 'number' ? file.max_leverage : 0),
+    maxTradesPerMinute: parseIntSafe(process.env.MAX_TRADES_PER_MINUTE, typeof file.max_trades_per_minute === 'number' ? file.max_trades_per_minute : 10),
+    minDelayBetweenTradesMs: parseIntSafe(process.env.MIN_DELAY_BETWEEN_TRADES_MS, typeof file.min_delay_between_trades_ms === 'number' ? file.min_delay_between_trades_ms : 3000),
+    defaultLeverage: parseIntSafe(process.env.DEFAULT_LEVERAGE, typeof file.default_leverage === 'number' ? file.default_leverage : 2),
   };
 }
 

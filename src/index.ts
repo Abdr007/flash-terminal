@@ -186,33 +186,23 @@ program
   .description('Check system environment and connectivity')
   .action(async () => {
     const config = loadConfig();
+    const { agentOutput } = await import('./no-dna.js');
 
-    console.log('');
-    console.log(chalk.bold('  FLASH TERMINAL DIAGNOSTICS'));
-    console.log(chalk.yellow('  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'));
-    console.log('');
-
-    const label = (name: string) => `  ${name.padEnd(23)}`;
-    const ok = (msg: string) => chalk.green(`✓ ${msg}`);
-    const warn = (msg: string) => chalk.yellow(`⚠ ${msg}`);
-    const fail = (msg: string) => chalk.red(`✗ ${msg}`);
-
-    let allOk = true;
+    type CheckResult = { name: string; status: 'ok' | 'warn' | 'fail'; detail: string };
+    const checks: CheckResult[] = [];
 
     // 1. Node.js version
     const nodeVersion = process.versions.node;
     const major = parseInt(nodeVersion.split('.')[0], 10);
-    if (major >= 18) {
-      console.log(label('Node.js version') + ok(`v${nodeVersion}`));
-    } else {
-      console.log(label('Node.js version') + fail(`v${nodeVersion} (requires >= 18)`));
-      allOk = false;
-    }
+    checks.push({
+      name: 'node_version',
+      status: major >= 18 ? 'ok' : 'fail',
+      detail: `v${nodeVersion}`,
+    });
 
     // 2. RPC connection
     if (!config.rpcUrl) {
-      console.log(label('RPC connection') + fail('RPC_URL not configured'));
-      allOk = false;
+      checks.push({ name: 'rpc', status: 'fail', detail: 'RPC_URL not configured' });
     } else {
       try {
         const res = await fetch(config.rpcUrl, {
@@ -222,14 +212,13 @@ program
           signal: AbortSignal.timeout(5000),
         });
         const data = await res.json() as { result?: string };
-        if (data.result === 'ok') {
-          console.log(label('RPC connection') + ok('Connected'));
-        } else {
-          console.log(label('RPC connection') + warn('Reachable but unhealthy'));
-        }
+        checks.push({
+          name: 'rpc',
+          status: data.result === 'ok' ? 'ok' : 'warn',
+          detail: data.result === 'ok' ? 'Connected' : 'Reachable but unhealthy',
+        });
       } catch {
-        console.log(label('RPC connection') + fail('Unreachable'));
-        allOk = false;
+        checks.push({ name: 'rpc', status: 'fail', detail: 'Unreachable' });
       }
     }
 
@@ -239,14 +228,13 @@ program
       const ps = new PriceService();
       const prices = await ps.getPrices(['SOL']);
       const solPrice = prices.get('SOL');
-      if (solPrice && solPrice.price > 0) {
-        console.log(label('Market data') + ok('Live data available'));
-      } else {
-        console.log(label('Market data') + warn('No price data returned'));
-      }
+      checks.push({
+        name: 'market_data',
+        status: solPrice && solPrice.price > 0 ? 'ok' : 'warn',
+        detail: solPrice && solPrice.price > 0 ? 'Live data available' : 'No price data returned',
+      });
     } catch {
-      console.log(label('Market data') + fail('Unable to fetch prices'));
-      allOk = false;
+      checks.push({ name: 'market_data', status: 'fail', detail: 'Unable to fetch prices' });
     }
 
     // 4. fstats.io connectivity
@@ -254,28 +242,25 @@ program
       const { FStatsClient } = await import('./data/fstats.js');
       const fstats = new FStatsClient();
       const stats = await fstats.getOverviewStats();
-      if (stats.trades > 0) {
-        console.log(label('Flash Trade data') + ok('Connected'));
-      } else {
-        console.log(label('Flash Trade data') + warn('No data returned'));
-      }
+      checks.push({
+        name: 'flash_trade_data',
+        status: stats.trades > 0 ? 'ok' : 'warn',
+        detail: stats.trades > 0 ? 'Connected' : 'No data returned',
+      });
     } catch {
-      console.log(label('Flash Trade data') + fail('Unable to reach fstats.io'));
-      allOk = false;
+      checks.push({ name: 'flash_trade_data', status: 'fail', detail: 'Unable to reach fstats.io' });
     }
 
     // 5. AI provider
     const hasPrimaryAi = !!config.anthropicApiKey && config.anthropicApiKey !== 'sk-ant-...';
     const hasGroq = !!config.groqApiKey;
-    if (hasPrimaryAi && hasGroq) {
-      console.log(label('AI provider') + ok('Primary + Groq'));
-    } else if (hasPrimaryAi) {
-      console.log(label('AI provider') + ok('Primary'));
-    } else if (hasGroq) {
-      console.log(label('AI provider') + ok('Groq'));
-    } else {
-      console.log(label('AI provider') + warn('None (local parsing only)'));
-    }
+    const aiDetail = hasPrimaryAi && hasGroq ? 'Primary + Groq'
+      : hasPrimaryAi ? 'Primary' : hasGroq ? 'Groq' : 'None (local parsing only)';
+    checks.push({
+      name: 'ai_provider',
+      status: hasPrimaryAi || hasGroq ? 'ok' : 'warn',
+      detail: aiDetail,
+    });
 
     // 6. Wallet
     try {
@@ -283,18 +268,53 @@ program
       const store = new WalletStore();
       const wallets = store.listWallets();
       const defaultWallet = store.getDefault();
-      if (defaultWallet) {
-        console.log(label('Wallet') + ok(`Default: ${defaultWallet}`));
-      } else if (wallets.length > 0) {
-        console.log(label('Wallet') + warn(`${wallets.length} saved, none set as default`));
-      } else {
-        console.log(label('Wallet') + warn('Not configured'));
-      }
+      checks.push({
+        name: 'wallet',
+        status: defaultWallet ? 'ok' : wallets.length > 0 ? 'warn' : 'warn',
+        detail: defaultWallet ? `Default: ${defaultWallet}`
+          : wallets.length > 0 ? `${wallets.length} saved, none set as default` : 'Not configured',
+      });
     } catch {
-      console.log(label('Wallet') + warn('Not configured'));
+      checks.push({ name: 'wallet', status: 'warn', detail: 'Not configured' });
     }
 
-    // Summary
+    const allOk = checks.every(c => c.status !== 'fail');
+
+    // Agent mode: structured JSON
+    if (IS_AGENT) {
+      agentOutput({
+        action: 'doctor',
+        healthy: allOk,
+        checks: checks.map(c => ({ name: c.name, status: c.status, detail: c.detail })),
+      });
+      return;
+    }
+
+    // Human mode: formatted output
+    const label = (name: string) => `  ${name.padEnd(23)}`;
+    const ok = (msg: string) => chalk.green(`✓ ${msg}`);
+    const warn = (msg: string) => chalk.yellow(`⚠ ${msg}`);
+    const fail = (msg: string) => chalk.red(`✗ ${msg}`);
+    const statusFn = { ok, warn, fail };
+
+    console.log('');
+    console.log(chalk.bold('  FLASH TERMINAL DIAGNOSTICS'));
+    console.log(chalk.yellow('  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'));
+    console.log('');
+
+    const nameMap: Record<string, string> = {
+      node_version: 'Node.js version',
+      rpc: 'RPC connection',
+      market_data: 'Market data',
+      flash_trade_data: 'Flash Trade data',
+      ai_provider: 'AI provider',
+      wallet: 'Wallet',
+    };
+
+    for (const check of checks) {
+      console.log(label(nameMap[check.name] ?? check.name) + statusFn[check.status](check.detail));
+    }
+
     console.log('');
     if (allOk) {
       console.log(chalk.green('  Environment ready.'));
@@ -302,6 +322,114 @@ program
       console.log(chalk.yellow('  Some checks failed. Review the issues above.'));
     }
     console.log('');
+  });
+
+// ─── Non-Interactive Trade Commands ──────────────────────────────────────────
+// These allow direct CLI usage: `flash price sol`, `flash positions`, etc.
+// Designed for automation, scripting, and agent integration.
+
+program
+  .command('price <market>')
+  .description('Get current price for a market')
+  .action(async (market: string) => {
+    const { PriceService } = await import('./data/prices.js');
+    const { agentOutput } = await import('./no-dna.js');
+    const { formatPrice, colorPercent } = await import('./utils/format.js');
+    const priceSvc = new PriceService();
+    const symbol = market.toUpperCase();
+
+    try {
+      const prices = await priceSvc.getPrices([symbol]);
+      const p = prices.get(symbol);
+      if (!p) {
+        if (IS_AGENT) {
+          agentError('market_not_found', { market: symbol });
+        } else {
+          console.error(chalk.red(`  Market not found: ${symbol}`));
+        }
+        process.exit(1);
+      }
+
+      if (IS_AGENT) {
+        agentOutput({
+          action: 'price',
+          market: symbol,
+          price: p.price,
+          change_24h_pct: p.priceChange24h,
+          source: p.isFallback ? 'fallback' : 'live',
+        });
+      } else {
+        console.log(`\n  ${chalk.bold(symbol)}  ${formatPrice(p.price)}  ${colorPercent(p.priceChange24h)}\n`);
+      }
+    } catch (error: unknown) {
+      if (IS_AGENT) {
+        agentError('price_failed', { market: symbol, detail: getErrorMessage(error) });
+      } else {
+        console.error(chalk.red(`  Error: ${getErrorMessage(error)}`));
+      }
+      process.exit(1);
+    }
+  });
+
+program
+  .command('completion <shell>')
+  .description('Generate shell completion script (bash, zsh, fish)')
+  .action(async (shell: string) => {
+    try {
+      const { generateBashCompletion, generateZshCompletion, generateFishCompletion } = await import('./cli/shell-completion.js');
+      switch (shell.toLowerCase()) {
+        case 'bash':
+          process.stdout.write(generateBashCompletion());
+          break;
+        case 'zsh':
+          process.stdout.write(generateZshCompletion());
+          break;
+        case 'fish':
+          process.stdout.write(generateFishCompletion());
+          break;
+        default:
+          if (IS_AGENT) {
+            agentError('invalid_shell', { shell, supported: ['bash', 'zsh', 'fish'] });
+          } else {
+            console.error(chalk.red(`  Unsupported shell: ${shell}. Use bash, zsh, or fish.`));
+          }
+          process.exit(1);
+      }
+    } catch (error: unknown) {
+      if (IS_AGENT) {
+        agentError('completion_failed', { detail: getErrorMessage(error) });
+      } else {
+        console.error(chalk.red(`  Error generating completion: ${getErrorMessage(error)}`));
+      }
+      process.exit(1);
+    }
+  });
+
+program
+  .command('help-cmd [command]')
+  .description('Show detailed help for a command')
+  .action(async (command?: string) => {
+    if (!command) {
+      // Show general help
+      program.outputHelp();
+      return;
+    }
+    try {
+      const { getCommandHelp } = await import('./cli/command-help.js');
+      const help = getCommandHelp(command);
+      if (help) {
+        console.log(help);
+      } else {
+        if (IS_AGENT) {
+          agentError('unknown_command', { command });
+        } else {
+          console.error(chalk.yellow(`  No help found for: ${command}`));
+          console.log(chalk.dim('  Run "flash help-cmd" for a list of available commands.'));
+        }
+      }
+    } catch (error: unknown) {
+      console.error(chalk.red(`  Error: ${getErrorMessage(error)}`));
+    }
   });
 
 program.parse();

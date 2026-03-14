@@ -193,6 +193,18 @@ export class Logger {
   }
 }
 
+/** Parse FLASH_LOG_LEVEL env var to LogLevel. */
+export function parseLogLevel(value: string | undefined): LogLevel | undefined {
+  if (!value) return undefined;
+  const map: Record<string, LogLevel> = {
+    debug: LogLevel.Debug,
+    info: LogLevel.Info,
+    warn: LogLevel.Warn,
+    error: LogLevel.Error,
+  };
+  return map[value.toLowerCase()];
+}
+
 // Singleton logger instance
 let _logger: Logger | null = null;
 
@@ -201,13 +213,17 @@ export function initLogger(opts?: {
   logFile?: string;
   showInCli?: boolean;
 }): Logger {
-  _logger = new Logger(opts);
+  // FLASH_LOG_LEVEL env var — overrides default level unless explicitly provided
+  const envLevel = parseLogLevel(process.env.FLASH_LOG_LEVEL);
+  const level = opts?.level ?? envLevel ?? LogLevel.Info;
+  _logger = new Logger({ ...opts, level });
   return _logger;
 }
 
 export function getLogger(): Logger {
   if (!_logger) {
-    _logger = new Logger();
+    const envLevel = parseLogLevel(process.env.FLASH_LOG_LEVEL);
+    _logger = new Logger({ level: envLevel ?? LogLevel.Info });
   }
   return _logger;
 }

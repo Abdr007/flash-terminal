@@ -1542,6 +1542,21 @@ export class FlashTerminal {
       return;
     }
 
+    // Per-command help: `help <command>` or `help long`, `help positions`, etc.
+    if (lower.startsWith('help ') && lower !== 'help') {
+      const cmdName = input.slice(5).trim();
+      try {
+        const { getCommandHelp } = await import('./command-help.js');
+        const helpText = getCommandHelp(cmdName);
+        if (helpText) {
+          console.log(helpText);
+          return;
+        }
+      } catch {
+        // command-help module not available — fall through to normal dispatch
+      }
+    }
+
     // Fast dispatch for single-token commands
     let intent: ParsedIntent;
     const fastIntent = FAST_DISPATCH[lower];
