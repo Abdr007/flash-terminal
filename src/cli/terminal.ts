@@ -329,6 +329,12 @@ export class FlashTerminal {
     // Initialize system diagnostics
     initSystemDiagnostics(this.rpcManager, this.context);
 
+    // Provide RPC connection to earn pool data for TVL/APY calculations
+    try {
+      const { setPoolDataConnection } = await import('../earn/pool-data.js');
+      setPoolDataConnection(connection);
+    } catch { /* non-critical */ }
+
     // TP/SL and limit orders are now on-chain via Flash SDK.
     // No local engine initialization needed — orders are managed via
     // placeTriggerOrder/placeLimitOrder SDK methods in flash-client.ts.

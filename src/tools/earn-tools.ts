@@ -63,18 +63,18 @@ export const earnPoolsTool: ToolDefinition = {
       '',
       `  ${theme.accentBold('FLASH LIQUIDITY POOLS')}`,
       '',
-      `  ${'Pool'.padEnd(12)} ${'FLP Price'.padEnd(12)} ${'sFLP Price'.padEnd(12)} ${'Volume'.padEnd(12)} ${'Fee %'.padEnd(8)} Assets`,
-      `  ${theme.separator(68)}`,
+      `  ${'Pool'.padEnd(12)} ${'TVL'.padEnd(10)} ${'APY'.padEnd(10)} ${'FLP'.padEnd(10)} ${'sFLP'.padEnd(10)} Assets`,
+      `  ${theme.separator(62)}`,
     ];
 
     for (const pool of registry) {
       const m = metrics.get(pool.poolId);
+      const tvl = m?.tvl ? (m.tvl >= 1e6 ? `$${(m.tvl/1e6).toFixed(1)}M` : `$${(m.tvl/1e3).toFixed(0)}K`) : '-';
+      const apy = m?.apy7d ? chalk.green(`${m.apy7d.toFixed(1)}%`) : '-';
       const flp = m?.flpPrice ? `$${m.flpPrice.toFixed(3)}` : '-';
       const sflp = m?.sflpPrice ? `$${m.sflpPrice.toFixed(3)}` : '-';
-      const vol = m?.totalVolume ? formatUsd(m.totalVolume) : '-';
-      const fee = `${(pool.feeShare * 100).toFixed(0)}%`;
       const assets = pool.assets.slice(0, 3).join(' ');
-      lines.push(`  ${chalk.cyan(pool.aliases[0].padEnd(12))} ${chalk.green(flp.padEnd(12))} ${sflp.padEnd(12)} ${vol.padEnd(12)} ${fee.padEnd(8)} ${chalk.dim(assets)}`);
+      lines.push(`  ${chalk.cyan(pool.aliases[0].padEnd(12))} ${tvl.padEnd(10)} ${apy.padEnd(10)} ${flp.padEnd(10)} ${sflp.padEnd(10)} ${chalk.dim(assets)}`);
     }
 
     lines.push('');
@@ -143,6 +143,9 @@ export const earnInfoTool: ToolDefinition = {
     ];
 
     if (m) {
+      if (m.tvl > 0) lines.push(theme.pair('TVL', formatUsd(m.tvl)));
+      if (m.apy7d > 0) lines.push(theme.pair('7D APY (FLP)', chalk.green(`${m.apy7d.toFixed(2)}%`)));
+      if (m.apr7d > 0) lines.push(theme.pair('7D APR (sFLP)', chalk.green(`${m.apr7d.toFixed(2)}%`)));
       if (m.totalVolume > 0) lines.push(theme.pair('Total Volume', formatUsd(m.totalVolume)));
       if (m.totalFees > 0) lines.push(theme.pair('Total Fees', formatUsd(m.totalFees)));
       if (m.totalTrades > 0) lines.push(theme.pair('Total Trades', m.totalTrades.toLocaleString()));
