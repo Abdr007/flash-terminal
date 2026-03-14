@@ -216,6 +216,72 @@ function parseLimitOrder(input: string): ParsedIntent | null {
   } as ParsedIntent;
 }
 
+/** Levenshtein edit distance (max 3 for performance). */
+function editDistance(a: string, b: string): number {
+  if (a === b) return 0;
+  if (a.length === 0) return b.length;
+  if (b.length === 0) return a.length;
+  if (Math.abs(a.length - b.length) > 3) return 4; // early exit
+  const matrix: number[][] = [];
+  for (let i = 0; i <= a.length; i++) matrix[i] = [i];
+  for (let j = 0; j <= b.length; j++) matrix[0][j] = j;
+  for (let i = 1; i <= a.length; i++) {
+    for (let j = 1; j <= b.length; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      matrix[i][j] = Math.min(matrix[i - 1][j] + 1, matrix[i][j - 1] + 1, matrix[i - 1][j - 1] + cost);
+    }
+  }
+  return matrix[a.length][b.length];
+}
+
+/** Fuzzy-correct side keywords: "lon" → "long", "lng" → "long", "shor" → "short". */
+function fuzzySide(token: string): string | null {
+  if (token === 'long' || token === 'short') return token;
+  const sides = ['long', 'short'];
+  for (const s of sides) {
+    if (editDistance(token, s) <= 2) return s;
+  }
+  return null;
+}
+
+/** Fuzzy-correct market names: "solan" → "sol", "bitcoi" → "btc", "etherum" → "eth". */
+function fuzzyMarket(token: string): string | null {
+  // Direct resolution first
+  const direct = resolveMarket(token);
+  if (getAllMarkets().includes(direct)) return direct;
+  // Try fuzzy against all known markets (distance 1 for short symbols, 2 for longer)
+  const all = getAllMarkets();
+  for (const m of all) {
+    const maxDist = m.length <= 3 ? 1 : 2;
+    if (editDistance(token, m.toLowerCase()) <= maxDist) return m;
+  }
+  // Try against asset aliases (longer names → distance 2 allowed)
+  const aliasKeys = Object.keys(ASSET_ALIASES);
+  for (const alias of aliasKeys) {
+    if (editDistance(token, alias) <= 2) return ASSET_ALIASES[alias];
+  }
+  return null;
+}
+
+/**
+ * Pre-process input with fuzzy correction on each token.
+ * Corrects typos in side keywords and market names.
+ */
+function fuzzyCorrectTokens(input: string): string {
+  const tokens = input.split(/\s+/);
+  return tokens.map(t => {
+    // Try fuzzy side correction
+    const correctedSide = fuzzySide(t);
+    if (correctedSide && t !== correctedSide) return correctedSide;
+    // Try fuzzy market correction (only for alphabetic tokens, not numbers)
+    if (/^[a-z]+$/.test(t) && t.length >= 3) {
+      const correctedMarket = fuzzyMarket(t);
+      if (correctedMarket) return correctedMarket.toLowerCase();
+    }
+    return t;
+  }).join(' ');
+}
+
 /**
  * Flexible open position parser — extracts entities regardless of word order.
  *
@@ -240,10 +306,14 @@ function flexParseOpen(input: string): ParsedIntent | null {
 
   let body = mainPart;
 
-  // Strip prefix verbs
+  // Strip greeting/filler prefixes and verbs
+  body = body.replace(/^(?:yo|hey|please|pls|ok|okay|i\s+want\s+to|let\s+me|can\s+you|go|just)\s+/, '');
   body = body.replace(/^(?:open|buy|enter)\s+(?:a\s+)?/, '');
-  // Strip filler words
-  body = body.replace(/\b(?:with|for|on|position|collateral|of|dollars?|usd|usdc)\b/g, ' ');
+  body = body.replace(/^(?:a|an|the)\s+/, '');
+  // Strip filler words (aggressive — keeps only meaningful tokens)
+  body = body.replace(/\b(?:with|for|on|at|to|in|of|using|and|the|a|an|my|position|collateral|dollars?|bucks?|usd|usdc)\b/g, ' ');
+  // "leverage two" / "leverage 2" → "2x"
+  body = body.replace(/\bleverage\s+(\d+(?:\.\d+)?)\b/g, '$1x');
   body = body.replace(/\s+/g, ' ').trim();
 
   // Extract side: long/short
@@ -299,12 +369,20 @@ function flexParseOpen(input: string): ParsedIntent | null {
   body = body.replace(/\b(?:the|a|an|my|with|for|on)\b/g, '').replace(/\s+/g, ' ').trim();
   if (!body) return null;
 
-  const market = resolveMarket(body);
-  if (!market || !getAllMarkets().includes(market)) return null;
+  // Resolve market — try direct first, then fuzzy correction for typos
+  let market = resolveMarket(body);
+  if (!getAllMarkets().includes(market)) {
+    const fuzzyResult = fuzzyMarket(body);
+    if (fuzzyResult) {
+      market = fuzzyResult;
+    } else {
+      return null;
+    }
+  }
 
   if (!collateral || !Number.isFinite(collateral) || collateral <= 0) return null;
-  // If no leverage was explicitly marked with 'x', it may still be missing
-  if (!leverage) return null;
+  // If no leverage found, use default (2x) — allows "long sol 10" to work
+  if (!leverage) leverage = 2;
   if (!Number.isFinite(leverage) || leverage < 1) return null;
 
   const result: Record<string, unknown> = {
@@ -521,7 +599,10 @@ export function localParse(input: string): ParsedIntent | null {
   const aliased = expandAliases(sanitized);
   // Pre-process: normalize number words and asset aliases
   const normalized = normalizeAssetAliases(normalizeNumberWords(aliased));
-  const lower = normalized.toLowerCase();
+  let lower = normalized.toLowerCase();
+
+  // Fuzzy correction is applied later in the flex parser section only,
+  // to avoid interfering with deterministic regex patterns above.
 
   // Help
   if (/^(help|commands|\?)$/.test(lower)) {
@@ -630,25 +711,36 @@ export function localParse(input: string): ParsedIntent | null {
 
   // ─── Flexible Open Position Parser ────────────────────────────────────────
   // Extracts entities (side, market, leverage, collateral) from ANY position
-  // in the input. Supports all natural orderings:
-  //   open 2x long sol $10       long sol 2x 10        buy sol 2x 10
-  //   sol long 2x 10             long 10 sol 2x        open sol long $10 2x
-  //   short btc 3x 50            open long sol with 20 dollars collateral
-  //   long 2x sol 10             short 3x btc 50       buy sol 10 dollars 2x
+  // in the input. Supports all natural orderings and tolerates typos.
   {
-    // Trigger flexParseOpen if input looks like a trade command:
-    // - starts with open/enter/long/short AND has numbers, OR
-    // - starts with a market name followed by long/short
     const hasSide = /\b(long|short)\b/.test(lower);
     const hasNumbers = /\d/.test(lower);
-    const openPrefixes = /^(?:open|enter|long|short)\b/.test(lower);
-    if (hasNumbers && (
-      (openPrefixes) ||                                          // "open sol 2x 10", "long sol 2x 10"
-      (hasSide && /^[a-z]+\s+(?:long|short)\b/.test(lower))     // "sol long 2x 10"
-    )) {
-      const parsed = flexParseOpen(lower);
-      if (parsed) {
-        return parsed;
+    const openPrefixes = /^(?:open|enter|long|short|please|pls|yo|hey|ok|okay|i|just)\b/.test(lower);
+    const marketSidePattern = /^[a-z]+\s+(?:long|short)\b/.test(lower);
+    // Also trigger on number-first patterns: "10 usd sol long 2x"
+    const numberFirst = /^\d/.test(lower);
+
+    const hasLevPattern = /\d+\s*x\b/.test(lower);
+    if (hasNumbers && (openPrefixes || marketSidePattern || (numberFirst && hasSide) || hasLevPattern)) {
+      // Try direct parse first
+      let parsed = flexParseOpen(lower);
+      if (parsed) return parsed;
+
+      // Try with fuzzy correction (typos: "lon" → "long", "solan" → "sol")
+      const corrected = fuzzyCorrectTokens(lower);
+      if (corrected !== lower) {
+        parsed = flexParseOpen(corrected);
+        if (parsed) return parsed;
+      }
+    }
+
+    // Fallback: try fuzzy correction on inputs that didn't trigger above
+    // (e.g., "solan long 2x 10" where "solan" isn't a known prefix)
+    if (hasNumbers && !hasSide) {
+      const corrected = fuzzyCorrectTokens(lower);
+      if (corrected !== lower) {
+        const parsed = flexParseOpen(corrected);
+        if (parsed) return parsed;
       }
     }
   }
@@ -1210,9 +1302,52 @@ export class AIInterpreter {
       .trim()
       .toLowerCase();
 
+    // Bare "close" — close last market/side
+    if (/^close$/.test(lower) && ctx.lastMarket) {
+      return { action: ActionType.ClosePosition, market: ctx.lastMarket, side: ctx.lastSide } as ParsedIntent;
+    }
+
     // "close it" / "close that" / "close the position"
     if (/^close\s+(it|that|the\s+position)$/.test(lower) && ctx.lastMarket && ctx.lastSide) {
       return { action: ActionType.ClosePosition, market: ctx.lastMarket, side: ctx.lastSide };
+    }
+
+    // Bare "tp 160" / "sl 120" — apply to last market
+    const bareTpSl = lower.match(/^(tp|sl)\s+\$?(\d+(?:\.\d+)?)$/);
+    if (bareTpSl && ctx.lastMarket) {
+      return {
+        action: ActionType.SetTpSl,
+        market: ctx.lastMarket,
+        side: ctx.lastSide,
+        type: bareTpSl[1] as 'tp' | 'sl',
+        price: parseFloat(bareTpSl[2]),
+      } as ParsedIntent;
+    }
+
+    // "repeat last trade" / "repeat" / "again"
+    if (/^(?:repeat|again|repeat\s+(?:last\s+)?(?:trade|command|order))$/.test(lower)) {
+      if (ctx.lastAction === ActionType.OpenPosition && ctx.lastMarket && ctx.lastSide && ctx.lastCollateral && ctx.lastLeverage) {
+        return {
+          action: ActionType.OpenPosition,
+          market: ctx.lastMarket,
+          side: ctx.lastSide,
+          leverage: ctx.lastLeverage,
+          collateral: ctx.lastCollateral,
+        };
+      }
+    }
+
+    // "double previous position" / "double it" / "2x it"
+    if (/^(?:double|2x)\s+(?:it|previous\s+position|last\s+(?:trade|position))$/.test(lower)) {
+      if (ctx.lastAction === ActionType.OpenPosition && ctx.lastMarket && ctx.lastSide && ctx.lastCollateral && ctx.lastLeverage) {
+        return {
+          action: ActionType.OpenPosition,
+          market: ctx.lastMarket,
+          side: ctx.lastSide,
+          leverage: ctx.lastLeverage,
+          collateral: ctx.lastCollateral * 2,
+        };
+      }
     }
 
     // "increase to $X" / "change collateral to $X"

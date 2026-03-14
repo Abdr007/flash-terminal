@@ -310,6 +310,65 @@ describe('Existing Patterns Preserved', () => {
   });
 });
 
+// ─── Fuzzy Typo Correction ──────────────────────────────────────────────────
+
+describe('Fuzzy Typo Correction', () => {
+  it('lon sol 2x 10 → long (typo in side)', () => {
+    const r = localParse('lon sol 2x 10');
+    assert.ok(r);
+    assert.strictEqual(r.side, TradeSide.Long);
+  });
+
+  it('lng sol 2x 10 → long', () => {
+    const r = localParse('lng sol 2x 10');
+    assert.ok(r);
+    assert.strictEqual(r.side, TradeSide.Long);
+  });
+
+  it('lonng sol 2x 10 → long', () => {
+    const r = localParse('lonng sol 2x 10');
+    assert.ok(r);
+    assert.strictEqual(r.side, TradeSide.Long);
+  });
+
+  it('solan long 2x 10 → SOL (typo in market)', () => {
+    const r = localParse('solan long 2x 10');
+    assert.ok(r);
+    assert.strictEqual(r.market, 'SOL');
+  });
+});
+
+// ─── Greeting/Filler Tolerance ──────────────────────────────────────────────
+
+describe('Greeting/Filler Tolerance', () => {
+  it('yo open a sol long for 10 usd at 2x', () => {
+    const r = localParse('yo open a sol long for 10 usd at 2x');
+    assert.ok(r);
+    assert.strictEqual(r.market, 'SOL');
+  });
+
+  it('please long sol using ten dollars leverage two', () => {
+    const r = localParse('please long sol using ten dollars leverage two');
+    assert.ok(r);
+    assert.strictEqual(r.market, 'SOL');
+    assert.strictEqual(r.collateral, 10);
+    assert.strictEqual(r.leverage, 2);
+  });
+
+  it('enter a 2x long on sol with 10 bucks', () => {
+    const r = localParse('enter a 2x long on sol with 10 bucks');
+    assert.ok(r);
+    assert.strictEqual(r.market, 'SOL');
+  });
+
+  it('10 usd sol long 2x', () => {
+    const r = localParse('10 usd sol long 2x');
+    assert.ok(r);
+    assert.strictEqual(r.market, 'SOL');
+    assert.strictEqual(r.collateral, 10);
+  });
+});
+
 // ─── Edge Cases ─────────────────────────────────────────────────────────────
 
 describe('Edge Cases', () => {
