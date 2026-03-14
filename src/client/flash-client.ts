@@ -862,8 +862,8 @@ export class FlashClient implements IFlashClient {
         if (simUnitsConsumed && simUnitsConsumed > 0 && this.config.dynamicCompute !== false) {
           const bufferPct = this.config.computeBufferPercent ?? 20;
           const rawLimit = Math.ceil(simUnitsConsumed * (1 + bufferPct / 100) / 10_000) * 10_000;
-          // Safety clamp: never below 120k (floor) or above 200k (ceiling for dynamic path)
-          const dynamicLimit = Math.max(120_000, Math.min(rawLimit, 200_000));
+          // Safety clamp: never below 120k (floor) or above configured limit
+          const dynamicLimit = Math.max(120_000, Math.min(rawLimit, effectiveCuLimit));
           // Only tighten — never exceed the configured limit (safety ceiling)
           if (dynamicLimit < effectiveCuLimit && dynamicLimit >= simUnitsConsumed) {
             logger.debug('CLIENT', `Dynamic CU: ${simUnitsConsumed} used → ${dynamicLimit} limit (was ${effectiveCuLimit})`);
@@ -2947,30 +2947,19 @@ export class FlashClient implements IFlashClient {
   async stakeFLP(amountUsd: number, pool?: string) {
     const logger = getLogger();
     const poolConfig = this.resolvePoolConfig(pool);
-    const flpSymbol = (poolConfig as any).compoundingLpTokenSymbol || 'FLP';
     const sflpSymbol = (poolConfig as any).stakedLpTokenSymbol || 'sFLP';
 
-    // Get user's FLP token balance
-    const flpMint = poolConfig.compoundingTokenMint;
-    const flpBalance = await this.getTokenBalance(flpMint);
-    if (flpBalance.isZero()) {
-      throw new Error(`No ${flpSymbol} tokens found. Add liquidity first to receive ${flpSymbol}.`);
-    }
+    // Use addLiquidityAndStake: deposits USDC → mints LP → stakes → sFLP in one tx.
+    // This is the correct flow — depositStake alone requires raw LP tokens
+    // which users don't have (addCompoundingLiquidity gives compounding FLP, not raw LP).
+    const nativeAmount = uiDecimalsToNative(amountUsd.toString(), 6); // USDC = 6 decimals
 
-    // Convert the requested USD amount to FLP native units
-    const stakeAmount = uiDecimalsToNative(amountUsd.toString(), poolConfig.lpDecimals);
-    if (stakeAmount.gt(flpBalance)) {
-      const balanceUi = flpBalance.toNumber() / Math.pow(10, poolConfig.lpDecimals);
-      throw new Error(`Insufficient ${flpSymbol}: have ${balanceUi.toFixed(2)}, requested ${amountUsd}`);
-    }
+    logger.info('CLIENT', `Add liquidity + stake: $${amountUsd} USDC → ${sflpSymbol} (${poolConfig.poolName})`);
 
-    logger.info('CLIENT', `Stake ${flpSymbol}: ${stakeAmount.toString()} native → ${sflpSymbol} (${poolConfig.poolName})`);
-
-    const owner = this.wallet.publicKey;
-    const result = await this.perpClient.depositStake(
-      owner,
-      owner,
-      stakeAmount,
+    const result = await this.perpClient.addLiquidityAndStake(
+      'USDC',
+      nativeAmount,
+      BN_ZERO, // minLpAmountOut — accept any LP tokens
       poolConfig,
     );
 
@@ -2980,7 +2969,7 @@ export class FlashClient implements IFlashClient {
       txSignature: sig,
       action: 'stake',
       amount: amountUsd,
-      message: `Staked ${amountUsd} ${flpSymbol} → ${sflpSymbol} (${poolConfig.poolName})`,
+      message: `Staked $${amountUsd} USDC → ${sflpSymbol} (${poolConfig.poolName})`,
     };
   }
 
@@ -3024,15 +3013,18 @@ export class FlashClient implements IFlashClient {
   async claimRewards(pool?: string) {
     const logger = getLogger();
     const poolConfig = this.resolvePoolConfig(pool);
+    const sflpSymbol = (poolConfig as any).stakedLpTokenSymbol || 'sFLP';
+
+    // Check if user has staked LP tokens (sFLP) — required to have pending rewards
+    const sflpMint = (poolConfig as any).stakedLpTokenMint;
+    if (sflpMint) {
+      const sflpBalance = await this.getTokenBalance(sflpMint);
+      if (sflpBalance.isZero()) {
+        throw new Error(`No ${sflpSymbol} tokens found for ${poolConfig.poolName}. Use "earn stake" to deposit first.`);
+      }
+    }
 
     logger.info('CLIENT', `Claim rewards from ${poolConfig.poolName}`);
-
-    // Check if user has a staking position before attempting to claim
-    try {
-      await this.perpClient.getTokenStakeAccount(poolConfig, this.wallet.publicKey);
-    } catch {
-      throw new Error(`No staking position found for ${poolConfig.poolName}. Stake FLP first to earn rewards.`);
-    }
 
     const result = await this.perpClient.collectStakeFees(
       'USDC',

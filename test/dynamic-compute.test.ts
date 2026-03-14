@@ -97,13 +97,13 @@ describe('Dynamic CU Safety Clamp', () => {
 
   it('clamp is applied in flash-client.ts', () => {
     const src = readFileSync(resolve(ROOT, 'src/client/flash-client.ts'), 'utf8');
-    assert.ok(src.includes('Math.max(120_000, Math.min(rawLimit, 200_000))'),
+    assert.ok(src.includes('Math.max(120_000, Math.min(rawLimit, effectiveCuLimit))'),
       'flash-client should apply safety clamp');
   });
 
   it('clamp is applied in ultra-tx-engine.ts', () => {
     const src = readFileSync(resolve(ROOT, 'src/core/ultra-tx-engine.ts'), 'utf8');
-    assert.ok(src.includes('Math.max(120_000, Math.min(rawLimit, 200_000))'),
+    assert.ok(src.includes('Math.max(120_000, Math.min(rawLimit, effectiveCuLimit))'),
       'ultra-tx-engine should apply safety clamp');
   });
 });
