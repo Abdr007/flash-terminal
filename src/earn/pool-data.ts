@@ -1,14 +1,18 @@
 /**
  * Pool Live Data
  *
- * Fetches live pool metrics (TVL, APY, token prices) from fstats.io API.
- * Cached for 30 seconds to avoid excessive requests.
+ * Fetches live pool metrics from fstats.io API.
+ * Uses the /pools endpoint which returns FLP/sFLP prices and fee data.
+ *
+ * TVL and APY are not directly available from fstats — the Flash UI
+ * computes these from on-chain pool accounts. We fetch what's available
+ * and display "data unavailable" for metrics we can't source live.
  */
 
-import { getPoolRegistry, PoolInfo } from './pool-registry.js';
+import { getPoolRegistry } from './pool-registry.js';
+import { FSTATS_BASE_URL } from '../config/index.js';
 
-const FSTATS_BASE = 'https://fstats.io/api/v1';
-const CACHE_TTL_MS = 10_000; // 10s — short-lived to avoid stale yield data
+const CACHE_TTL_MS = 10_000; // 10s — short-lived to avoid stale data
 
 export interface PoolMetrics {
   poolId: string;
@@ -18,6 +22,10 @@ export interface PoolMetrics {
   flpPrice: number;
   sflpPrice: number;
   volume24h: number;
+  totalVolume: number;
+  totalFees: number;
+  totalTrades: number;
+  feeShareLp: number;
 }
 
 interface CachedMetrics {
@@ -27,7 +35,7 @@ interface CachedMetrics {
 
 let _cache: CachedMetrics | null = null;
 
-/** Fetch pool metrics from fstats.io. Returns cached data if fresh. */
+/** Fetch pool metrics from fstats.io /pools endpoint. */
 export async function getPoolMetrics(): Promise<Map<string, PoolMetrics>> {
   if (_cache && Date.now() - _cache.fetchedAt < CACHE_TTL_MS) {
     return _cache.data;
@@ -36,52 +44,63 @@ export async function getPoolMetrics(): Promise<Map<string, PoolMetrics>> {
   const metrics = new Map<string, PoolMetrics>();
 
   try {
-    const res = await fetch(`${FSTATS_BASE}/pool-stats`, {
+    const res = await fetch(`${FSTATS_BASE_URL}/pools`, {
       signal: AbortSignal.timeout(8000),
     });
     if (res.ok) {
-      const data = await res.json() as Array<{
-        pool_name?: string;
-        tvl?: number;
-        apy_7d?: number;
-        apr_7d?: number;
-        flp_price?: number;
-        sflp_price?: number;
-        volume_24h?: number;
-      }>;
-      if (Array.isArray(data)) {
-        for (const item of data) {
-          if (!item.pool_name) continue;
-          metrics.set(item.pool_name, {
-            poolId: item.pool_name,
-            tvl: item.tvl ?? 0,
-            apy7d: item.apy_7d ?? 0,
-            apr7d: item.apr_7d ?? 0,
-            flpPrice: item.flp_price ?? 0,
-            sflpPrice: item.sflp_price ?? 0,
-            volume24h: item.volume_24h ?? 0,
+      const json = await res.json() as {
+        pools?: Array<{
+          name: string;
+          fee_split?: { lp?: number };
+          total_trades?: number;
+          total_volume_usd?: number;
+          total_fees_usd?: number;
+          pool_pnl_usd?: number;
+          pool_revenue_usd?: number;
+          lp_price_regular?: number;
+          lp_price_compounding?: number;
+        }>;
+      };
+
+      if (json.pools && Array.isArray(json.pools)) {
+        for (const pool of json.pools) {
+          if (!pool.name) continue;
+          // Skip Remora (internal/devnet pool)
+          if (pool.name.startsWith('Remora')) continue;
+
+          metrics.set(pool.name, {
+            poolId: pool.name,
+            tvl: 0, // Not available from fstats — would need on-chain AUM query
+            apy7d: 0, // Not available from fstats — would need historical fee data
+            apr7d: 0,
+            flpPrice: pool.lp_price_compounding ?? 0,
+            sflpPrice: pool.lp_price_regular ?? 0,
+            volume24h: 0,
+            totalVolume: pool.total_volume_usd ?? 0,
+            totalFees: pool.total_fees_usd ?? 0,
+            totalTrades: pool.total_trades ?? 0,
+            feeShareLp: pool.fee_split?.lp ?? 70,
           });
         }
       }
     }
   } catch {
-    // API unavailable — return empty or stale cache
     if (_cache) return _cache.data;
   }
 
-  // If fstats didn't return data, try SDK fallback for prices
-  if (metrics.size === 0) {
+  // Fill in any registered pools that fstats didn't return
+  if (metrics.size > 0) {
     const registry = getPoolRegistry();
     for (const pool of registry) {
-      metrics.set(pool.poolId, {
-        poolId: pool.poolId,
-        tvl: 0,
-        apy7d: 0,
-        apr7d: 0,
-        flpPrice: 0,
-        sflpPrice: 0,
-        volume24h: 0,
-      });
+      if (!metrics.has(pool.poolId)) {
+        metrics.set(pool.poolId, {
+          poolId: pool.poolId,
+          tvl: 0, apy7d: 0, apr7d: 0,
+          flpPrice: 0, sflpPrice: 0, volume24h: 0,
+          totalVolume: 0, totalFees: 0, totalTrades: 0,
+          feeShareLp: pool.feeShare * 100,
+        });
+      }
     }
   }
 
