@@ -83,6 +83,15 @@ export function resolveMarket(input: string): string {
   const lower = trimmed.toLowerCase();
   const collapsed = upper.replace(/\s+/g, '');
 
+  // Strip common suffixes: "-perp", "-perpetual", "perp", "perpetual"
+  const stripped = lower
+    .replace(/[-\s]?perp(?:etual)?$/i, '')
+    .trim();
+  if (stripped && stripped !== lower) {
+    const resolved = resolveMarket(stripped);
+    if (resolved && getAllMarkets().includes(resolved)) return resolved;
+  }
+
   // 1. Direct match against canonical market list
   const allMarkets = getAllMarkets();
   if (allMarkets.includes(upper)) return upper;

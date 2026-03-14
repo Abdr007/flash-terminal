@@ -3,6 +3,8 @@ import { IFlashClient } from '../types/index.js';
 import { theme } from './theme.js';
 import { getAutocompleteCommands } from './command-registry.js';
 
+import { loadAliases } from './learned-aliases.js';
+
 // ─── CLI Autocomplete & Suggestion Engine ────────────────────────────────────
 //
 // Deterministic command completion for the Flash Terminal.
@@ -99,14 +101,25 @@ export function completer(line: string): [string[], string] {
     return [[], trimmed];
   }
 
-  // 4. Command prefix matching
+  // 4. Learned alias prefix matching
+  try {
+    const aliases = loadAliases();
+    const aliasMatches = Object.keys(aliases).filter(a => a.startsWith(lower));
+    if (aliasMatches.length > 0) {
+      // Show expansion in completions
+      const expanded = aliasMatches.map(a => `${a} → ${aliases[a]}`);
+      return [[...aliasMatches, ...expanded], trimmed];
+    }
+  } catch { /* non-critical */ }
+
+  // 5. Command prefix matching
   const matches = COMMANDS.filter(cmd => cmd.startsWith(lower));
 
   if (matches.length > 0) {
     return [matches, trimmed];
   }
 
-  // 5. Fuzzy fallback — find commands containing the typed text
+  // 6. Fuzzy fallback — find commands containing the typed text
   const fuzzy = COMMANDS.filter(cmd => cmd.includes(lower));
   return [fuzzy, trimmed];
 }

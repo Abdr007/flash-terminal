@@ -1502,6 +1502,48 @@ export class FlashTerminal {
       return;
     }
 
+    // ─── Alias Commands ────────────────────────────────────────
+    if (lower.startsWith('alias ') && lower !== 'alias') {
+      const match = input.match(/^alias\s+(\S+)\s*=\s*(.+)$/i);
+      if (match) {
+        const { setAlias } = await import('./learned-aliases.js');
+        if (setAlias(match[1], match[2].trim())) {
+          console.log(chalk.green(`  Alias set: ${match[1]} → ${match[2].trim()}`));
+        } else {
+          console.log(chalk.red('  Too many aliases (max 200).'));
+        }
+      } else {
+        console.log(chalk.dim('  Usage: alias <shortcut> = <expansion>'));
+        console.log(chalk.dim('  Example: alias lsol = long sol'));
+      }
+      return;
+    }
+    if (lower === 'aliases') {
+      const { getAllAliases } = await import('./learned-aliases.js');
+      const aliases = getAllAliases();
+      const entries = Object.entries(aliases);
+      if (entries.length === 0) {
+        console.log(chalk.dim('  No custom aliases. Use "alias <shortcut> = <expansion>" to add one.'));
+      } else {
+        console.log('');
+        for (const [k, v] of entries.sort()) {
+          console.log(`  ${chalk.cyan(k.padEnd(16))} → ${v}`);
+        }
+        console.log('');
+      }
+      return;
+    }
+    if (lower.startsWith('unalias ')) {
+      const name = input.slice(8).trim();
+      const { removeAlias } = await import('./learned-aliases.js');
+      if (removeAlias(name)) {
+        console.log(chalk.green(`  Alias removed: ${name}`));
+      } else {
+        console.log(chalk.yellow(`  Alias not found: ${name}`));
+      }
+      return;
+    }
+
     // ─── Degen Mode Toggle ──────────────────────────────────────
     if (lower === 'degen' || lower === 'degen mode' || lower === 'degen on' || lower === 'degen off' || lower === 'degen toggle') {
       if (lower === 'degen off') {

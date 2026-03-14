@@ -5,6 +5,7 @@ import { getAllMarkets } from '../config/index.js';
 import { getLogger } from '../utils/logger.js';
 import { getErrorMessage } from '../utils/retry.js';
 import { resolveMarket, normalizeAssetText } from '../utils/market-resolver.js';
+import { expandLearnedAlias } from '../cli/learned-aliases.js';
 import {
   detectMalformedCommand,
   invalidLeverageAlert,
@@ -306,10 +307,14 @@ function flexParseOpen(input: string): ParsedIntent | null {
 
   let body = mainPart;
 
-  // Strip greeting/filler prefixes and verbs
-  body = body.replace(/^(?:yo|hey|please|pls|ok|okay|i\s+want\s+to|let\s+me|can\s+you|go|just)\s+/, '');
-  body = body.replace(/^(?:open|buy|enter)\s+(?:a\s+)?/, '');
-  body = body.replace(/^(?:a|an|the)\s+/, '');
+  // Strip greeting/filler prefixes and verbs (iterative — handles chains like "yo i want to go")
+  for (let i = 0; i < 3; i++) {
+    const before = body;
+    body = body.replace(/^(?:yo|hey|please|pls|ok|okay|i\s+want\s+to|let\s+me|let\s+us|can\s+you|go|just|i\s+wanna)\s+/, '');
+    body = body.replace(/^(?:open|buy|enter)\s+(?:a\s+)?/, '');
+    body = body.replace(/^(?:a|an|the)\s+/, '');
+    if (body === before) break;
+  }
   // Strip filler words (aggressive — keeps only meaningful tokens)
   body = body.replace(/\b(?:with|for|on|at|to|in|of|using|and|the|a|an|my|position|collateral|dollars?|bucks?|usd|usdc)\b/g, ' ');
   // "leverage two" / "leverage 2" → "2x"
@@ -595,8 +600,10 @@ export function validateIntent(intent: ParsedIntent): CommandAlert | null {
 export function localParse(input: string): ParsedIntent | null {
   // Sanitize: collapse whitespace (tabs, newlines, etc.) to single spaces, strip control chars
   const sanitized = input.replace(/[\x00-\x1f\x7f]/g, ' ').replace(/\s+/g, ' ').trim();
+  // Expand learned user aliases first (e.g. "lsol" → "long sol")
+  const userExpanded = expandLearnedAlias(sanitized);
   // Expand command aliases: "o" → "open", "c" → "close", etc.
-  const aliased = expandAliases(sanitized);
+  const aliased = expandAliases(userExpanded);
   // Pre-process: normalize number words and asset aliases
   const normalized = normalizeAssetAliases(normalizeNumberWords(aliased));
   let lower = normalized.toLowerCase();
@@ -1348,6 +1355,30 @@ export class AIInterpreter {
           collateral: ctx.lastCollateral * 2,
         };
       }
+    }
+
+    // "increase leverage to 3x" / "set leverage to 5x" — replay last trade with new leverage
+    const leverageModMatch = lower.match(/^(?:increase|change|set|update)\s+(?:the\s+)?leverage\s+to\s+(\d+(?:\.\d+)?)\s*x?$/);
+    if (leverageModMatch && ctx.lastAction === ActionType.OpenPosition && ctx.lastMarket && ctx.lastSide && ctx.lastCollateral) {
+      return {
+        action: ActionType.OpenPosition,
+        market: ctx.lastMarket,
+        side: ctx.lastSide,
+        leverage: parseFloat(leverageModMatch[1]),
+        collateral: ctx.lastCollateral,
+      };
+    }
+
+    // "reduce to $5" / "reduce to 5 dollars" / "change to $5"
+    const reduceMatch = lower.match(/^(?:reduce|decrease|change|lower)\s+(?:it\s+)?(?:to\s+)?\$?(\d+(?:\.\d+)?)\s*(?:dollars?|usd)?$/);
+    if (reduceMatch && ctx.lastAction === ActionType.OpenPosition && ctx.lastMarket && ctx.lastSide && ctx.lastLeverage) {
+      return {
+        action: ActionType.OpenPosition,
+        market: ctx.lastMarket,
+        side: ctx.lastSide,
+        leverage: ctx.lastLeverage,
+        collateral: parseFloat(reduceMatch[1]),
+      };
     }
 
     // "increase to $X" / "change collateral to $X"
