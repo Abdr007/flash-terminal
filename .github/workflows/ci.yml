@@ -42,8 +42,8 @@ jobs:
         run: |
           TEST_OUTPUT=$(npm test 2>&1)
           PASS_COUNT=$(echo "$TEST_OUTPUT" | grep -oP '\d+ passed' | grep -oP '\d+')
-          if [ "$PASS_COUNT" -lt 300 ]; then
-            echo "Test count dropped below 300 (got $PASS_COUNT). Failing build."
+          if [ "$PASS_COUNT" -lt 800 ]; then
+            echo "Test count dropped below 800 (got $PASS_COUNT). Failing build."
             exit 1
           fi
-          echo "Test count: $PASS_COUNT (minimum: 300)"
+          echo "Test count: $PASS_COUNT (minimum: 800)"

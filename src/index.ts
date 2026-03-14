@@ -406,6 +406,130 @@ program
   });
 
 program
+  .command('version')
+  .description('Show version and build information')
+  .action(async () => {
+    const { agentOutput } = await import('./no-dna.js');
+    if (IS_AGENT) {
+      agentOutput({
+        action: 'version',
+        name: 'flash-terminal',
+        version: BUILD_INFO.version,
+        commit: BUILD_INFO.gitHash,
+        branch: BUILD_INFO.branch,
+        build_date: BUILD_INFO.buildDate,
+        platform: BUILD_INFO.platform ?? process.platform,
+        arch: BUILD_INFO.arch ?? process.arch,
+        node: process.versions.node,
+        network: 'mainnet-beta',
+      });
+      return;
+    }
+    console.log('');
+    console.log(chalk.bold(`  Flash Terminal v${BUILD_INFO.version}`));
+    console.log('');
+    console.log(`  ${chalk.dim('Commit:')}    ${BUILD_INFO.gitHash}`);
+    console.log(`  ${chalk.dim('Branch:')}    ${BUILD_INFO.branch}`);
+    console.log(`  ${chalk.dim('Built:')}     ${BUILD_INFO.buildDate}`);
+    console.log(`  ${chalk.dim('Platform:')}  ${BUILD_INFO.platform ?? process.platform}/${BUILD_INFO.arch ?? process.arch}`);
+    console.log(`  ${chalk.dim('Node:')}      v${process.versions.node}`);
+    console.log(`  ${chalk.dim('Network:')}   Solana Mainnet`);
+    console.log('');
+  });
+
+program
+  .command('update')
+  .description('Check for updates and install the latest version')
+  .option('--check', 'Only check for updates, do not install')
+  .action(async (opts: { check?: boolean }) => {
+    const { agentOutput } = await import('./no-dna.js');
+    const currentVersion = BUILD_INFO.version;
+
+    // Fetch latest version from npm registry
+    if (!IS_AGENT) process.stdout.write('  Checking for updates...\r');
+
+    let latestVersion: string;
+    try {
+      const res = await fetch('https://registry.npmjs.org/flash-terminal/latest', {
+        signal: AbortSignal.timeout(10000),
+      });
+      if (!res.ok) {
+        // Package may not be published yet
+        if (IS_AGENT) {
+          agentOutput({ action: 'update', status: 'unavailable', current_version: currentVersion, detail: 'Package not found on npm registry' });
+        } else {
+          console.log('  Package not yet published to npm.');
+          console.log(chalk.dim('  Update manually: git pull && npm run build'));
+        }
+        return;
+      }
+      const data = await res.json() as { version: string };
+      latestVersion = data.version;
+    } catch (error: unknown) {
+      if (IS_AGENT) {
+        agentError('update_check_failed', { detail: getErrorMessage(error) });
+      } else {
+        console.error(chalk.red(`  Failed to check for updates: ${getErrorMessage(error)}`));
+      }
+      process.exit(1);
+      return; // TypeScript flow
+    }
+
+    // Compare versions
+    const isUpToDate = currentVersion === latestVersion;
+
+    if (isUpToDate) {
+      if (IS_AGENT) {
+        agentOutput({ action: 'update', status: 'up_to_date', current_version: currentVersion });
+      } else {
+        console.log(`  Already up to date (v${currentVersion}).     `);
+      }
+      return;
+    }
+
+    // New version available
+    if (opts.check) {
+      if (IS_AGENT) {
+        agentOutput({ action: 'update', status: 'available', current_version: currentVersion, latest_version: latestVersion });
+      } else {
+        console.log(`  New version available: v${latestVersion} (current: v${currentVersion})`);
+        console.log(chalk.dim(`  Run "flash update" to install.`));
+      }
+      return;
+    }
+
+    // Perform update via npm
+    if (!IS_AGENT) {
+      console.log(`  Updating v${currentVersion} → v${latestVersion}...     `);
+    }
+
+    try {
+      const { execSync } = await import('child_process');
+      execSync('npm install -g flash-terminal@latest', {
+        stdio: IS_AGENT ? 'pipe' : 'inherit',
+        timeout: 120_000,
+      });
+
+      if (IS_AGENT) {
+        agentOutput({ action: 'update', status: 'updated', previous_version: currentVersion, new_version: latestVersion });
+      } else {
+        console.log('');
+        console.log(chalk.green(`  Updated to v${latestVersion}.`));
+        console.log(chalk.dim('  Restart Flash Terminal to use the new version.'));
+        console.log('');
+      }
+    } catch (error: unknown) {
+      if (IS_AGENT) {
+        agentError('update_failed', { current_version: currentVersion, target_version: latestVersion, detail: getErrorMessage(error) });
+      } else {
+        console.error(chalk.red(`  Update failed: ${getErrorMessage(error)}`));
+        console.log(chalk.dim('  Try manually: npm install -g flash-terminal@latest'));
+      }
+      process.exit(1);
+    }
+  });
+
+program
   .command('help-cmd [command]')
   .description('Show detailed help for a command')
   .action(async (command?: string) => {
