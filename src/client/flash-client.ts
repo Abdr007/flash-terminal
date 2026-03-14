@@ -380,7 +380,8 @@ export class FlashClient implements IFlashClient {
       this.poolConfig.perpComposibilityProgramId,
       this.poolConfig.fbNftRewardProgramId,
       this.poolConfig.rewardDistributionProgram.programId,
-      { prioritizationFee: config.computeUnitPrice }
+      { prioritizationFee: config.computeUnitPrice },
+      true // useExtOracleAccount — Flash protocol uses Pyth pull oracles
     );
 
     // [M-4] Build allowed program set from pool config
@@ -512,7 +513,8 @@ export class FlashClient implements IFlashClient {
       this.poolConfig.perpComposibilityProgramId,
       this.poolConfig.fbNftRewardProgramId,
       this.poolConfig.rewardDistributionProgram.programId,
-      { prioritizationFee: this.config.computeUnitPrice }
+      { prioritizationFee: this.config.computeUnitPrice },
+      true // useExtOracleAccount
     );
     // Swap all references together — minimizes the window where concurrent
     // reads could see mismatched connection/provider/perpClient
