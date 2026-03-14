@@ -418,6 +418,8 @@ export class FlashClient implements IFlashClient {
       dynamicPriorityFee: true,
       multiBroadcast: true,
       wsConfirmation: true,
+      dynamicCompute: config.dynamicCompute,
+      computeBufferPercent: config.computeBufferPercent,
     });
 
     // Start legacy blockhash pre-cache only if engine init failed
@@ -708,9 +710,9 @@ export class FlashClient implements IFlashClient {
       }
     }
 
-    // ── Dynamic CU limit scaling (matches website behavior) ──
-    // Base: 420k CU. If instructions > 4 (e.g. TP/SL attached), scale to 450k.
-    // Never exceed 600k. Explicit overrides take precedence.
+    // ── Dynamic CU limit scaling ──
+    // Base: 220k CU (observed usage: 104–112k). If instructions > 4 (e.g. TP/SL
+    // attached), add 30k headroom. Never exceed 600k. Explicit overrides take precedence.
     const dynamicCuLimit = computeUnitLimitOverride ??
       (instructions.length > 4 ? Math.min(this.config.computeUnitLimit + 30_000, 600_000) : this.config.computeUnitLimit);
 
@@ -732,7 +734,9 @@ export class FlashClient implements IFlashClient {
     }
 
     const maxAttempts = 3;
-    const cuLimitIx = ComputeBudgetProgram.setComputeUnitLimit({ units: dynamicCuLimit });
+    // CU overflow fallback: 220k → 260k if simulation detects ComputeBudgetExceeded
+    const CU_OVERFLOW_BUMP = 260_000;
+    let effectiveCuLimit = dynamicCuLimit;
     const cuPriceIx = ComputeBudgetProgram.setComputeUnitPrice({ microLamports: this.config.computeUnitPrice });
 
     let lastError = '';
@@ -786,6 +790,8 @@ export class FlashClient implements IFlashClient {
         const effectiveTimeoutMs = bhLatency > 5_000
           ? Math.max(timeoutMs - bhLatency, 20_000)
           : timeoutMs;
+        // Build compute budget instructions (may change on CU overflow retry)
+        const cuLimitIx = ComputeBudgetProgram.setComputeUnitLimit({ units: effectiveCuLimit });
         const allIxs = [cuLimitIx, cuPriceIx, ...validatedInstructions];
         const message = MessageV0.compile({
           payerKey: this.wallet.publicKey,
@@ -801,7 +807,7 @@ export class FlashClient implements IFlashClient {
           const altLookupCount = altLookups.reduce(
             (sum, l) => sum + l.readonlyIndexes.length + l.writableIndexes.length, 0,
           );
-          logger.info('TX', `Size: ${txSize}b | ALT: ${altLookups.length > 0 ? `${altLookups.length} table(s), ${altLookupCount} accounts` : 'none'} | Static: ${message.staticAccountKeys.length} | CU: ${dynamicCuLimit} | Fee: ${this.config.computeUnitPrice} µL | IXs: ${allIxs.length}`);
+          logger.info('TX', `Size: ${txSize}b | ALT: ${altLookups.length > 0 ? `${altLookups.length} table(s), ${altLookupCount} accounts` : 'none'} | Static: ${message.staticAccountKeys.length} | CU: ${effectiveCuLimit} | Fee: ${this.config.computeUnitPrice} µL | IXs: ${allIxs.length}`);
           logMessageALTDiagnostics(message, 'sendTx');
         }
 
@@ -809,7 +815,9 @@ export class FlashClient implements IFlashClient {
         vtx.sign([this.wallet, ...additionalSigners]);
 
         // Pre-send simulation on first attempt to catch program errors early.
+        // Also extracts unitsConsumed for dynamic CU optimization.
         // Subsequent retries skip simulation since the blockhash changes.
+        let simUnitsConsumed: number | null = null;
         if (attempt === 1) {
           try {
             const simResult = await conn.simulateTransaction(vtx, {
@@ -818,11 +826,24 @@ export class FlashClient implements IFlashClient {
             });
             if (simResult.value.err) {
               const simErr = JSON.stringify(simResult.value.err);
+
+              // Compute budget exceeded — bump CU limit and retry immediately
+              if (simErr.includes('ComputationalBudgetExceeded') || simErr.includes('ProgramFailedToComplete')) {
+                if (effectiveCuLimit < CU_OVERFLOW_BUMP) {
+                  logger.info('CLIENT', `Compute budget exceeded at ${effectiveCuLimit} CU — retrying with ${CU_OVERFLOW_BUMP} CU`);
+                  effectiveCuLimit = CU_OVERFLOW_BUMP;
+                  continue; // Rebuild tx with higher CU limit
+                }
+              }
+
               // Program errors (InstructionError) are terminal — don't retry
               if (simErr.includes('InstructionError') || simErr.includes('Custom')) {
                 throw new Error(mapProgramError(simErr));
               }
               logger.info('CLIENT', `Pre-send simulation warning: ${simErr}`);
+            } else {
+              // Successful simulation — extract CU usage for dynamic optimization
+              simUnitsConsumed = simResult.value.unitsConsumed ?? null;
             }
           } catch (simError: unknown) {
             const simMsg = getErrorMessage(simError);
@@ -830,6 +851,68 @@ export class FlashClient implements IFlashClient {
             if (simMsg.includes('simulation failed') || simMsg.includes('Trade rejected') || simMsg.includes('Transaction rejected')) throw simError;
             // Non-critical simulation failures (RPC timeout etc) — proceed with send
             logger.debug('CLIENT', `Pre-send simulation skipped: ${scrubSensitive(simMsg)}`);
+          }
+        }
+
+        // ── Dynamic CU optimization ──
+        // If simulation succeeded and dynamic compute is enabled, tighten the CU
+        // limit to unitsConsumed * (1 + buffer%). This reduces priority fees by
+        // only paying for compute actually used + safety headroom.
+        // Rebuilds tx with the tighter limit — no additional RPC call.
+        if (simUnitsConsumed && simUnitsConsumed > 0 && this.config.dynamicCompute !== false) {
+          const bufferPct = this.config.computeBufferPercent ?? 20;
+          const dynamicLimit = Math.ceil(simUnitsConsumed * (1 + bufferPct / 100) / 10_000) * 10_000; // round up to nearest 10k
+          // Only tighten — never exceed the configured limit (safety ceiling)
+          if (dynamicLimit < effectiveCuLimit && dynamicLimit >= simUnitsConsumed) {
+            logger.debug('CLIENT', `Dynamic CU: ${simUnitsConsumed} used → ${dynamicLimit} limit (was ${effectiveCuLimit})`);
+            effectiveCuLimit = dynamicLimit;
+            // Rebuild transaction with tighter CU limit (no extra RPC call)
+            const tightCuLimitIx = ComputeBudgetProgram.setComputeUnitLimit({ units: effectiveCuLimit });
+            const tightIxs = [tightCuLimitIx, cuPriceIx, ...validatedInstructions];
+            const tightMessage = MessageV0.compile({
+              payerKey: this.wallet.publicKey,
+              instructions: tightIxs,
+              recentBlockhash: blockhash,
+              addressLookupTableAccounts: altAccounts ?? [],
+            });
+            const tightVtx = new VersionedTransaction(tightMessage);
+            tightVtx.sign([this.wallet, ...additionalSigners]);
+            const tightBytes = Buffer.from(tightVtx.serialize());
+
+            const signatureStr = await conn.sendRawTransaction(tightBytes, {
+              skipPreflight: true,
+              maxRetries: 3,
+            });
+            lastSignature = signatureStr;
+            const feeEstimate = Math.floor(effectiveCuLimit * this.config.computeUnitPrice / 1_000_000);
+            logger.info('CLIENT', `Tx sent (dynamic CU): ${signatureStr} | CU: ${simUnitsConsumed}→${effectiveCuLimit} | Fee: ~${feeEstimate} lamports`);
+
+            // Skip to confirmation polling (jump past the normal sendRawTransaction)
+            // We need to inline the confirmation here to avoid restructuring the entire loop
+            process.stdout.write('  Awaiting confirmation... \r');
+            const confirmStart = Date.now();
+            for (let i = 0; Date.now() - confirmStart < effectiveTimeoutMs; i++) {
+              await new Promise(r => setTimeout(r, 2_000));
+              const { value } = await conn.getSignatureStatuses([signatureStr]);
+              const status = value?.[0];
+              if (status?.err) {
+                throw new Error(`Transaction failed on-chain: ${JSON.stringify(status.err)}`);
+              }
+              if (status?.confirmationStatus === 'confirmed' || status?.confirmationStatus === 'finalized') {
+                process.stdout.write('                              \r');
+                logger.info('CLIENT', `Tx confirmed: ${signatureStr}`);
+                this.walletMgr.resetIdleTimer();
+                this.walletMgr.clearBalanceCache();
+                return signatureStr;
+              }
+              if (i % 2 === 0) {
+                conn.sendRawTransaction(tightBytes, { skipPreflight: true, maxRetries: 0 }).catch(() => {});
+              }
+            }
+            // Dynamic CU tx timed out — fall through to normal retry logic
+            lastError = `Dynamic CU tx not confirmed within ${effectiveTimeoutMs / 1000}s`;
+            logger.warn('CLIENT', `Dynamic CU attempt timed out — will retry with standard flow`);
+            continue;
           }
         }
 
@@ -1168,7 +1251,7 @@ export class FlashClient implements IFlashClient {
       }
 
       // swapAndOpen does more work (swap + open in one ix) → needs higher CU
-      // 420k matches Flash UI's CU limit — actual consumption is ~104k so 4x headroom
+      // Force 420k minimum for swapAndOpen regardless of config (matches Flash UI)
       const cuOverride = isSwapAndOpen ? Math.max(this.config.computeUnitLimit, 420_000) : undefined;
 
       const txSignature = await this.sendTx(allInstructions, result.additionalSigners, poolConfig, undefined, cuOverride);

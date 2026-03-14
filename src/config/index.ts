@@ -106,6 +106,8 @@ interface ConfigFileData {
   default_slippage_bps?: number;
   compute_unit_limit?: number;
   compute_unit_price?: number;
+  dynamic_compute?: boolean;
+  compute_buffer_percent?: number;
   default_leverage?: number;
   max_collateral_per_trade?: number;
   max_position_size?: number;
@@ -157,7 +159,7 @@ export function loadConfig(): FlashConfig {
     network: parseNetwork(process.env.NETWORK || (typeof file.network === 'string' ? file.network : undefined)),
     simulationMode: (process.env.SIMULATION_MODE ?? 'true').toLowerCase() !== 'false',
     defaultSlippageBps: parseIntSafe(process.env.DEFAULT_SLIPPAGE_BPS, typeof file.default_slippage_bps === 'number' ? file.default_slippage_bps : 150),
-    computeUnitLimit: parseIntSafe(process.env.COMPUTE_UNIT_LIMIT, typeof file.compute_unit_limit === 'number' ? file.compute_unit_limit : 420000),
+    computeUnitLimit: parseIntSafe(process.env.COMPUTE_UNIT_LIMIT, typeof file.compute_unit_limit === 'number' ? file.compute_unit_limit : 220000),
     computeUnitPrice: parseIntSafe(process.env.COMPUTE_UNIT_PRICE, typeof file.compute_unit_price === 'number' ? file.compute_unit_price : 100000),
     logFile: process.env.LOG_FILE || null,
     // Signing guard limits (0 = unlimited / use market defaults)
@@ -167,6 +169,8 @@ export function loadConfig(): FlashConfig {
     maxTradesPerMinute: parseIntSafe(process.env.MAX_TRADES_PER_MINUTE, typeof file.max_trades_per_minute === 'number' ? file.max_trades_per_minute : 10),
     minDelayBetweenTradesMs: parseIntSafe(process.env.MIN_DELAY_BETWEEN_TRADES_MS, typeof file.min_delay_between_trades_ms === 'number' ? file.min_delay_between_trades_ms : 3000),
     defaultLeverage: parseIntSafe(process.env.DEFAULT_LEVERAGE, typeof file.default_leverage === 'number' ? file.default_leverage : 2),
+    dynamicCompute: (process.env.FLASH_DYNAMIC_CU ?? (file.dynamic_compute !== undefined ? String(file.dynamic_compute) : 'true')).toLowerCase() !== 'false',
+    computeBufferPercent: parseIntSafe(process.env.FLASH_CU_BUFFER_PCT, typeof file.compute_buffer_percent === 'number' ? file.compute_buffer_percent : 20),
   };
 }
 

@@ -1088,6 +1088,10 @@ export interface FlashConfig {
   maxTradesPerMinute: number;
   minDelayBetweenTradesMs: number;
   defaultLeverage: number;
+  /** Enable dynamic compute unit limit based on simulation (default: true) */
+  dynamicCompute: boolean;
+  /** Safety buffer percent for dynamic CU limit (default: 20) */
+  computeBufferPercent: number;
   /** Disable plugin loading (--no-plugins flag) */
   noPlugins?: boolean;
 }

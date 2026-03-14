@@ -64,7 +64,7 @@ const MAX_ATTEMPTS = 3;
 const PRIORITY_FEE_CEILING = 500_000;
 
 /** Compute unit limit for Flash Trade transactions (matches website) */
-const DEFAULT_CU_LIMIT = 420_000;
+const DEFAULT_CU_LIMIT = 220_000;
 
 /** Recent priority fee sample size for dynamic calculation */
 const PRIORITY_FEE_SAMPLE_SIZE = 20;
@@ -98,6 +98,10 @@ export interface TxEngineConfig {
   tpuForwarding: boolean;
   /** Require broadcast quorum (>=2 endpoints accept) before confirming */
   requireQuorum: boolean;
+  /** Enable dynamic compute unit limit based on simulation */
+  dynamicCompute?: boolean;
+  /** Safety buffer percent for dynamic CU limit */
+  computeBufferPercent?: number;
 }
 
 export interface TxSubmitResult {
@@ -639,7 +643,11 @@ export class UltraTxEngine {
    * Simulate transaction before broadcast. Catches program errors early
    * to avoid wasting time on doomed transactions.
    */
-  private async simulateTransaction(vtx: VersionedTransaction, conn: Connection): Promise<void> {
+  /**
+   * Simulate a transaction and return compute units consumed (if available).
+   * Throws on terminal program errors. Returns null on non-critical failures.
+   */
+  private async simulateTransaction(vtx: VersionedTransaction, conn: Connection): Promise<number | null> {
     try {
       const simResult = await conn.simulateTransaction(vtx, {
         sigVerify: false,
@@ -660,7 +668,10 @@ export class UltraTxEngine {
           throw new Error(this.mapProgramError(simErr));
         }
         getLogger().info('TX-ENGINE', `Pre-send simulation warning: ${simErr}`);
+        return null;
       }
+
+      return simResult.value.unitsConsumed ?? null;
     } catch (simError: unknown) {
       const simMsg = getErrorMessage(simError);
       // Re-throw program errors
@@ -669,6 +680,7 @@ export class UltraTxEngine {
       }
       // Non-critical simulation failures (RPC timeout etc) — proceed with send
       getLogger().debug('TX-ENGINE', `Pre-send simulation skipped: ${simMsg}`);
+      return null;
     }
   }
 
@@ -811,12 +823,36 @@ export class UltraTxEngine {
         }
 
         // ── Step 4: Simulate (first attempt only) ──
+        let simUnitsConsumed: number | null = null;
         if (attempt === 1) {
-          await this.simulateTransaction(vtx, conn);
+          simUnitsConsumed = await this.simulateTransaction(vtx, conn);
+        }
+
+        // ── Step 4b: Dynamic CU optimization ──
+        // If simulation succeeded and dynamic compute is enabled, tighten the CU
+        // limit to unitsConsumed * (1 + buffer%). Rebuilds tx locally — no extra RPC call.
+        let finalVtx = vtx;
+        if (simUnitsConsumed && simUnitsConsumed > 0 && this.config.dynamicCompute !== false) {
+          const bufferPct = this.config.computeBufferPercent ?? 20;
+          const dynamicLimit = Math.ceil(simUnitsConsumed * (1 + bufferPct / 100) / 10_000) * 10_000;
+          if (dynamicLimit < effectiveCuLimit && dynamicLimit >= simUnitsConsumed) {
+            getLogger().debug('TX-ENGINE', `Dynamic CU: ${simUnitsConsumed} used → ${dynamicLimit} limit (was ${effectiveCuLimit})`);
+            const tightCuLimitIx = ComputeBudgetProgram.setComputeUnitLimit({ units: dynamicLimit });
+            const tightCuPriceIx = ComputeBudgetProgram.setComputeUnitPrice({ microLamports: priorityFee });
+            const tightIxs = [tightCuLimitIx, tightCuPriceIx, ...instructions];
+            const tightMsg = MessageV0.compile({
+              payerKey: this.wallet.publicKey,
+              instructions: tightIxs,
+              recentBlockhash: bh.blockhash,
+              addressLookupTableAccounts: addressLookupTableAccounts ?? [],
+            });
+            finalVtx = new VersionedTransaction(tightMsg);
+            finalVtx.sign([this.wallet, ...additionalSigners]);
+          }
         }
 
         // ── Step 5: Multi-Endpoint Broadcast ──
-        const txBytes = Buffer.from(vtx.serialize());
+        const txBytes = Buffer.from(finalVtx.serialize());
         const confirmStart = Date.now();
 
         // ── Partition Guard ──
