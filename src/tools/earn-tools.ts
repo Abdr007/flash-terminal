@@ -232,6 +232,10 @@ export const earnRemoveLiquidityTool: ToolDefinition = {
     const client = context.flashClient;
     if (!client.removeLiquidity) return { success: false, message: NOT_AVAILABLE_MSG };
 
+    if (!Number.isFinite(percent) || percent < 1 || percent > 100) {
+      return { success: false, message: chalk.red('  Percentage must be between 1 and 100.') };
+    }
+
     const poolName = poolAlias ?? 'Crypto.1';
     const pool = resolvePool(poolName);
     if (!pool) return poolNotFound(poolName);
@@ -270,6 +274,10 @@ export const earnStakeTool: ToolDefinition = {
     const client = context.flashClient;
     if (!client.stakeFLP) return { success: false, message: NOT_AVAILABLE_MSG };
 
+    if (!Number.isFinite(amount) || amount <= 0) {
+      return { success: false, message: chalk.red('  Amount must be a positive number.') };
+    }
+
     const poolName = poolAlias ?? 'Crypto.1';
     const pool = resolvePool(poolName);
     if (!pool) return poolNotFound(poolName);
@@ -307,6 +315,10 @@ export const earnUnstakeTool: ToolDefinition = {
     const { percent, pool: poolAlias } = params as { percent: number; pool?: string };
     const client = context.flashClient;
     if (!client.unstakeFLP) return { success: false, message: NOT_AVAILABLE_MSG };
+
+    if (!Number.isFinite(percent) || percent < 1 || percent > 100) {
+      return { success: false, message: chalk.red('  Percentage must be between 1 and 100.') };
+    }
 
     const poolName = poolAlias ?? 'Crypto.1';
     const pool = resolvePool(poolName);
@@ -521,6 +533,11 @@ export const earnSimulateTool: ToolDefinition = {
   }),
   execute: async (params, _context): Promise<ToolResult> => {
     const { pool: poolAlias, amount } = params as { pool?: string; amount: number };
+
+    if (!Number.isFinite(amount) || amount <= 0) {
+      return { success: false, message: chalk.red('  Amount must be a positive number.') };
+    }
+
     const poolName = poolAlias ?? 'Crypto.1';
     const pool = resolvePool(poolName);
     if (!pool) return poolNotFound(poolName);

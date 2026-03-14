@@ -8,7 +8,7 @@
 import { getPoolRegistry, PoolInfo } from './pool-registry.js';
 
 const FSTATS_BASE = 'https://fstats.io/api/v1';
-const CACHE_TTL_MS = 30_000;
+const CACHE_TTL_MS = 10_000; // 10s — short-lived to avoid stale yield data
 
 export interface PoolMetrics {
   poolId: string;
