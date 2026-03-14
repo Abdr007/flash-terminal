@@ -2167,15 +2167,11 @@ export class FlashClient implements IFlashClient {
       const sdkSide = toSdkSide(side);
       const { targetSymbol, collateralSymbol, targetToken } = this.resolveOrderTokens(poolConfig, market, sdkSide);
 
-      // For limit orders: reserve = what user deposits (USDC)
-      // collateral = protocol market collateral (may differ from reserve for longs)
-      // receive = what user gets back on cancellation (USDC)
+      // Reserve = what user deposits (USDC)
+      // Receive = what user gets back on cancellation (USDC)
+      // Collateral = market's native collateral (SOL for SOL-LONG) — must match market PDA
       const reserveSymbol = DEFAULT_COLLATERAL_TOKEN;
       const receiveSymbol = DEFAULT_COLLATERAL_TOKEN;
-
-      // Override collateralSymbol to match reserveSymbol for USDC-based limit orders
-      // The protocol handles the swap internally when the order triggers
-      const orderCollateralSymbol = reserveSymbol;
 
       // Get price map and custody for size calculation
       const priceMap = await this.getPriceMap(poolConfig);
@@ -2211,8 +2207,10 @@ export class FlashClient implements IFlashClient {
       const slPrice = stopLoss ? this.toContractOraclePrice(stopLoss) : this.zeroContractPrice();
       const tpPrice = takeProfit ? this.toContractOraclePrice(takeProfit) : this.zeroContractPrice();
 
+      logger.info('CLIENT', `Limit order: target=${targetSymbol} collateral=${collateralSymbol} reserve=${reserveSymbol} receive=${receiveSymbol} side=${sdkSide === Side.Long ? 'Long' : 'Short'} price=${limitPrice} collateralNative=${collateralNative.toString()} sizeAmount=${sizeAmount.toString()}`);
+
       const result = await this.perpClient.placeLimitOrder(
-        targetSymbol, orderCollateralSymbol, reserveSymbol, receiveSymbol,
+        targetSymbol, collateralSymbol, reserveSymbol, receiveSymbol,
         sdkSide, limitPriceContract, collateralNative, sizeAmount,
         slPrice, tpPrice, poolConfig
       );
