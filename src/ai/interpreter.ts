@@ -7,7 +7,7 @@ import { getErrorMessage } from '../utils/retry.js';
 import { resolveMarket, normalizeAssetText } from '../utils/market-resolver.js';
 import { expandLearnedAlias } from '../cli/learned-aliases.js';
 import { expandTemplate } from '../cli/trade-templates.js';
-import { recordTradeCommand } from '../cli/trade-predictor.js';
+import { recordTradeCommand, getPreferredLeverage } from '../cli/trade-predictor.js';
 import {
   detectMalformedCommand,
   invalidLeverageAlert,
@@ -388,8 +388,13 @@ function flexParseOpen(input: string): ParsedIntent | null {
   }
 
   if (!collateral || !Number.isFinite(collateral) || collateral <= 0) return null;
-  // If no leverage found, use default (2x) — allows "long sol 10" to work
-  if (!leverage) leverage = 2;
+  // If no leverage found, try preferred from history, then default (2x)
+  let leverageDefaulted = false;
+  if (!leverage) {
+    const historyLev = getPreferredLeverage(market ?? '');
+    leverage = historyLev ?? 2;
+    leverageDefaulted = true;
+  }
   if (!Number.isFinite(leverage) || leverage < 1) return null;
 
   const result: Record<string, unknown> = {

@@ -1824,6 +1824,39 @@ export class FlashTerminal {
       }
     }
 
+    // ─── Ambiguous Resolution ────────────────────────────────────
+    // If the parser returned Help (unknown command), try resolving as an
+    // ambiguous trade command using history defaults (e.g. "long sol" → fill leverage + collateral)
+    if (intent.action === ActionType.Help && !fastIntent) {
+      try {
+        const { resolveAmbiguous, needsConfirmation, formatConfirmation } = await import('../ai/intent-scorer.js');
+        const ctx = (this.interpreter as any).context;
+        const scored = resolveAmbiguous(
+          input,
+          ctx?.lastMarket,
+          ctx?.lastSide,
+          ctx?.lastLeverage,
+          ctx?.lastCollateral,
+        );
+        if (scored) {
+          if (IS_AGENT || !needsConfirmation(scored)) {
+            intent = scored.intent;
+          } else {
+            // Show what we interpreted and ask for confirmation
+            console.log('');
+            console.log(formatConfirmation(scored));
+            const ok = await this.confirm('Execute?');
+            if (ok) {
+              intent = scored.intent;
+            } else {
+              console.log(chalk.dim('  Cancelled.'));
+              return;
+            }
+          }
+        }
+      } catch { /* scorer not available — fall through to normal unknown path */ }
+    }
+
     // ─── Command Alert Intercept ──────────────────────────────────
     // If the interpreter returned Help with an _alert, display the alert message
     // instead of the generic unknown command output.
