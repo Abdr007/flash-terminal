@@ -1824,9 +1824,30 @@ export class FlashTerminal {
       }
     }
 
+    // ─── Interactive Trade Builder ──────────────────────────────
+    // If the parser returned Help (unknown command), check if it's an
+    // incomplete trade command and guide the user through completion.
+    if (intent.action === ActionType.Help && !fastIntent && !IS_AGENT) {
+      try {
+        const { detectPartialTrade, buildTradeInteractively } = await import('./interactive-builder.js');
+        const partial = detectPartialTrade(input);
+        if (partial) {
+          const builtIntent = await buildTradeInteractively(
+            (prompt: string) => this.ask(prompt),
+            partial,
+            this.context.degenMode,
+          );
+          if (builtIntent) {
+            intent = builtIntent;
+          } else {
+            return; // User cancelled
+          }
+        }
+      } catch { /* builder not available */ }
+    }
+
     // ─── Ambiguous Resolution ────────────────────────────────────
-    // If the parser returned Help (unknown command), try resolving as an
-    // ambiguous trade command using history defaults (e.g. "long sol" → fill leverage + collateral)
+    // If still Help, try resolving as an ambiguous trade using history defaults
     if (intent.action === ActionType.Help && !fastIntent) {
       try {
         const { resolveAmbiguous, needsConfirmation, formatConfirmation } = await import('../ai/intent-scorer.js');
