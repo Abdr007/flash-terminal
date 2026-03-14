@@ -1,6 +1,7 @@
 import chalk from 'chalk';
 import { TradeSide, Position, MarketData, ToolResult } from '../types/index.js';
 import { theme } from '../cli/theme.js';
+import { IS_AGENT } from '../no-dna.js';
 
 export function formatUsd(value: number): string {
   if (!Number.isFinite(value)) return 'N/A';
@@ -113,6 +114,7 @@ export function padVisibleStart(str: string, width: number): string {
 }
 
 export function banner(): string {
+  if (IS_AGENT) return ''; // NO_DNA: no ASCII art / decorations
   return [
     '',
     `  ${theme.accentBold('FLASH AI TERMINAL')}`,

@@ -5,6 +5,7 @@ import { loadConfig } from './config/index.js';
 import { FlashTerminal } from './cli/terminal.js';
 import { getErrorMessage } from './utils/retry.js';
 import { BUILD_INFO } from './build-info.js';
+import { IS_AGENT, agentError } from './no-dna.js';
 import chalk from 'chalk';
 
 // Suppress noisy @solana/web3.js 429 retry messages that pollute the terminal prompt.
@@ -26,13 +27,21 @@ console.error = (...args: unknown[]) => {
 // reject during RPC outages. Crashing the terminal for a background task error
 // would bypass graceful shutdown (history save, cleanup).
 process.on('unhandledRejection', (reason) => {
-  console.error(chalk.red(`\n  Unhandled async error: ${getErrorMessage(reason)}`));
-  console.error(chalk.dim('  The terminal is still running. If this persists, restart with "exit".\n'));
+  if (IS_AGENT) {
+    agentError('unhandled_rejection', { detail: getErrorMessage(reason) });
+  } else {
+    console.error(chalk.red(`\n  Unhandled async error: ${getErrorMessage(reason)}`));
+    console.error(chalk.dim('  The terminal is still running. If this persists, restart with "exit".\n'));
+  }
 });
 
 process.on('uncaughtException', (err) => {
-  console.error(chalk.red(`\n  Fatal error: ${getErrorMessage(err)}\n`));
-  process.exit(1);
+  if (IS_AGENT) {
+    agentError('fatal_error', { detail: getErrorMessage(err) }, 1);
+  } else {
+    console.error(chalk.red(`\n  Fatal error: ${getErrorMessage(err)}\n`));
+    process.exit(1);
+  }
 });
 
 // NOTE: SIGTERM is handled by FlashTerminal.start() once the terminal is
@@ -77,6 +86,11 @@ program
   .description('List all available markets')
   .action(async () => {
     const { POOL_MARKETS } = await import('./config/index.js');
+    if (IS_AGENT) {
+      const { agentOutput } = await import('./no-dna.js');
+      agentOutput({ action: 'list_markets', pools: POOL_MARKETS });
+      return;
+    }
     console.log(chalk.bold('\n  Flash Trade Markets\n'));
     for (const [pool, markets] of Object.entries(POOL_MARKETS)) {
       console.log(`  ${chalk.yellow(pool)}: ${markets.join(', ')}`);
@@ -95,6 +109,11 @@ program
 
     try {
       const stats = await fstats.getOverviewStats(opts.period);
+      if (IS_AGENT) {
+        const { agentOutput } = await import('./no-dna.js');
+        agentOutput({ action: 'stats', period: opts.period, ...stats });
+        return;
+      }
       console.log(chalk.bold('\n  Flash Trade Stats\n'));
       console.log(`  Volume:     ${formatUsd(stats.volumeUsd)} (${colorPercent(stats.volumeChangePct)})`);
       console.log(`  Trades:     ${stats.trades.toLocaleString()}`);
@@ -104,7 +123,11 @@ program
       console.log(`  Traders:    ${stats.uniqueTraders}`);
       console.log();
     } catch (error: unknown) {
-      console.error(chalk.red(`  Error: ${getErrorMessage(error)}`));
+      if (IS_AGENT) {
+        agentError('stats_failed', { detail: getErrorMessage(error) });
+      } else {
+        console.error(chalk.red(`  Error: ${getErrorMessage(error)}`));
+      }
     }
   });
 
@@ -125,6 +148,18 @@ program
         parseInt(opts.days ?? '30'),
         parseInt(opts.limit ?? '10')
       );
+      if (IS_AGENT) {
+        const { agentOutput } = await import('./no-dna.js');
+        agentOutput({
+          action: 'leaderboard',
+          metric: opts.metric ?? 'pnl',
+          days: parseInt(opts.days ?? '30'),
+          entries: entries.map(e => ({
+            rank: e.rank, address: e.address, pnl: e.pnl, volume: e.volume, trades: e.trades,
+          })),
+        });
+        return;
+      }
       console.log(chalk.bold(`\n  Leaderboard — ${(opts.metric ?? 'pnl').toUpperCase()} (${opts.days ?? '30'}d)\n`));
 
       const headers = ['#', 'Trader', 'PnL', 'Volume', 'Trades'];
@@ -138,7 +173,11 @@ program
       console.log(formatTable(headers, rows));
       console.log();
     } catch (error: unknown) {
-      console.error(chalk.red(`  Error: ${getErrorMessage(error)}`));
+      if (IS_AGENT) {
+        agentError('leaderboard_failed', { detail: getErrorMessage(error) });
+      } else {
+        console.error(chalk.red(`  Error: ${getErrorMessage(error)}`));
+      }
     }
   });
 

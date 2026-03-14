@@ -37,6 +37,7 @@ import { buildFastDispatch } from './command-registry.js';
 import { getCommandGuidance } from '../utils/command-guidance.js';
 import { resolveMarket } from '../utils/market-resolver.js';
 import { computeSimulationLiquidationPrice, isDivergenceOk } from '../utils/protocol-liq.js';
+import { IS_AGENT, agentError, agentOutput } from '../no-dna.js';
 
 
 /** Alias for backward compat — delegates to centralized resolver */
@@ -433,12 +434,14 @@ export class FlashTerminal {
     const prefetchedBalances = await balancePromise;
     await this.showIntelligenceScreen(walletInfo?.name ?? null, prefetchedBalances);
 
-    // ─── Start Status Bar ─────────────────────────────────────────────
-    this.statusBar = new StatusBar(this.rl, this.flashClient, this.rpcManager, {
-      simulationMode: this.config.simulationMode,
-      walletName: walletInfo?.name ?? (this.config.simulationMode ? 'paper' : 'N/A'),
-    });
-    this.statusBar.start();
+    // ─── Start Status Bar (disabled under NO_DNA — no TUI elements) ───
+    if (!IS_AGENT) {
+      this.statusBar = new StatusBar(this.rl, this.flashClient, this.rpcManager, {
+        simulationMode: this.config.simulationMode,
+        walletName: walletInfo?.name ?? (this.config.simulationMode ? 'paper' : 'N/A'),
+      });
+      this.statusBar.start();
+    }
 
     // ─── Signal Handlers ──────────────────────────────────────────────
     process.on('SIGINT', () => this.shutdown());
@@ -519,6 +522,12 @@ export class FlashTerminal {
   // ─── Welcome Screen ────────────────────────────────────────────────
 
   private async showModeSelection(): Promise<'live' | 'simulation' | 'exit'> {
+    // NO_DNA: never prompt — default to simulation (safe), or live if SIMULATION_MODE=false
+    if (IS_AGENT) {
+      const explicitLive = process.env.SIMULATION_MODE?.toLowerCase() === 'false';
+      return explicitLive ? 'live' : 'simulation';
+    }
+
     console.log('');
     console.log(`  ${theme.accentBold('FLASH TERMINAL')}`);
     console.log(`  ${theme.separator(32)}`);
@@ -568,6 +577,33 @@ export class FlashTerminal {
     const wallets = store.listWallets();
     let defaultWallet = store.getDefault();
     const sessionWallet = getLastWallet();
+
+    // NO_DNA: never prompt — auto-connect default/only wallet or fail
+    if (IS_AGENT) {
+      if (!defaultWallet && wallets.length === 1) {
+        store.setDefault(wallets[0]);
+        defaultWallet = wallets[0];
+      }
+      const target = defaultWallet ?? sessionWallet;
+      if (!target || !wallets.includes(target)) {
+        agentError('no_wallet', {
+          detail: 'Live mode requires a configured wallet. Set a default wallet first.',
+          available_wallets: wallets,
+        });
+        return null;
+      }
+      try {
+        const walletPath = store.getWalletPath(target);
+        const info = this.tryConnectWallet(walletPath);
+        if (info && this.walletManager.isConnected) {
+          updateLastWallet(target);
+          return { ...info, name: target };
+        }
+      } catch {
+        agentError('wallet_connect_failed', { wallet: target });
+      }
+      return null;
+    }
 
     // No wallets saved — first-time setup
     if (wallets.length === 0) {
@@ -908,6 +944,23 @@ export class FlashTerminal {
   // ─── Intelligence Screen ─────────────────────────────────────────
 
   private async showIntelligenceScreen(walletName: string | null, prefetchedBalances?: unknown): Promise<void> {
+    // NO_DNA: emit structured ready event, skip TUI
+    if (IS_AGENT) {
+      const isSim = this.config.simulationMode;
+      const readyData: Record<string, unknown> = {
+        status: 'ready',
+        mode: isSim ? 'simulation' : 'live',
+        wallet: walletName ?? (isSim ? 'paper' : 'none'),
+        wallet_address: this.walletManager?.address ?? null,
+        rpc_endpoint: this.rpcManager?.activeEndpoint?.label ?? null,
+      };
+      if (isSim) {
+        readyData.balance_usdc = this.flashClient.getBalance();
+      }
+      agentOutput(readyData);
+      return;
+    }
+
     const isSim = this.config.simulationMode;
     const modeLabel = isSim ? 'SIMULATION' : 'LIVE TRADING';
     const modeBg = isSim ? theme.simBadge : theme.liveBadge;
@@ -1298,6 +1351,11 @@ export class FlashTerminal {
 
   /** Update prompt prefix based on current mode */
   private updatePrompt(): void {
+    if (IS_AGENT) {
+      // NO_DNA: minimal plain prompt — no colors, no decorations
+      this.rl.setPrompt('');
+      return;
+    }
     const prefix = this.config.simulationMode
       ? theme.warning('flash') + theme.dim(' [sim]')
       : theme.negative('flash') + theme.dim(' [live]');
@@ -1653,14 +1711,14 @@ export class FlashTerminal {
       intent = { action: ActionType.TxDebug, signature, showState } as ParsedIntent;
     } else {
       // Full interpreter path (regex + AI)
-      process.stdout.write(chalk.dim('  Parsing...\r'));
+      if (!IS_AGENT) process.stdout.write(chalk.dim('  Parsing...\r'));
       try {
         intent = await withTimeout(
           this.interpreter.parseIntent(input),
           COMMAND_TIMEOUT_MS,
           'parsing',
         );
-        process.stdout.write('              \r');
+        if (!IS_AGENT) process.stdout.write('              \r');
       } catch (error: unknown) {
         console.log(chalk.red(`  ✖ Parse error: ${getErrorMessage(error)}`));
         return;
@@ -1671,6 +1729,12 @@ export class FlashTerminal {
     // If the interpreter returned Help with an _alert, display the alert message
     // instead of the generic unknown command output.
     if (intent.action === ActionType.Help && !fastIntent) {
+      // NO_DNA: structured error for unknown commands
+      if (IS_AGENT) {
+        agentError('unknown_command', { input });
+        return;
+      }
+
       const alert = (intent as Record<string, unknown>)._alert as { message: string } | undefined;
       if (alert?.message) {
         console.log(alert.message);
@@ -1779,12 +1843,22 @@ export class FlashTerminal {
         if (!health.healthy) reasons.push('RPC unreachable');
         if (health.latencyMs > 3000) reasons.push(`latency ${health.latencyMs}ms`);
         if (health.slotLag !== undefined && health.slotLag > 50) reasons.push(`${health.slotLag} slots behind`);
-        console.log(chalk.yellow(`\n  ⚠ RPC health warning: ${reasons.join(', ')}`));
-        console.log(chalk.dim('    Trading may be unreliable. Proceed with caution.'));
-        const proceed = await this.confirm('Continue anyway?');
-        if (!proceed) {
-          console.log(chalk.dim('  Cancelled.'));
-          return;
+
+        if (IS_AGENT) {
+          // NO_DNA: fail with structured error instead of prompting
+          if (!health.healthy) {
+            agentError('rpc_unhealthy', { reasons });
+            return;
+          }
+          // Degraded but reachable — proceed with warning metadata
+        } else {
+          console.log(chalk.yellow(`\n  ⚠ RPC health warning: ${reasons.join(', ')}`));
+          console.log(chalk.dim('    Trading may be unreliable. Proceed with caution.'));
+          const proceed = await this.confirm('Continue anyway?');
+          if (!proceed) {
+            console.log(chalk.dim('  Cancelled.'));
+            return;
+          }
         }
       }
 
@@ -1819,7 +1893,7 @@ export class FlashTerminal {
     }
 
     // Execute tool
-    process.stdout.write(chalk.dim('  Executing...\r'));
+    if (!IS_AGENT) process.stdout.write(chalk.dim('  Executing...\r'));
 
     let result: ToolResult;
     try {
@@ -1828,12 +1902,77 @@ export class FlashTerminal {
         COMMAND_TIMEOUT_MS,
         'execution',
       );
-      process.stdout.write('               \r');
+      if (!IS_AGENT) process.stdout.write('               \r');
     } catch (error: unknown) {
-      console.log(chalk.red(`  ✖ Execution error: ${getErrorMessage(error)}`));
+      if (IS_AGENT) {
+        agentError('execution_error', { detail: getErrorMessage(error) });
+      } else {
+        console.log(chalk.red(`  ✖ Execution error: ${getErrorMessage(error)}`));
+      }
       return;
     }
 
+    // ── NO_DNA: structured JSON output ──────────────────────────────
+    if (IS_AGENT) {
+      // Build structured response from tool result
+      const agentPayload: Record<string, unknown> = {
+        status: result.success ? 'success' : 'error',
+        action: intent.action,
+      };
+
+      // Include structured data if available
+      if (result.data) {
+        const { executeAction, ...safeData } = result.data;
+        Object.assign(agentPayload, safeData);
+      }
+      if (result.txSignature) agentPayload.tx_signature = result.txSignature;
+
+      // Auto-confirm trades (NO_DNA: never prompt)
+      if (result.requiresConfirmation && result.data?.executeAction) {
+        try {
+          const execResult = await withTimeout(
+            result.data.executeAction(),
+            COMMAND_TIMEOUT_MS,
+            'transaction',
+          );
+          agentPayload.status = execResult.success ? 'submitted' : 'failed';
+          if (execResult.txSignature) agentPayload.tx_signature = execResult.txSignature;
+          if (execResult.data) {
+            const { executeAction: _, ...execSafeData } = execResult.data;
+            Object.assign(agentPayload, execSafeData);
+          }
+
+          // Post-trade verification (live mode only)
+          if (!this.config.simulationMode && execResult.data?.market && execResult.data?.side) {
+            const rec = getReconciler();
+            if (rec) {
+              rec.verifyTrade(
+                execResult.data.market as string,
+                execResult.data.side as string,
+              ).catch(() => {});
+            }
+          }
+        } catch (error: unknown) {
+          agentPayload.status = 'failed';
+          agentPayload.error = getErrorMessage(error);
+        }
+      }
+
+      if (!result.success && !result.requiresConfirmation) {
+        agentError(intent.action, agentPayload);
+      } else {
+        agentOutput(agentPayload);
+      }
+
+      // Handle wallet state changes
+      if (result.data?.disconnected) this.handleWalletDisconnected();
+      if (result.data?.walletConnected && !this.config.simulationMode) {
+        await this.handleWalletReconnected();
+      }
+      return;
+    }
+
+    // ── Human mode: existing display logic ──────────────────────────
     // Display result with success/error indicator
     console.log(result.message);
     if (!result.requiresConfirmation) {
@@ -1905,6 +2044,7 @@ export class FlashTerminal {
    * Format: [153ms] or [7.4s]
    */
   private renderExecutionTimer(): void {
+    if (IS_AGENT) return; // NO_DNA: no TUI decorations
     if (!this.lastCommand || this.lastCommandMs < 1) return;
 
     // Skip for trivial commands
@@ -1969,6 +2109,25 @@ export class FlashTerminal {
    *   Open Interest:  fstats API (aggregated Flash protocol state)
    */
   private async handleMarketMonitor(filterMarket?: string): Promise<void> {
+    // NO_DNA: TUI monitor is not compatible with agent mode — return snapshot instead
+    if (IS_AGENT) {
+      const { PriceService } = await import('../data/prices.js');
+      const { POOL_MARKETS } = await import('../config/index.js');
+      const priceSvc = new PriceService();
+      const allSymbols = [...new Set(Object.values(POOL_MARKETS).flat().map(s => s.toUpperCase()))];
+      try {
+        const prices = await priceSvc.getPrices(allSymbols);
+        const snapshot = allSymbols.map(sym => {
+          const p = prices.get(sym);
+          return { symbol: sym, price: p?.price ?? null, change_24h: p?.priceChange24h ?? null };
+        });
+        agentOutput({ action: 'market_monitor', markets: snapshot });
+      } catch (err: unknown) {
+        agentError('market_monitor_failed', { detail: getErrorMessage(err) });
+      }
+      return;
+    }
+
     const { PriceService } = await import('../data/prices.js');
     const { TermRenderer } = await import('./renderer.js');
     const priceSvc = new PriceService();
