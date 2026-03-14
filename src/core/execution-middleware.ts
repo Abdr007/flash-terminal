@@ -3,6 +3,22 @@ import { ActionType, ToolContext, ToolResult, ParsedIntent } from '../types/inde
 import { getLogger } from '../utils/logger.js';
 import { getErrorMessage } from '../utils/retry.js';
 
+// ─── Structured Error Codes ─────────────────────────────────────────────────
+
+export enum ErrorCode {
+  WALLET_DISCONNECTED = 'ERR_WALLET_DISCONNECTED',
+  WALLET_READ_ONLY = 'ERR_WALLET_READ_ONLY',
+  POOL_NOT_FOUND = 'ERR_POOL_NOT_FOUND',
+  INVALID_AMOUNT = 'ERR_INVALID_AMOUNT',
+  INVALID_PERCENTAGE = 'ERR_INVALID_PERCENTAGE',
+  INVALID_MARKET = 'ERR_INVALID_MARKET',
+  INSUFFICIENT_BALANCE = 'ERR_INSUFFICIENT_BALANCE',
+  SIMULATION_FAILED = 'ERR_SIMULATION_FAILED',
+  RPC_UNAVAILABLE = 'ERR_RPC_UNAVAILABLE',
+  RATE_LIMITED = 'ERR_RATE_LIMITED',
+  UNKNOWN_COMMAND = 'ERR_UNKNOWN_COMMAND',
+}
+
 // ─── Trading Actions ─────────────────────────────────────────────────────────
 
 const TRADING_ACTIONS = new Set<ActionType>([

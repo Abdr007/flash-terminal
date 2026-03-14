@@ -499,16 +499,23 @@ export class FlashTerminal {
       this.processingWarnShown = false;
       this.statusBar?.suspend();
       const cmdStart = Date.now();
+      let cmdFailed = false;
       try {
         await this.handleInput(trimmed);
       } catch (error: unknown) {
         console.log(chalk.red(`  ✖ Error: ${getErrorMessage(error)}`));
+        cmdFailed = true;
       } finally {
         this.processing = false;
         this.processingWarnShown = false;
         this.bufferedLine = null;
         this.lastCommand = trimmed;
         this.lastCommandMs = Date.now() - cmdStart;
+        // Record session metrics
+        try {
+          const { getSessionMetrics } = await import('../core/session-metrics.js');
+          getSessionMetrics().recordCommand(this.lastCommandMs, !cmdFailed);
+        } catch { /* non-critical */ }
         this.renderExecutionTimer();
         this.statusBar?.resume();
         this.saveHistory();
@@ -1491,6 +1498,36 @@ export class FlashTerminal {
     const lower = input.toLowerCase();
 
     // ─── Doctor Diagnostic Intercept ───────────────────────────────
+    // ─── Session Metrics ──────────────────────────────────────
+    if (lower === 'metrics' || lower === 'flash metrics' || lower === 'session metrics') {
+      try {
+        const { getSessionMetrics } = await import('../core/session-metrics.js');
+        const m = getSessionMetrics();
+        const stats = m.getStats();
+
+        if (IS_AGENT) {
+          agentOutput({ action: 'metrics', ...stats, uptime: m.getUptime(), cache_hit_rate: m.getCacheHitRate() });
+          return;
+        }
+
+        console.log('');
+        console.log(`  ${theme.accentBold('SESSION METRICS')}`);
+        console.log(`  ${theme.separator(45)}`);
+        console.log('');
+        console.log(theme.pair('Uptime', m.getUptime()));
+        console.log(theme.pair('Commands', `${stats.commandCount} (${stats.errorCount} errors)`));
+        console.log(theme.pair('Avg Latency', `${stats.avgLatencyMs}ms`));
+        console.log(theme.pair('Peak Latency', `${stats.peakLatencyMs}ms`));
+        console.log(theme.pair('Cache Hit Rate', `${m.getCacheHitRate()}%`));
+        console.log(theme.pair('RPC Requests', `${stats.rpcRequests} (${stats.rpcFailures} failed)`));
+        console.log(theme.pair('TX Submitted', `${stats.txSubmitted} (${stats.txConfirmed} confirmed)`));
+        console.log('');
+      } catch {
+        console.log(chalk.dim('  Metrics not available.'));
+      }
+      return;
+    }
+
     if (lower === 'doctor') {
       const output = await runDoctor(
         this.flashClient,
