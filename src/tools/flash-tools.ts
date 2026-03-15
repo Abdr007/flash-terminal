@@ -2869,7 +2869,7 @@ const txMetricsTool: ToolDefinition = {
       theme.pair('Leader Routed', `${s.leaderRoutedPct}%`, w),
       theme.pair('TPU Forwarded', `${s.tpuForwardedPct}%`, w),
       theme.pair('Avg Slot Delay', s.avgSlotDelay > 0 ? `${s.avgSlotDelay} slots` : 'n/a', w),
-      theme.pair('Fastest Endpoint', s.fastestEndpoint ?? 'n/a', w),
+      theme.pair('Fastest Endpoint', s.fastestEndpoint ? s.fastestEndpoint.replace(/[?&](api[-_]?key|token|secret|auth)=[^&]*/gi, '') .replace(/\/v2\/[a-zA-Z0-9_-]{10,}/, '/v2/***') : 'n/a', w),
       '',
     ];
 
