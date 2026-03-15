@@ -89,7 +89,24 @@ CLI Interface ─── AI Interpreter ─── Tool Engine ─── Flash Cli
 
 ---
 
-## Installation
+## Getting Started
+
+### Install
+
+**npm (recommended):**
+
+```bash
+npm install -g flash-terminal
+```
+
+**Homebrew (macOS):**
+
+```bash
+brew tap Abdr007/flash-terminal
+brew install flash-terminal
+```
+
+**From source:**
 
 ```bash
 git clone https://github.com/Abdr007/flash-terminal.git
@@ -98,7 +115,7 @@ npm install
 npm run build
 ```
 
-Configure your environment:
+### Configure
 
 ```bash
 cp .env.example .env
@@ -115,18 +132,33 @@ Set the required variables in `.env`:
 
 **Requirements:** Node.js >= 20 · Solana RPC endpoint (mainnet-beta)
 
----
+### Wallet Setup
 
-## Running the Terminal
+Flash Terminal loads your wallet from a Solana CLI keypair file:
 
 ```bash
-npm start
+# Generate a new keypair (if you don't have one)
+solana-keygen new -o ~/.config/solana/id.json
+
+# Or use an existing keypair
+export WALLET_PATH=~/.config/solana/id.json
 ```
 
-Or in development mode:
+For live trading, ensure your wallet has:
+- SOL for transaction fees (~0.01 SOL per trade)
+- USDC for collateral deposits
+
+### Run
 
 ```bash
-npm run dev
+flash
+```
+
+Or from source:
+
+```bash
+npm start        # production
+npm run dev      # development (tsx)
 ```
 
 On startup, the terminal presents a mode selection:
@@ -258,6 +290,47 @@ tp status
 ```
 
 The TP/SL engine evaluates targets every 5 seconds using live Pyth oracle prices. Spike protection requires 2 consecutive confirmation ticks before triggering a close — preventing false triggers on momentary price wicks. The circuit breaker and kill switch override TP/SL execution if active.
+
+---
+
+## Earn (Liquidity)
+
+Provide liquidity to Flash Trade pools and earn yield:
+
+```
+earn                          # View all pools with live yield metrics
+earn info crypto              # Detailed pool information
+earn deposit $100 crypto      # Deposit USDC → mint FLP (auto-compound)
+earn withdraw 100% crypto     # Burn FLP → receive USDC
+earn stake $200 governance    # Stake FLP tokens for USDC rewards
+earn unstake 25% governance   # Unstake FLP tokens
+earn claim                    # Claim LP/staking USDC rewards
+earn positions                # View your active LP positions
+earn best                     # Rank pools by yield + risk
+earn simulate $1000 crypto    # Project yield returns for a deposit
+earn dashboard                # Liquidity portfolio overview
+```
+
+**FLP** — Auto-compounding liquidity token. Fees are reinvested automatically. **sFLP** — Staked FLP where fees are paid out in USDC hourly.
+
+---
+
+## FAF Token Staking
+
+Manage FAF governance token staking, revenue sharing, and VIP tiers:
+
+```
+faf                    # FAF staking dashboard
+faf stake 1000         # Stake FAF for revenue sharing + VIP
+faf unstake 500        # Request unstake (90-day linear unlock)
+faf claim              # Claim FAF rewards + USDC revenue
+faf tier               # View VIP tier levels and benefits
+faf rewards            # Show pending rewards + revenue
+faf referral           # Referral status + claimable rebates
+faf points             # Voltage points tier + multiplier
+```
+
+**VIP Tiers** — Staking FAF unlocks fee discounts, higher referral rebates, and DCA discounts (Level 0–5). **Revenue Sharing** — 50% of protocol revenue distributed to stakers in USDC.
 
 ---
 
