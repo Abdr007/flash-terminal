@@ -16,6 +16,8 @@ import { ActionType } from '../types/index.js';
 
 export type CommandCategory =
   | 'Trading'
+  | 'Earn (Liquidity)'
+  | 'FAF Token'
   | 'Market Data & Analytics'
   | 'Portfolio & Risk'
   | 'Protocol Inspection'
@@ -500,7 +502,7 @@ export const COMMAND_REGISTRY: CommandEntry[] = [
   {
     name: 'earn add',
     action: null,
-    category: 'Trading',
+    category: 'Earn (Liquidity)',
     description: 'Add liquidity to pool',
     helpFormat: 'earn add $100 crypto',
     aliases: ['earn add-liquidity'],
@@ -509,7 +511,7 @@ export const COMMAND_REGISTRY: CommandEntry[] = [
   {
     name: 'earn remove',
     action: null,
-    category: 'Trading',
+    category: 'Earn (Liquidity)',
     description: 'Remove liquidity from pool',
     helpFormat: 'earn remove 50% crypto',
     aliases: ['earn remove-liquidity'],
@@ -518,7 +520,7 @@ export const COMMAND_REGISTRY: CommandEntry[] = [
   {
     name: 'earn stake',
     action: null,
-    category: 'Trading',
+    category: 'Earn (Liquidity)',
     description: 'Stake FLP tokens',
     helpFormat: 'earn stake $200 governance',
     aliases: ['earn stake-flp'],
@@ -527,7 +529,7 @@ export const COMMAND_REGISTRY: CommandEntry[] = [
   {
     name: 'earn unstake',
     action: null,
-    category: 'Trading',
+    category: 'Earn (Liquidity)',
     description: 'Unstake FLP tokens',
     helpFormat: 'earn unstake 25% governance',
     aliases: ['earn unstake-flp'],
@@ -536,21 +538,21 @@ export const COMMAND_REGISTRY: CommandEntry[] = [
   {
     name: 'earn claim',
     action: ActionType.EarnClaimRewards,
-    category: 'Trading',
+    category: 'Earn (Liquidity)',
     description: 'Claim LP/staking rewards',
     aliases: ['earn claim-rewards', 'earn claim rewards'],
   },
   {
     name: 'earn',
     action: ActionType.EarnStatus,
-    category: 'Trading',
+    category: 'Earn (Liquidity)',
     description: 'View earn pools with live yield',
     aliases: ['earn status', 'earn pools'],
   },
   {
     name: 'earn info',
     action: null,
-    category: 'Trading',
+    category: 'Earn (Liquidity)',
     description: 'Pool details & yield data',
     helpFormat: 'earn info <pool>',
     parameterized: true,
@@ -558,7 +560,7 @@ export const COMMAND_REGISTRY: CommandEntry[] = [
   {
     name: 'earn deposit',
     action: null,
-    category: 'Trading',
+    category: 'Earn (Liquidity)',
     description: 'Deposit USDC → FLP (auto-compound)',
     helpFormat: 'earn deposit $100 crypto',
     parameterized: true,
@@ -566,7 +568,7 @@ export const COMMAND_REGISTRY: CommandEntry[] = [
   {
     name: 'earn withdraw',
     action: null,
-    category: 'Trading',
+    category: 'Earn (Liquidity)',
     description: 'Withdraw FLP → USDC',
     helpFormat: 'earn withdraw 100% crypto',
     parameterized: true,
@@ -574,20 +576,20 @@ export const COMMAND_REGISTRY: CommandEntry[] = [
   {
     name: 'earn positions',
     action: ActionType.EarnPositions,
-    category: 'Trading',
+    category: 'Earn (Liquidity)',
     description: 'View your LP positions',
     aliases: ['earn pos'],
   },
   {
     name: 'earn best',
     action: ActionType.EarnBest,
-    category: 'Trading',
+    category: 'Earn (Liquidity)',
     description: 'Rank pools by yield + risk',
   },
   {
     name: 'earn simulate',
     action: null,
-    category: 'Trading',
+    category: 'Earn (Liquidity)',
     description: 'Project yield returns',
     helpFormat: 'earn simulate $1000 crypto',
     parameterized: true,
@@ -595,35 +597,35 @@ export const COMMAND_REGISTRY: CommandEntry[] = [
   {
     name: 'earn dashboard',
     action: ActionType.EarnDashboard,
-    category: 'Trading',
+    category: 'Earn (Liquidity)',
     description: 'Liquidity portfolio overview',
     aliases: ['earn dash'],
   },
   {
     name: 'earn pnl',
     action: ActionType.EarnPnl,
-    category: 'Trading',
+    category: 'Earn (Liquidity)',
     description: 'Earn profit & loss tracking',
     aliases: ['earn profit', 'earn performance'],
   },
   {
     name: 'earn demand',
     action: ActionType.EarnDemand,
-    category: 'Trading',
+    category: 'Earn (Liquidity)',
     description: 'Liquidity demand analysis',
     aliases: ['earn utilization'],
   },
   {
     name: 'earn integrations',
     action: ActionType.EarnIntegrations,
-    category: 'Trading',
+    category: 'Earn (Liquidity)',
     description: 'FLP integration partners',
     aliases: ['earn partners'],
   },
   {
     name: 'earn history',
     action: null,
-    category: 'Trading',
+    category: 'Earn (Liquidity)',
     description: 'Historical APY data',
     helpFormat: 'earn history <pool>',
     parameterized: true,
@@ -631,7 +633,7 @@ export const COMMAND_REGISTRY: CommandEntry[] = [
   {
     name: 'earn rotate',
     action: ActionType.EarnRotate,
-    category: 'Trading',
+    category: 'Earn (Liquidity)',
     description: 'Suggest liquidity rotation',
     aliases: ['earn optimize', 'earn rebalance'],
   },
@@ -639,14 +641,14 @@ export const COMMAND_REGISTRY: CommandEntry[] = [
   {
     name: 'faf',
     action: ActionType.FafStatus,
-    category: 'Trading',
+    category: 'FAF Token',
     description: 'FAF staking dashboard',
     aliases: ['faf status'],
   },
   {
     name: 'faf stake',
     action: null,
-    category: 'Trading',
+    category: 'FAF Token',
     description: 'Stake FAF for revenue + VIP',
     helpFormat: 'faf stake <amount>',
     parameterized: true,
@@ -654,7 +656,7 @@ export const COMMAND_REGISTRY: CommandEntry[] = [
   {
     name: 'faf unstake',
     action: null,
-    category: 'Trading',
+    category: 'FAF Token',
     description: 'Request FAF unstake (90-day unlock)',
     helpFormat: 'faf unstake <amount>',
     parameterized: true,
@@ -662,49 +664,49 @@ export const COMMAND_REGISTRY: CommandEntry[] = [
   {
     name: 'faf claim',
     action: ActionType.FafClaim,
-    category: 'Trading',
+    category: 'FAF Token',
     description: 'Claim FAF rewards + USDC revenue',
     aliases: ['faf claim rewards', 'faf claim revenue', 'faf claim rebate'],
   },
   {
     name: 'faf tier',
     action: ActionType.FafTier,
-    category: 'Trading',
+    category: 'FAF Token',
     description: 'VIP tier levels + benefits',
     aliases: ['faf tiers', 'faf vip', 'faf levels'],
   },
   {
     name: 'faf rewards',
     action: ActionType.FafRewards,
-    category: 'Trading',
+    category: 'FAF Token',
     description: 'Pending FAF rewards + USDC',
     aliases: [],
   },
   {
     name: 'faf referral',
     action: ActionType.FafReferral,
-    category: 'Trading',
+    category: 'FAF Token',
     description: 'Referral status + claimable rebates',
     aliases: ['faf referrals'],
   },
   {
     name: 'faf points',
     action: ActionType.FafPoints,
-    category: 'Trading',
+    category: 'FAF Token',
     description: 'Voltage points tier + multiplier',
     aliases: ['faf voltage'],
   },
   {
     name: 'faf requests',
     action: ActionType.FafUnstakeRequests,
-    category: 'Trading',
+    category: 'FAF Token',
     description: 'Pending unstake requests + progress',
     aliases: ['faf unstake requests', 'faf pending'],
   },
   {
     name: 'faf cancel',
     action: null,
-    category: 'Trading',
+    category: 'FAF Token',
     description: 'Cancel an unstake request by index',
     helpFormat: 'faf cancel <index>',
     parameterized: true,
@@ -769,6 +771,8 @@ export function getAutocompleteCommands(): string[] {
 /** Category order for help output */
 const CATEGORY_ORDER: CommandCategory[] = [
   'Trading',
+  'Earn (Liquidity)',
+  'FAF Token',
   'Market Data & Analytics',
   'Portfolio & Risk',
   'Protocol Inspection',
