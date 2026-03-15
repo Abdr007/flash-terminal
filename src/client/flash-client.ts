@@ -1463,16 +1463,12 @@ export class FlashClient implements IFlashClient {
         );
       }
 
-      // ── Prepend ATA createIdempotent for collateral + receive tokens (matches website) ──
-      // Website always includes createIdempotent for both the position's collateral token
-      // and the receive token (USDC). Idempotent = no-op if ATA exists, no RPC check needed.
-      const collateralMint = matchedMarket?.collateralMint;
-      const ataMints: PublicKey[] = [];
-      if (collateralMint) ataMints.push(collateralMint);
-      if (!receivingToken.mintKey.equals(collateralMint ?? PublicKey.default)) {
-        ataMints.push(receivingToken.mintKey);
-      }
-      const ataIxs = buildATAIdempotentIxs(this.wallet.publicKey, ataMints);
+      // ── ATA handling ──
+      // The SDK's closePosition already manages ATA creation internally
+      // (createAssociatedTokenAccountInstruction for the collateral token).
+      // Prepending our own ATA instructions can cause IllegalOwner errors
+      // on non-standard pools (e.g., Governance.1 PYTH LONG with JUP collateral).
+      const ataIxs: TransactionInstruction[] = [];
 
       // ── Append cancel_all_trigger_orders on full close (matches website) ──
       // Website always cancels remaining trigger orders (TP/SL) when closing a position.
