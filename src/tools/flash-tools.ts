@@ -20,6 +20,7 @@ import {
   formatTable,
   shortAddress,
   humanizeSdkError,
+  padVisible,
   padVisibleStart,
 } from '../utils/format.js';
 import { getErrorMessage } from '../utils/retry.js';
@@ -2182,21 +2183,21 @@ function renderAggregatedRows(trades: AggregatedTrade[]): string[] {
   const rows: string[] = [];
   for (const t of trades) {
     const time = new Date(t.timestamp).toLocaleTimeString('en-US', { hour12: false });
-    const market = t.market.padEnd(6);
-    const side = t.side === 'long' ? theme.long('LONG ') : theme.short('SHORT');
-    const lev = t.leverage > 0 ? `${Math.round(t.leverage)}x`.padEnd(5) : padVisibleStart(theme.dim('—'), 5);
-    const entryStr = t.entryPrice > 0 ? formatPrice(t.entryPrice).padStart(10) : padVisibleStart(theme.dim('—'), 10);
-    const exitStr = t.exitPrice !== undefined ? formatPrice(t.exitPrice).padStart(10) : padVisibleStart(theme.dim('—'), 10);
-    const sizeStr = t.sizeUsd > 0 ? formatUsd(t.sizeUsd).padStart(9) : padVisibleStart(theme.dim('—'), 9);
-    const coll = t.collateral > 0 ? formatUsd(t.collateral).padStart(10) : padVisibleStart(theme.dim('—'), 10);
-    const pnl = t.pnl !== undefined
-      ? (t.pnl >= 0 ? theme.positive(`+${formatUsd(t.pnl)}`) : theme.negative(formatUsd(t.pnl)))
-      : padVisibleStart(theme.dim('—'), 5);
+    const market = padVisible(t.market, 5);
+    const side = padVisible(t.side === 'long' ? theme.long('LONG') : theme.short('SHORT'), 5);
+    const lev = padVisible(t.leverage > 0 ? `${Math.round(t.leverage)}x` : theme.dim('—'), 4);
+    const entryStr = padVisibleStart(t.entryPrice > 0 ? `$${formatPrice(t.entryPrice)}` : theme.dim('—'), 10);
+    const exitStr = padVisibleStart(t.exitPrice !== undefined ? `$${formatPrice(t.exitPrice)}` : theme.dim('—'), 10);
+    const sizeStr = padVisibleStart(t.sizeUsd > 0 ? formatUsd(t.sizeUsd) : theme.dim('—'), 8);
+    const coll = padVisibleStart(t.collateral > 0 ? formatUsd(t.collateral) : theme.dim('—'), 8);
+    const pnlStr = t.pnl !== undefined
+      ? padVisibleStart(t.pnl >= 0 ? theme.positive(`+${formatUsd(t.pnl)}`) : theme.negative(formatUsd(t.pnl)), 8)
+      : padVisibleStart(theme.dim('—'), 8);
     const reason = t.closeReason
-      ? (t.closeReason === 'TAKE_PROFIT' ? theme.positive(t.closeReason) : theme.negative(t.closeReason))
+      ? (t.closeReason === 'TAKE_PROFIT' ? theme.positive('TP') : t.closeReason === 'STOP_LOSS' ? theme.negative('SL') : t.closeReason)
       : '';
 
-    rows.push(`  ${time}  ${market}  ${side}  ${lev}  ${entryStr}  ${exitStr}  ${sizeStr}  ${coll}  ${pnl}  ${reason}`);
+    rows.push(`  ${time}  ${market}  ${side}  ${lev}  ${entryStr}  ${exitStr}  ${sizeStr}  ${coll}  ${pnlStr}  ${reason}`);
   }
   return rows;
 }
@@ -2263,8 +2264,8 @@ const tradeHistoryTool: ToolDefinition = {
     const lines: string[] = [
       theme.titleBlock('SESSION TRADE HISTORY'),
       '',
-      theme.dim('  Time       Market  Side   Lev    Entry       Exit       Size     Collateral  PnL     Reason'),
-      `  ${theme.separator(104)}`,
+      theme.dim('  Time      Market  Side   Lev       Entry        Exit      Size      Coll       PnL'),
+      `  ${theme.separator(88)}`,
       ...renderAggregatedRows(recent),
       '',
       theme.dim(`  ${recent.length} trade(s) this session`),
