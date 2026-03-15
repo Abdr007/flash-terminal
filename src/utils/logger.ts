@@ -5,6 +5,8 @@ import chalk from 'chalk';
 
 const MAX_LOG_FILE_BYTES = 10 * 1024 * 1024; // 10MB max before rotation
 
+export type LogFormat = 'text' | 'json';
+
 export enum LogLevel {
   Debug = 0,
   Info = 1,
@@ -38,15 +40,25 @@ export class Logger {
   private level: LogLevel;
   private logFilePath: string | null;
   private showInCli: boolean;
+  private format: LogFormat;
+
+  /** Correlation ID for the current request/command. */
+  private static _requestId: string | null = null;
+
+  static setRequestId(id: string): void { Logger._requestId = id; }
+  static clearRequestId(): void { Logger._requestId = null; }
+  static get requestId(): string | null { return Logger._requestId; }
 
   constructor(opts?: {
     level?: LogLevel;
     logFile?: string;
     showInCli?: boolean;
+    format?: LogFormat;
   }) {
     this.level = opts?.level ?? LogLevel.Info;
     this.logFilePath = opts?.logFile ?? null;
     this.showInCli = opts?.showInCli ?? false;
+    this.format = opts?.format ?? 'text';
 
     if (this.logFilePath) {
       // Validate log file path — must be under home directory to prevent arbitrary writes
@@ -140,9 +152,30 @@ export class Logger {
 
   private writeToFile(entry: LogEntry): void {
     if (!this.logFilePath) return;
-    const dataStr = entry.data ? ` ${this.scrub(JSON.stringify(entry.data))}` : '';
-    const raw = `[${entry.timestamp}] ${LEVEL_LABELS[entry.level]} [${entry.category}] ${this.scrub(entry.message)}${dataStr}\n`;
-    const line = raw;
+
+    let line: string;
+
+    if (this.format === 'json') {
+      const obj: Record<string, unknown> = {
+        timestamp: entry.timestamp,
+        level: LEVEL_LABELS[entry.level],
+        module: entry.category,
+        message: this.scrub(entry.message),
+      };
+      if (Logger._requestId) obj.request_id = Logger._requestId;
+      if (entry.data) {
+        try {
+          obj.data = JSON.parse(this.scrub(JSON.stringify(entry.data)));
+        } catch {
+          obj.data = {};
+        }
+      }
+      line = JSON.stringify(obj) + '\n';
+    } else {
+      const reqId = Logger._requestId ? ` [req:${Logger._requestId}]` : '';
+      const dataStr = entry.data ? ` ${this.scrub(JSON.stringify(entry.data))}` : '';
+      line = `[${entry.timestamp}] ${LEVEL_LABELS[entry.level]} [${entry.category}]${reqId} ${this.scrub(entry.message)}${dataStr}\n`;
+    }
 
     // Check log size periodically (every ~100 writes) and rotate if needed
     if (++this.logRotationChecked % 100 === 0) {
@@ -205,6 +238,11 @@ export function parseLogLevel(value: string | undefined): LogLevel | undefined {
   return map[value.toLowerCase()];
 }
 
+/** Generate a short random request ID (8 hex chars). */
+export function generateRequestId(): string {
+  return Math.random().toString(16).slice(2, 10);
+}
+
 // Singleton logger instance
 let _logger: Logger | null = null;
 
@@ -212,11 +250,14 @@ export function initLogger(opts?: {
   level?: LogLevel;
   logFile?: string;
   showInCli?: boolean;
+  format?: LogFormat;
 }): Logger {
   // FLASH_LOG_LEVEL env var — overrides default level unless explicitly provided
   const envLevel = parseLogLevel(process.env.FLASH_LOG_LEVEL);
+  const envFormat = (process.env.FLASH_LOG_FORMAT?.toLowerCase() === 'json' ? 'json' : 'text') as LogFormat;
   const level = opts?.level ?? envLevel ?? LogLevel.Info;
-  _logger = new Logger({ ...opts, level });
+  const format = opts?.format ?? envFormat;
+  _logger = new Logger({ ...opts, level, format });
   return _logger;
 }
 

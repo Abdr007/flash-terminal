@@ -163,6 +163,12 @@ export class FlashTerminal {
 
     this.loadHistory();
 
+    // ─── Environment Variable Validation ─────────────────────────────
+    {
+      const { validateEnvironmentOrExit } = await import('../config/validate-env.js');
+      validateEnvironmentOrExit();
+    }
+
     // ─── Early Config Validation ──────────────────────────────────────
     // Run before mode selection so operators see warnings immediately
     try {
@@ -176,6 +182,14 @@ export class FlashTerminal {
         console.log('');
       }
     } catch { /* config validation is non-critical */ }
+
+    // ─── Alert Consumers ──────────────────────────────────────────────
+    try {
+      const { autoRegisterWebhook } = await import('../observability/alert-consumers/webhook-consumer.js');
+      const { autoRegisterSlack } = await import('../observability/alert-consumers/slack-consumer.js');
+      autoRegisterWebhook();
+      autoRegisterSlack();
+    } catch { /* alert consumers are non-critical */ }
 
     // ─── Welcome Screen & Mode Selection ──────────────────────────────
     const mode = await this.showModeSelection();

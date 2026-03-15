@@ -298,15 +298,7 @@ No values are fabricated, estimated, or hardcoded. Unreachable sources degrade g
 npm test
 ```
 
-```
-Test Files:  28 passed | 1 skipped (29)
-Tests:       462 passed | 5 skipped (467)
-Duration:    1.26s
-```
-
-The test suite covers trading execution, simulation, risk monitoring, security gates (signing guard, circuit breaker, trading gate), TP/SL automation, market resolution, protocol fee validation, event monitoring, and infrastructure. All tests run against strict TypeScript with zero compiler errors.
-
-The 5 skipped tests are devnet smoke tests gated by an environment flag — they do not affect production logic.
+The test suite covers trading execution, simulation, risk monitoring, security gates (signing guard, circuit breaker, trading gate), TP/SL automation, market resolution, protocol fee validation, event monitoring, earn/liquidity, FAF staking, swap validation, and infrastructure. All tests run against strict TypeScript with zero compiler errors.
 
 ---
 
@@ -334,31 +326,94 @@ The 5 skipped tests are devnet smoke tests gated by an environment flag — they
 
 ## Configuration
 
-All signing guards and trading limits are configurable via environment variables:
+All configuration is managed via environment variables (see `.env.example` for the full reference).
+
+### Trade Limits & Rate Limiting
 
 ```bash
-# Trade limits (0 = unlimited)
-MAX_COLLATERAL_PER_TRADE=0
-MAX_POSITION_SIZE=0
-MAX_LEVERAGE=0
-
-# Rate limiting
-MAX_TRADES_PER_MINUTE=10
+MAX_COLLATERAL_PER_TRADE=0    # Max USD per trade (0 = unlimited)
+MAX_POSITION_SIZE=0            # Max USD position size (0 = unlimited)
+MAX_LEVERAGE=0                 # Max leverage multiplier (0 = market default)
+MAX_TRADES_PER_MINUTE=10       # Rate limit
 MIN_DELAY_BETWEEN_TRADES_MS=3000
-
-# RPC failover
-BACKUP_RPC_1=https://your-backup-rpc.example.com
-BACKUP_RPC_2=https://your-second-backup.example.com
-
-# Compute budget
-COMPUTE_UNIT_LIMIT=600000
-COMPUTE_UNIT_PRICE=500000
-
-# Slippage tolerance (basis points)
-DEFAULT_SLIPPAGE_BPS=150
 ```
 
-See `.env.example` for the full configuration reference.
+### Risk Controls (Circuit Breaker)
+
+```bash
+MAX_SESSION_LOSS_USD=500       # Halt trading after session loss exceeds this
+MAX_DAILY_LOSS_USD=1000        # Halt trading after daily loss exceeds this
+MAX_PORTFOLIO_EXPOSURE=10000   # Max total portfolio exposure (USD)
+```
+
+When cumulative losses exceed these thresholds, the circuit breaker halts all trading until the session is reset.
+
+### RPC Failover
+
+```bash
+BACKUP_RPC_1=https://your-backup-rpc-1.example.com
+BACKUP_RPC_2=https://your-backup-rpc-2.example.com
+```
+
+The RPC manager monitors all endpoints and automatically fails over on connection failure, high latency (>5s), or slot lag (>50 slots behind network tip).
+
+### Dynamic Compute Tuning
+
+```bash
+FLASH_DYNAMIC_CU=true          # Enable dynamic compute unit estimation
+FLASH_CU_BUFFER_PCT=20         # Buffer % added to simulated CU usage
+COMPUTE_UNIT_LIMIT=600000      # Static CU limit (used when dynamic is off)
+COMPUTE_UNIT_PRICE=500000      # Priority fee in microLamports
+```
+
+When `FLASH_DYNAMIC_CU=true`, the terminal simulates transactions to estimate compute usage and adds a configurable buffer. This reduces costs while ensuring transactions land.
+
+### Alert Webhooks
+
+```bash
+ALERT_WEBHOOK_URL=https://your-webhook.example.com/alerts
+SLACK_WEBHOOK_URL=https://hooks.slack.com/services/T.../B.../xxx
+ALERT_MIN_SEVERITY=warning     # info, warning, or critical
+```
+
+Alert consumers dispatch JSON payloads on: trade execution, risk limit triggered, RPC failure, and circuit breaker activation. All webhook requests are fire-and-forget with 5s timeout — they never block the trading pipeline.
+
+### Shadow Trading
+
+```bash
+SHADOW_TRADING=false           # Enable shadow risk mirror
+```
+
+When enabled, trades are mirrored to a parallel risk engine for comparison analysis without execution. Useful for strategy validation.
+
+### Session & Logging
+
+```bash
+SESSION_TIMEOUT_MS=900000      # Wallet idle timeout (15 min default)
+LOG_FILE=~/.flash/flash.log    # Log file path (auto-rotates at 10MB)
+FLASH_LOG_LEVEL=info           # debug, info, warn, error
+FLASH_LOG_FORMAT=text          # text or json (structured logging)
+```
+
+JSON log format outputs structured entries with `timestamp`, `level`, `module`, `message`, `request_id`, and `data` fields.
+
+### Protocol Validation
+
+```bash
+FLASH_STRICT_PROTOCOL=false    # Throw on liquidation price divergence
+```
+
+When enabled, divergence between local and SDK liquidation calculations throws an error instead of logging a warning. Recommended for automated/agent usage.
+
+### Agent Mode (NO_DNA)
+
+```bash
+NO_DNA=1                       # Enable non-human operator mode
+```
+
+When set, disables TUI elements, outputs structured JSON, auto-confirms trades, and uses plain text prompts. Implements the [no-dna.org](https://no-dna.org) standard for CLI agent integration.
+
+See `.env.example` for the complete configuration reference with types and defaults.
 
 ---
 
@@ -418,26 +473,48 @@ flash [sim] > exit
 
 ```
 src/
-├── cli/           Terminal REPL, command registry, status bar
-├── client/        FlashClient (live) and SimulatedFlashClient (paper)
-├── core/          Transaction engine, state reconciliation, execution middleware
-├── tools/         Tool engine, trading tools, doctor diagnostics
-├── agent/         Agent tools (analysis, dashboard, observability)
-├── ai/            NLP interpreter, intent parsing
-├── config/        Configuration loader, pool mapping, market discovery
-├── data/          PriceService (Pyth Hermes), FStatsClient
-├── network/       RPC manager, multi-endpoint failover
-├── monitor/       Risk monitor, event monitor
-├── risk/          TP/SL engine, exposure analysis, liquidation risk
-├── security/      Signing guard, circuit breaker, trading gate
-├── protocol/      Protocol inspector (pool/market/OI inspection)
-├── wallet/        Wallet manager, keypair loading, token balances
-├── journal/       Trade journal, crash recovery engine
-├── plugins/       Dynamic plugin loader
-├── observability/ Metrics, alert hooks
-├── utils/         Logger, formatting, protocol math
-└── types/         Types, enums, Zod schemas
+├── agent/          Agent tools (analysis, dashboard, observability)
+├── ai/             NLP interpreter, intent parsing
+├── cli/            Terminal REPL, command registry, status bar, completions
+├── client/         FlashClient (live) and SimulatedFlashClient (paper)
+├── config/         Config loader, pool mapping, market discovery, env validation
+├── core/           TX engine, state reconciliation, execution middleware
+├── data/           PriceService (Pyth Hermes), FStatsClient
+├── earn/           Liquidity pool registry, yield analytics, pool data
+├── journal/        Trade journal, crash recovery engine
+├── monitor/        Risk monitor, event monitor
+├── network/        RPC manager, TPU client, multi-endpoint failover
+├── observability/  Metrics, alert hooks, webhook/Slack consumers
+├── orders/         Limit order engine
+├── plugins/        Dynamic plugin loader
+├── portfolio/      Portfolio manager, rebalance, allocation, risk
+├── protocol/       Protocol inspector (pool/market/OI inspection)
+├── regime/         Market regime detector, volatility, liquidity, trend
+├── risk/           TP/SL engine, exposure analysis, liquidation risk
+├── runtime/        Recovery engine
+├── scanner/        Market scanner
+├── security/       Signing guard, circuit breaker, trading gate
+├── shadow/         Risk mirror, shadow engine
+├── strategies/     Mean reversion, momentum, whale follow
+├── system/         System diagnostics, maintenance
+├── token/          FAF token integration, staking, VIP tiers
+├── tools/          Tool engine, trading/earn/FAF/swap tools
+├── transaction/    ALT resolver, ATA resolver, instruction aggregator
+├── types/          Central types, enums, Zod schemas
+├── utils/          Logger, formatting, protocol math, market resolver
+└── wallet/         Wallet manager, session, store, token balances
 ```
+
+---
+
+## Docker
+
+```bash
+docker build -t flash-terminal .
+docker run -it --env-file .env flash-terminal
+```
+
+The Docker image uses a multi-stage build (builder + production) with a non-root user for security. Defaults to simulation mode.
 
 ---
 
@@ -464,5 +541,5 @@ MIT — see **[LICENSE](LICENSE)** for details.
 <p align="center">
   <strong>Flash Terminal v1.0.0</strong><br/>
   A production-grade Solana perpetual futures trading CLI.<br/>
-  Built with strict TypeScript. Verified with 462 automated tests. Shipped with zero critical issues.
+  Built with strict TypeScript. Shipped with zero critical issues.
 </p>
