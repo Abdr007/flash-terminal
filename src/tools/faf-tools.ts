@@ -440,7 +440,7 @@ export const fafReferralTool: ToolDefinition = {
       `  ${theme.accentBold('REFERRAL STATUS')}`,
       `  ${theme.separator(40)}`,
       '',
-      theme.pair('Referral Rebate Rate', `${rebateRate}%`),
+      theme.pair('Rebate Rate', `${rebateRate}%`),
       theme.pair('VIP Level', `${info?.level ?? 0}`),
       theme.pair('Claimable Rebates', claimableRebateUsd > 0 ? chalk.green(formatUsd(claimableRebateUsd)) : chalk.dim('$0.00')),
       '',
