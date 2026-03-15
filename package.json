@@ -50,7 +50,7 @@
     "flash-sdk": "15.8.3",
     "openai": "^6.27.0",
     "ora": "^8.2.0",
-    "zod": "^3.24.2"
+    "zod": "^4.3.6"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
