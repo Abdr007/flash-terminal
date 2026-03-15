@@ -63,7 +63,7 @@ export const earnPoolsTool: ToolDefinition = {
       '',
       `  ${theme.accentBold('FLASH LIQUIDITY POOLS')}`,
       '',
-      `  ${'Pool'.padEnd(12)} ${'TVL'.padEnd(10)} ${'FLP'.padEnd(10)} ${'sFLP'.padEnd(10)} ${'7D Fees'.padEnd(12)} ${'Fee %'.padEnd(8)} Assets`,
+      `  ${'Pool'.padEnd(12)} ${'TVL'.padEnd(10)} ${'FLP'.padEnd(10)} ${'sFLP'.padEnd(10)} ${'Est. APY'.padEnd(12)} ${'Fee %'.padEnd(8)} Assets`,
       `  ${theme.separator(72)}`,
     ];
 
@@ -72,10 +72,10 @@ export const earnPoolsTool: ToolDefinition = {
       const tvl = m?.tvl ? (m.tvl >= 1e6 ? `$${(m.tvl/1e6).toFixed(1)}M` : `$${(m.tvl/1e3).toFixed(0)}K`) : '-';
       const flp = m?.flpPrice ? `$${m.flpPrice.toFixed(3)}` : '-';
       const sflp = m?.sflpPrice ? `$${m.sflpPrice.toFixed(3)}` : '-';
-      const wkFees = m?.weeklyLpFees ? formatUsd(m.weeklyLpFees) : '-';
+      const apy = m?.apy7d ? `~${m.apy7d.toFixed(1)}%` : '-';
       const fee = `${(pool.feeShare * 100).toFixed(0)}%`;
       const assets = pool.assets.slice(0, 3).join(' ');
-      lines.push(`  ${chalk.cyan(pool.aliases[0].padEnd(12))} ${tvl.padEnd(10)} ${chalk.green(flp.padEnd(10))} ${sflp.padEnd(10)} ${wkFees.padEnd(12)} ${fee.padEnd(8)} ${chalk.dim(assets)}`);
+      lines.push(`  ${chalk.cyan(pool.aliases[0].padEnd(12))} ${tvl.padEnd(10)} ${chalk.green(flp.padEnd(10))} ${sflp.padEnd(10)} ${chalk.green(apy.padEnd(12))} ${fee.padEnd(8)} ${chalk.dim(assets)}`);
     }
 
     lines.push('');
@@ -516,9 +516,9 @@ export const earnBestTool: ToolDefinition = {
 
     for (let i = 0; i < ranked.length; i++) {
       const r = ranked[i];
-      const wkFees = r.metrics.weeklyLpFees > 0 ? formatUsd(r.metrics.weeklyLpFees) : '-';
+      const apy = r.metrics.apy7d > 0 ? `~${r.metrics.apy7d.toFixed(1)}%` : '-';
       lines.push(`  ${chalk.bold(`${i + 1}.`)} ${chalk.cyan(r.pool.displayName)}`);
-      lines.push(`     7D Fees: ${chalk.green(wkFees)}   TVL: ${formatUsd(r.metrics.tvl)}   Risk: ${riskColor(r.risk)}`);
+      lines.push(`     Est. APY: ${chalk.green(apy)}   TVL: ${formatUsd(r.metrics.tvl)}   Risk: ${riskColor(r.risk)}`);
       lines.push(`     FLP: $${r.metrics.flpPrice.toFixed(3)}   Fee Share: ${(r.pool.feeShare * 100).toFixed(0)}%   Assets: ${r.pool.assets.slice(0, 3).join(', ')}`);
       lines.push('');
     }
@@ -553,41 +553,7 @@ export const earnSimulateTool: ToolDefinition = {
     }
 
     if (m.apy7d === 0) {
-      // 7D daily fee data unavailable — estimate from total fees / pool lifetime
-      const flpTokens = amount / (m.flpPrice > 0 ? m.flpPrice : 1);
-      const lpFees = m.totalFees * (m.feeShareLp / 100);
-
-      // Estimate daily LP fees: total LP fees / estimated pool age (~365 days)
-      const estimatedDailyFees = lpFees > 0 && m.tvl > 0 ? lpFees / 365 : 0;
-      const estimatedApy = estimatedDailyFees > 0 ? (estimatedDailyFees / m.tvl) * 365 * 100 : 0;
-
-      const lines = [
-        '',
-        `  ${theme.accentBold(`${pool.displayName} — Yield Estimate`)}`,
-        `  ${theme.separator(45)}`,
-        '',
-        theme.pair('Deposit', formatUsd(amount)),
-        theme.pair('FLP Price', m.flpPrice > 0 ? `$${m.flpPrice.toFixed(3)}` : 'unavailable'),
-        theme.pair('FLP Received', m.flpPrice > 0 ? `~${flpTokens.toFixed(2)} FLP` : 'unavailable'),
-        theme.pair('Pool TVL', m.tvl > 0 ? formatUsd(m.tvl) : 'unavailable'),
-        theme.pair('Fee Share', `${m.feeShareLp}%`),
-        '',
-      ];
-
-      if (estimatedApy > 0) {
-        const dailyReturn = amount * (estimatedApy / 100) / 365;
-        lines.push(
-          theme.pair('Est. APY', chalk.green(`~${estimatedApy.toFixed(1)}%`)),
-          '',
-          theme.pair('Daily', chalk.green(`~+${formatUsd(dailyReturn)}`)),
-          theme.pair('Monthly', chalk.green(`~+${formatUsd(dailyReturn * 30)}`)),
-          theme.pair('Yearly', chalk.green(`~+${formatUsd(dailyReturn * 365)}`)),
-          '',
-          chalk.dim('  * Estimate based on lifetime pool fees. Actual returns vary.'),
-        );
-      }
-      lines.push('');
-      return { success: true, message: lines.join('\n') };
+      return { success: true, message: chalk.dim('  Yield data unavailable. Try again later.') };
     }
 
     const { simulateYield } = await import('../earn/yield-analytics.js');
@@ -611,17 +577,18 @@ export const earnSimulateTool: ToolDefinition = {
       `  ${theme.separator(45)}`,
       '',
       theme.pair('Deposit', formatUsd(amount)),
-      theme.pair('Current APY', chalk.green(`${m.apy7d.toFixed(2)}%`)),
+      theme.pair('Est. APY', chalk.green(`~${m.apy7d.toFixed(2)}%`)),
       theme.pair('FLP Price', `$${m.flpPrice.toFixed(3)}`),
+      theme.pair('Pool TVL', formatUsd(m.tvl)),
       '',
       `  ${theme.section('Estimated Returns')}`,
       '',
-      theme.pair('7 days', chalk.green(`+${formatUsd(proj.days7)}`)),
-      theme.pair('30 days', chalk.green(`+${formatUsd(proj.days30)}`)),
-      theme.pair('90 days', chalk.green(`+${formatUsd(proj.days90)}`)),
-      theme.pair('1 year', chalk.green(`+${formatUsd(proj.days365)}`)),
+      theme.pair('Daily', chalk.green(`~+${formatUsd(proj.days7 / 7)}`)),
+      theme.pair('Weekly', chalk.green(`~+${formatUsd(proj.days7)}`)),
+      theme.pair('Monthly', chalk.green(`~+${formatUsd(proj.days30)}`)),
+      theme.pair('Yearly', chalk.green(`~+${formatUsd(proj.days365)}`)),
       '',
-      chalk.dim('  * Projections based on current 7-day APY. Actual returns vary.'),
+      chalk.dim('  * Based on 7-day trading volume and on-chain fee rates.'),
       '',
     ];
 

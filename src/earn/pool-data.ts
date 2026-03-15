@@ -2,8 +2,9 @@
  * Pool Live Data
  *
  * Fetches live pool metrics from multiple sources:
- * - fstats.io /pools — FLP/sFLP prices, volume, fees
- * - fstats.io /fees/daily — per-pool weekly fee revenue
+ * - fstats.io /pools — FLP/sFLP prices, total volume, total fees
+ * - fstats.io /fees/daily — per-pool weekly fee revenue (primary APY source)
+ * - fstats.io /volume/daily — per-pool 7D volume (fallback APY: volume × fee rate × LP share)
  * - Solana RPC — FLP/sFLP token supply for TVL calculation
  *
  * APY = (7D LP fees / TVL) * 52 * 100 (annualized)
@@ -89,6 +90,35 @@ export async function getPoolMetrics(): Promise<Map<string, PoolMetrics>> {
           weeklyFeesByPool[pool.poolId] = data.reduce((sum, d) => sum + (d.lp_share ?? 0), 0);
         }
       }
+    } catch { /* non-critical */ }
+  }
+
+  // Step 2b: Fallback — estimate 7D LP fees from volume × on-chain fee rate
+  // When /fees/daily returns empty, compute: 7D_volume × avg_fee_rate × lp_share
+  for (const pool of registry) {
+    if (weeklyFeesByPool[pool.poolId]) continue; // already have real data
+    try {
+      const res = await fetch(
+        `${FSTATS_BASE_URL}/volume/daily?days=7&pool=${encodeURIComponent(pool.poolId)}`,
+        { signal: AbortSignal.timeout(4000) },
+      );
+      if (!res.ok) continue;
+      const json = await res.json() as { data?: Array<{ volume_usd?: number }> } | Array<{ volume_usd?: number }>;
+      const days = Array.isArray(json) ? json : json.data ?? [];
+      if (days.length === 0) continue;
+
+      const weeklyVolume = days.reduce((sum, d) => sum + (d.volume_usd ?? 0), 0);
+      if (weeklyVolume <= 0) continue;
+
+      // Derive actual fee rate from pool's lifetime total_fees / total_volume
+      const prices = poolPrices[pool.poolId];
+      const totalVol = prices?.vol ?? 0;
+      const totalFees = prices?.fees ?? 0;
+      const avgFeeRate = totalVol > 0 && totalFees > 0 ? totalFees / totalVol : 0.0008;
+      const lpShare = prices?.lpShare ?? (pool.feeShare * 100);
+      const estimatedWeeklyLpFees = weeklyVolume * avgFeeRate * (lpShare / 100);
+      weeklyFeesByPool[pool.poolId] = estimatedWeeklyLpFees;
+      logger.debug('EARN', `${pool.poolId}: estimated 7D LP fees $${estimatedWeeklyLpFees.toFixed(0)} from volume $${(weeklyVolume / 1e6).toFixed(1)}M`);
     } catch { /* non-critical */ }
   }
 
