@@ -57,6 +57,31 @@ import { createBatch, appendToBatch, isBatchWithinLimit, batchSummary, type SdkR
 import { resolveALTs, verifyALTAccountOverlap, logMessageALTDiagnostics } from '../transaction/alt-resolver.js';
 import { buildATAIdempotentIxs } from '../transaction/ata-resolver.js';
 
+// ─── SDK Console Suppression ─────────────────────────────────────────────────
+// The Flash SDK has debug console.log statements in its published build.
+// Suppress them during SDK calls to keep terminal output clean.
+
+async function quietSdk<T>(fn: () => Promise<T>): Promise<T> {
+  const origLog = console.log;
+  console.log = (...args: unknown[]) => {
+    const first = typeof args[0] === 'string' ? args[0] : '';
+    if (first.includes('close position') || first.includes('SDK logs') ||
+        first.includes('volitlity fee') || first.includes('assetsUsd') ||
+        first.includes('collateralSymbol === SOL') || first.includes('inputSymbol === SOL') ||
+        first.includes('maxWithdrawableAmount') || first.includes('collateralAmountReceived') ||
+        first.includes('exceeding to') || first.includes('profitLoss') ||
+        first.includes('THIS cannot') || first.includes('No account info found')) {
+      return;
+    }
+    origLog.apply(console, args);
+  };
+  try {
+    return await fn();
+  } finally {
+    console.log = origLog;
+  }
+}
+
 // ─── Pyth Price Service ──────────────────────────────────────────────────────
 
 interface LiveTokenPrice {
@@ -1220,25 +1245,25 @@ export class FlashClient implements IFlashClient {
       if (existingPositionPubkey) {
         // Increase existing position size
         logger.debug('TRADE', `Using increaseSize(${targetToken.symbol}, ${marketCollateralSymbol}, ${existingPositionPubkey.toBase58()})`);
-        result = await this.perpClient.increaseSize(
-          targetToken.symbol, marketCollateralSymbol, existingPositionPubkey,
+        result = await quietSdk(() => this.perpClient.increaseSize(
+          targetToken.symbol, marketCollateralSymbol, existingPositionPubkey!,
           sdkSide, poolConfig, priceAfterSlippage, sizeAmount, Privilege.None
-        );
+        ));
       } else if (inputToken.symbol === marketCollateralSymbol) {
         // User's input token matches the market's collateral custody → direct open
         logger.debug('TRADE', `Using openPosition(${targetToken.symbol}, ${marketCollateralSymbol})`);
-        result = await this.perpClient.openPosition(
+        result = await quietSdk(() => this.perpClient.openPosition(
           targetToken.symbol, marketCollateralSymbol, priceAfterSlippage,
           collateralNative, sizeAmount, sdkSide, poolConfig, Privilege.None
-        );
+        ));
       } else {
         // User's input token differs from market collateral → swap first
         logger.debug('TRADE', `Using swapAndOpen(${targetToken.symbol}, ${marketCollateralSymbol}, ${inputToken.symbol})`);
-        result = await this.perpClient.swapAndOpen(
+        result = await quietSdk(() => this.perpClient.swapAndOpen(
           targetToken.symbol, marketCollateralSymbol, inputToken.symbol,
           collateralNative, priceAfterSlippage, sizeAmount, sdkSide,
           poolConfig, Privilege.None
-        );
+        ));
       }
 
       // Prepend ATA createIdempotent only for direct openPosition/increaseSize.
@@ -1427,10 +1452,10 @@ export class FlashClient implements IFlashClient {
         // closeAndSwap can fail with IllegalOwner on pools where collateral != USDC
         // (e.g., Governance.1 PYTH LONG uses JUP collateral).
         logger.debug('TRADE', `Using closePosition(${targetToken.symbol}, ${marketCollateralSymbol})`);
-        result = await this.perpClient.closePosition(
+        result = await quietSdk(() => this.perpClient.closePosition(
           targetToken.symbol, marketCollateralSymbol, priceAfterSlippage,
           sdkSide, poolConfig, Privilege.None
-        );
+        ));
       } else {
         // ── Partial close via decreaseSize ──
         const { position } = await this.findUserPosition(poolConfig, market, side);
@@ -1456,11 +1481,11 @@ export class FlashClient implements IFlashClient {
         }
 
         logger.debug('TRADE', `Using decreaseSize(${targetToken.symbol}, ${marketCollateralSymbol}, sizeDelta=${sizeDelta.toString()})`);
-        result = await this.perpClient.decreaseSize(
+        result = await quietSdk(() => this.perpClient.decreaseSize(
           targetToken.symbol, marketCollateralSymbol, sdkSide,
           position.pubkey, poolConfig, priceAfterSlippage,
           sizeDelta, Privilege.None
-        );
+        ));
       }
 
       // ── ATA handling ──
