@@ -38,7 +38,7 @@
   },
   "license": "MIT",
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.39.0",
+    "@anthropic-ai/sdk": "^0.78.0",
     "@coral-xyz/anchor": "0.32.1",
     "@pythnetwork/client": "2.22.1",
     "@solana/spl-token": "0.4.14",
