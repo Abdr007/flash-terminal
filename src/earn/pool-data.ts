@@ -77,50 +77,68 @@ export async function getPoolMetrics(): Promise<Map<string, PoolMetrics>> {
     }
   } catch { logger.debug('EARN', 'fstats /pools unavailable'); }
 
-  // Step 2: Fetch 7D per-pool fees from fstats /fees/daily
+  // Step 2: Compute 7D LP fees per pool
+  // fstats /fees/daily pool filter is broken (returns protocol-wide data for all pools).
+  // Strategy: fetch protocol-wide 7D LP fees, then distribute by each pool's 7D volume share.
   const weeklyFeesByPool: Record<string, number> = {};
-  for (const pool of registry) {
-    try {
-      const res = await fetch(`${FSTATS_BASE_URL}/fees/daily?days=7&pool=${encodeURIComponent(pool.poolId)}`, {
-        signal: AbortSignal.timeout(4000),
-      });
-      if (res.ok) {
-        const data = await res.json() as Array<{ lp_share?: number }>;
-        if (Array.isArray(data)) {
-          weeklyFeesByPool[pool.poolId] = data.reduce((sum, d) => sum + (d.lp_share ?? 0), 0);
+  try {
+    // 2a: Fetch protocol-wide 7D LP fees
+    let protocolWeeklyLpFees = 0;
+    const feesRes = await fetch(`${FSTATS_BASE_URL}/fees/daily?days=7`, { signal: AbortSignal.timeout(5000) });
+    if (feesRes.ok) {
+      const feesJson = await feesRes.json() as { data?: Array<{ lp_share?: number }> } | Array<{ lp_share?: number }>;
+      const feesDays = Array.isArray(feesJson) ? feesJson : feesJson.data ?? [];
+      protocolWeeklyLpFees = feesDays.reduce((sum, d) => sum + (d.lp_share ?? 0), 0);
+    }
+
+    if (protocolWeeklyLpFees > 0) {
+      // 2b: Fetch 7D volume per pool to determine each pool's share
+      const poolVolumes: Record<string, number> = {};
+      let totalWeeklyVolume = 0;
+
+      await Promise.all(registry.map(async (pool) => {
+        try {
+          const res = await fetch(
+            `${FSTATS_BASE_URL}/volume/daily?days=7&pool=${encodeURIComponent(pool.poolId)}`,
+            { signal: AbortSignal.timeout(4000) },
+          );
+          if (!res.ok) return;
+          const json = await res.json() as { data?: Array<{ volume_usd?: number }> } | Array<{ volume_usd?: number }>;
+          const days = Array.isArray(json) ? json : json.data ?? [];
+          const vol = days.reduce((sum, d) => sum + (d.volume_usd ?? 0), 0);
+          if (vol > 0) {
+            poolVolumes[pool.poolId] = vol;
+            totalWeeklyVolume += vol;
+          }
+        } catch { /* non-critical */ }
+      }));
+
+      // 2c: Distribute protocol LP fees by volume share, adjusted for each pool's fee rate
+      if (totalWeeklyVolume > 0) {
+        // Weight by volume × pool fee rate (pools with higher fees earn more per dollar of volume)
+        const weights: Record<string, number> = {};
+        let totalWeight = 0;
+        for (const pool of registry) {
+          const vol = poolVolumes[pool.poolId] ?? 0;
+          if (vol <= 0) continue;
+          const prices = poolPrices[pool.poolId];
+          const feeRate = (prices?.vol ?? 0) > 0 && (prices?.fees ?? 0) > 0
+            ? (prices.fees / prices.vol)
+            : 0.0007;
+          const w = vol * feeRate;
+          weights[pool.poolId] = w;
+          totalWeight += w;
         }
+        for (const pool of registry) {
+          const w = weights[pool.poolId] ?? 0;
+          if (w > 0 && totalWeight > 0) {
+            weeklyFeesByPool[pool.poolId] = protocolWeeklyLpFees * (w / totalWeight);
+          }
+        }
+        logger.debug('EARN', `Protocol 7D LP fees: $${protocolWeeklyLpFees.toFixed(0)}, distributed across ${Object.keys(poolVolumes).length} pools`);
       }
-    } catch { /* non-critical */ }
-  }
-
-  // Step 2b: Fallback — estimate 7D LP fees from volume × on-chain fee rate
-  // When /fees/daily returns empty, compute: 7D_volume × avg_fee_rate × lp_share
-  for (const pool of registry) {
-    if (weeklyFeesByPool[pool.poolId]) continue; // already have real data
-    try {
-      const res = await fetch(
-        `${FSTATS_BASE_URL}/volume/daily?days=7&pool=${encodeURIComponent(pool.poolId)}`,
-        { signal: AbortSignal.timeout(4000) },
-      );
-      if (!res.ok) continue;
-      const json = await res.json() as { data?: Array<{ volume_usd?: number }> } | Array<{ volume_usd?: number }>;
-      const days = Array.isArray(json) ? json : json.data ?? [];
-      if (days.length === 0) continue;
-
-      const weeklyVolume = days.reduce((sum, d) => sum + (d.volume_usd ?? 0), 0);
-      if (weeklyVolume <= 0) continue;
-
-      // Derive actual fee rate from pool's lifetime total_fees / total_volume
-      const prices = poolPrices[pool.poolId];
-      const totalVol = prices?.vol ?? 0;
-      const totalFees = prices?.fees ?? 0;
-      const avgFeeRate = totalVol > 0 && totalFees > 0 ? totalFees / totalVol : 0.0008;
-      const lpShare = prices?.lpShare ?? (pool.feeShare * 100);
-      const estimatedWeeklyLpFees = weeklyVolume * avgFeeRate * (lpShare / 100);
-      weeklyFeesByPool[pool.poolId] = estimatedWeeklyLpFees;
-      logger.debug('EARN', `${pool.poolId}: estimated 7D LP fees $${estimatedWeeklyLpFees.toFixed(0)} from volume $${(weeklyVolume / 1e6).toFixed(1)}M`);
-    } catch { /* non-critical */ }
-  }
+    }
+  } catch { logger.debug('EARN', 'Fee distribution calculation failed'); }
 
   // Step 3: Fetch token supplies from RPC for TVL
   const conn = _rpcConnection;
