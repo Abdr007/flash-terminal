@@ -277,7 +277,7 @@ export class WalletManager {
       'BZLbGTNCSFfoth2GYDtwr7e4imWzpR5jqcUuGEwr646K': 'ORE',
       '98so1YHdmeaVecYmL1eFUsDmBw6SUdP3DfLHPQ11xCN3': 'FAF',
       'KMNo3nJsBXfcpJTVhZcXLW7RmTwTt4GVFE7suUBo9sS': 'KMNO',
-      'HypE2ePUBiAW3CEKDV6FRsXBk6Q14r9GcfJb3bqCWhdr': 'HYPE',
+      '98sMhvDwXj1RQi5c5Mndm3vPe9cBqPrbLaufMXFNMh5g': 'HYPE',
     };
 
     const [solBalance, tokenAccounts] = await withRetry(
