@@ -568,10 +568,6 @@ export const earnSimulateTool: ToolDefinition = {
         theme.pair('Total Volume', m.totalVolume > 0 ? formatUsd(m.totalVolume) : 'unavailable'),
         theme.pair('Total Fees', m.totalFees > 0 ? formatUsd(m.totalFees) : 'unavailable'),
         '',
-        chalk.dim('  7-day fee data not available from fstats API.'),
-        chalk.dim('  Yield projections require recent fee history.'),
-        chalk.dim('  Check https://flash.trade for current APY.'),
-        '',
       ];
       return { success: true, message: lines.join('\n') };
     }
