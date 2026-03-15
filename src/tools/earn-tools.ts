@@ -548,8 +548,32 @@ export const earnSimulateTool: ToolDefinition = {
     if (!pool) return poolNotFound(poolName);
 
     const m = await getPoolMetric(pool.poolId);
-    if (!m || m.apy7d === 0) {
-      return { success: false, message: chalk.dim('  Yield data unavailable for this pool.') };
+    if (!m) {
+      return { success: false, message: chalk.dim('  Pool data unavailable. Try again later.') };
+    }
+
+    if (m.apy7d === 0) {
+      // 7D fee data unavailable from fstats — show pool snapshot instead of failing
+      const flpTokens = amount / (m.flpPrice > 0 ? m.flpPrice : 1);
+      const lines = [
+        '',
+        `  ${theme.accentBold(`${pool.displayName} — Deposit Preview`)}`,
+        `  ${theme.separator(45)}`,
+        '',
+        theme.pair('Deposit', formatUsd(amount)),
+        theme.pair('FLP Price', m.flpPrice > 0 ? `$${m.flpPrice.toFixed(3)}` : 'unavailable'),
+        theme.pair('FLP Received', m.flpPrice > 0 ? `~${flpTokens.toFixed(2)} FLP` : 'unavailable'),
+        theme.pair('Pool TVL', m.tvl > 0 ? formatUsd(m.tvl) : 'unavailable'),
+        theme.pair('Fee Share', `${m.feeShareLp}%`),
+        theme.pair('Total Volume', m.totalVolume > 0 ? formatUsd(m.totalVolume) : 'unavailable'),
+        theme.pair('Total Fees', m.totalFees > 0 ? formatUsd(m.totalFees) : 'unavailable'),
+        '',
+        chalk.dim('  7-day fee data not available from fstats API.'),
+        chalk.dim('  Yield projections require recent fee history.'),
+        chalk.dim('  Check https://flash.trade for current APY.'),
+        '',
+      ];
+      return { success: true, message: lines.join('\n') };
     }
 
     const { simulateYield } = await import('../earn/yield-analytics.js');
