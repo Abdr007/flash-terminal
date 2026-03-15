@@ -146,12 +146,17 @@ export const fafStakeTool: ToolDefinition = {
       const result = await perpClient.depositTokenStake(userPk, userPk, new BN(nativeAmount.toString()), poolConfig);
       const sig = await client.sendTx(result.instructions, result.additionalSigners, poolConfig);
 
-      const newTier = getVipTier(balance); // approximate — will refresh on next status
+      const remainingWallet = balance - amount;
+      const stakeInfo = await getFafStakeInfo(perpClient, poolConfig, userPk).catch(() => null);
+      const totalStaked = (stakeInfo?.stakedAmount ?? 0) + amount;
+      const newTier = getVipTier(totalStaked);
       const lines = [
         '',
         `  ${theme.accentBold('FAF STAKED')}`,
         '',
-        theme.pair('Amount', formatFaf(amount)),
+        theme.pair('Staked', formatFaf(amount)),
+        theme.pair('Wallet FAF', `${formatFaf(Math.max(0, remainingWallet))} (remaining)`),
+        theme.pair('Total Staked', formatFaf(totalStaked)),
         theme.pair('VIP Tier', `Level ${newTier.level} (${newTier.feeDiscount}% discount)`),
         '',
         `  ${chalk.dim('Tx:')} ${sig}`,
@@ -186,14 +191,19 @@ export const fafUnstakeTool: ToolDefinition = {
     try {
       const nativeAmount = BigInt(Math.floor(amount * Math.pow(10, FAF_DECIMALS)));
       const BN = (await import('bn.js')).default;
+      const stakeInfoBefore = await getFafStakeInfo(perpClient, poolConfig, userPk).catch(() => null);
+      const stakedBefore = stakeInfoBefore?.stakedAmount ?? 0;
+
       const result = await perpClient.unstakeTokenRequest(userPk, new BN(nativeAmount.toString()), poolConfig);
       const sig = await client.sendTx(result.instructions, result.additionalSigners, poolConfig);
 
+      const remainingStaked = Math.max(0, stakedBefore - amount);
       const lines = [
         '',
         `  ${theme.accentBold('UNSTAKE REQUESTED')}`,
         '',
-        theme.pair('Amount', formatFaf(amount)),
+        theme.pair('Unstaking', formatFaf(amount)),
+        theme.pair('Remaining Staked', formatFaf(remainingStaked)),
         theme.pair('Unlock', `Linear over ${UNSTAKE_UNLOCK_DAYS} days`),
         '',
         chalk.dim('  You continue earning revenue until tokens fully unlock.'),
