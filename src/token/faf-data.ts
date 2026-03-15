@@ -7,7 +7,7 @@
 
 import { Connection, PublicKey } from '@solana/web3.js';
 import { PoolConfig, PerpetualsClient, TokenStakeAccount } from 'flash-sdk';
-import { FAF_MINT, FAF_DECIMALS, getVipTier, VipTier, VOLTAGE_TIERS } from './faf-registry.js';
+import { FAF_MINT, FAF_DECIMALS, UNSTAKE_UNLOCK_DAYS, getVipTier, VipTier, VOLTAGE_TIERS } from './faf-registry.js';
 import { getLogger } from '../utils/logger.js';
 import BN from 'bn.js';
 
@@ -116,14 +116,21 @@ export async function getFafUnstakeRequests(
   if (!stakeAccount || !stakeAccount.isInitialized) return [];
 
   const requests: FafUnstakeRequest[] = [];
-  const withdrawRequests = (stakeAccount as unknown as Record<string, unknown>).withdrawRequests as Array<Record<string, unknown>> ?? (stakeAccount as unknown as Record<string, unknown>).withdrawRequest as Array<Record<string, unknown>> ?? [];
-  for (let i = 0; i < withdrawRequests.length; i++) {
-    const req = withdrawRequests[i];
+  const withdrawCount = stakeAccount.withdrawRequestCount ?? 0;
+  const withdrawList = stakeAccount.withdrawRequest ?? [];
+  for (let i = 0; i < Math.min(withdrawCount, withdrawList.length); i++) {
+    const req = withdrawList[i];
     if (!req) continue;
-    const amount = new BN(req.amount?.toString() ?? '0').toNumber() / Math.pow(10, FAF_DECIMALS);
-    const timestamp = new BN(req.timestamp?.toString() ?? '0').toNumber();
-    if (amount <= 0) continue;
-    requests.push({ index: i, amount, timestamp });
+    const locked = new BN(req.lockedAmount?.toString() ?? '0').toNumber() / Math.pow(10, FAF_DECIMALS);
+    const withdrawable = new BN(req.withdrawableAmount?.toString() ?? '0').toNumber() / Math.pow(10, FAF_DECIMALS);
+    const totalAmount = locked + withdrawable;
+    if (totalAmount <= 0) continue;
+    // Estimate original timestamp from timeRemaining (90 days - timeRemaining = elapsed)
+    const timeRemainingS = new BN(req.timeRemaining?.toString() ?? '0').toNumber();
+    const unlockPeriodS = UNSTAKE_UNLOCK_DAYS * 24 * 3600;
+    const elapsedS = Math.max(0, unlockPeriodS - timeRemainingS);
+    const estimatedTimestamp = Math.floor(Date.now() / 1000) - elapsedS;
+    requests.push({ index: i, amount: totalAmount, timestamp: estimatedTimestamp });
   }
   return requests;
 }
