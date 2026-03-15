@@ -3100,7 +3100,22 @@ const limitOrderPlaceTool: ToolDefinition = {
         ].join('\n'),
       };
     } catch (err: unknown) {
-      return { success: false, message: `  Failed to place limit order: ${getErrorMessage(err)}` };
+      const errMsg = getErrorMessage(err);
+      // Custom:2003 = ConstraintRaw on oracle account — needs Pyth Lazer price update
+      if (errMsg.includes('2003') || errMsg.includes('ConstraintRaw') || errMsg.includes('InvalidArgument')) {
+        return { success: false, message: [
+          '',
+          chalk.red('  Limit order failed: oracle constraint.'),
+          '',
+          chalk.dim('  Flash protocol requires a Pyth Lazer price update for limit orders.'),
+          chalk.dim('  This integration is not yet available in the CLI.'),
+          '',
+          chalk.dim('  Workaround: use the Flash Trade website for limit orders,'),
+          chalk.dim('  or use "open" for market orders (which work correctly).'),
+          '',
+        ].join('\n') };
+      }
+      return { success: false, message: `  Failed to place limit order: ${errMsg}` };
     }
   },
 };
