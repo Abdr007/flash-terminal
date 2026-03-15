@@ -46,8 +46,8 @@ const BLOCKHASH_FORK_SLOT_DROP = 5;
 /** Confirmation timeout per attempt */
 const CONFIRM_TIMEOUT_MS = 45_000;
 
-/** Rebroadcast interval during confirmation wait */
-const REBROADCAST_INTERVAL_MS = 3_000;
+/** Default rebroadcast interval during confirmation wait */
+const DEFAULT_REBROADCAST_INTERVAL_MS = 800;
 
 /** HTTP poll interval (fallback when WS is slow) */
 const POLL_INTERVAL_MS = 3_000;
@@ -94,6 +94,8 @@ export interface TxEngineConfig {
   dynamicCompute?: boolean;
   /** Safety buffer percent for dynamic CU limit */
   computeBufferPercent?: number;
+  /** Rebroadcast interval in ms (default: 800) */
+  rebroadcastIntervalMs?: number;
 }
 
 export interface TxSubmitResult {
@@ -226,10 +228,13 @@ export class UltraTxEngine {
     }, 30_000);
     this.broadcastRefreshTimer.unref();
 
-    // Initialize leader-aware routing
-    initLeaderRouter(primaryConnection);
-
-    getLogger().info('TX-ENGINE', 'Ultra-low latency execution engine initialized (leader-aware)');
+    // Initialize leader-aware routing (can be disabled via FLASH_LEADER_ROUTING=0)
+    if (this.config.tpuForwarding || this.config.multiBroadcast) {
+      initLeaderRouter(primaryConnection);
+      getLogger().info('TX-ENGINE', 'Ultra-low latency execution engine initialized (leader-aware)');
+    } else {
+      getLogger().info('TX-ENGINE', 'Ultra-low latency execution engine initialized (standard routing)');
+    }
   }
 
   // ─── Blockhash Pipeline ──────────────────────────────────────────────────
@@ -605,7 +610,7 @@ export class UltraTxEngine {
             maxRetries: 0,
           }).catch(() => {});
         }
-      }, REBROADCAST_INTERVAL_MS);
+      }, this.config.rebroadcastIntervalMs ?? DEFAULT_REBROADCAST_INTERVAL_MS);
 
       // ── Timeout ──
       const timeoutTimer = setTimeout(() => {

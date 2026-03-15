@@ -1169,6 +1169,10 @@ export interface FlashConfig {
   dynamicCompute: boolean;
   /** Safety buffer percent for dynamic CU limit (default: 20) */
   computeBufferPercent: number;
+  /** Enable leader-aware routing and TPU forwarding (default: true) */
+  leaderRouting: boolean;
+  /** Rebroadcast interval in ms when awaiting confirmation (default: 800) */
+  rebroadcastIntervalMs: number;
   /** Disable plugin loading (--no-plugins flag) */
   noPlugins?: boolean;
 }

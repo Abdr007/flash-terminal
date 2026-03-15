@@ -171,6 +171,8 @@ export function loadConfig(): FlashConfig {
     defaultLeverage: parseIntSafe(process.env.DEFAULT_LEVERAGE, typeof file.default_leverage === 'number' ? file.default_leverage : 2),
     dynamicCompute: (process.env.FLASH_DYNAMIC_CU ?? (file.dynamic_compute !== undefined ? String(file.dynamic_compute) : 'true')).toLowerCase() !== 'false',
     computeBufferPercent: parseIntSafe(process.env.FLASH_CU_BUFFER_PCT, typeof file.compute_buffer_percent === 'number' ? file.compute_buffer_percent : 20),
+    leaderRouting: (process.env.FLASH_LEADER_ROUTING ?? '1').toLowerCase() !== '0' && (process.env.FLASH_LEADER_ROUTING ?? '1').toLowerCase() !== 'false',
+    rebroadcastIntervalMs: parseIntSafe(process.env.FLASH_REBROADCAST_MS, 800),
   };
 }
 

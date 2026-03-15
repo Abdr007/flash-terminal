@@ -407,8 +407,10 @@ export class FlashClient implements IFlashClient {
     // Initialize state snapshot service (30s periodic snapshots)
     initStateSnapshot();
 
-    // Initialize TPU direct forwarding client
-    initTpuClient(this.connection);
+    // Initialize TPU direct forwarding client (gated by FLASH_LEADER_ROUTING)
+    if (config.leaderRouting) {
+      initTpuClient(this.connection);
+    }
 
     // Initialize ultra-low latency execution engine (handles its own blockhash refresh at 300ms)
     initUltraTxEngine(this.connection, this.wallet, {
@@ -417,8 +419,10 @@ export class FlashClient implements IFlashClient {
       dynamicPriorityFee: true,
       multiBroadcast: true,
       wsConfirmation: true,
+      tpuForwarding: config.leaderRouting,
       dynamicCompute: config.dynamicCompute,
       computeBufferPercent: config.computeBufferPercent,
+      rebroadcastIntervalMs: config.rebroadcastIntervalMs,
     });
 
     // Start legacy blockhash pre-cache only if engine init failed
