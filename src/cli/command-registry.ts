@@ -768,8 +768,40 @@ export function getAutocompleteCommands(): string[] {
   return [...seen];
 }
 
+/** Short aliases for category names (used by `help <category>`) */
+export const CATEGORY_ALIASES: Record<string, CommandCategory> = {
+  trading: 'Trading',
+  trade: 'Trading',
+  trades: 'Trading',
+  earn: 'Earn (Liquidity)',
+  liquidity: 'Earn (Liquidity)',
+  lp: 'Earn (Liquidity)',
+  faf: 'FAF Token',
+  token: 'FAF Token',
+  analytics: 'Market Data & Analytics',
+  market: 'Market Data & Analytics',
+  data: 'Market Data & Analytics',
+  portfolio: 'Portfolio & Risk',
+  risk: 'Portfolio & Risk',
+  protocol: 'Protocol Inspection',
+  inspect: 'Protocol Inspection',
+  inspection: 'Protocol Inspection',
+  wallet: 'Wallet',
+  wallets: 'Wallet',
+  utilities: 'Utilities',
+  utility: 'Utilities',
+  utils: 'Utilities',
+  tools: 'Utilities',
+};
+
+/** Resolve a user-typed category name to a CommandCategory, or undefined */
+export function resolveCategory(input: string): CommandCategory | undefined {
+  const lower = input.toLowerCase().trim();
+  return CATEGORY_ALIASES[lower];
+}
+
 /** Category order for help output */
-const CATEGORY_ORDER: CommandCategory[] = [
+export const CATEGORY_ORDER: CommandCategory[] = [
   'Trading',
   'Earn (Liquidity)',
   'FAF Token',

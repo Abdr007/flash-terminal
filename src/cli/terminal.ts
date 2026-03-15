@@ -1731,6 +1731,40 @@ export class FlashTerminal {
       return;
     }
 
+    // Per-category help: `help trading`, `help earn`, `help wallet`, etc.
+    if (lower.startsWith('help ') && lower !== 'help') {
+      const arg = input.slice(5).trim();
+      const { resolveCategory, getCommandsByCategory } = await import('./command-registry.js');
+      const category = resolveCategory(arg);
+      if (category) {
+        const categories = getCommandsByCategory();
+        const entries = categories.get(category) || [];
+        const COL_WIDTH = 32;
+        const lines = [
+          '',
+          `  ${theme.accentBold('FLASH TERMINAL')}  ${theme.dim(`— ${category}`)}`,
+          `  ${theme.separator(52)}`,
+          '',
+        ];
+        if (entries.length === 0) {
+          lines.push(`  ${theme.dim('No commands in this category.')}`);
+        } else {
+          for (const entry of entries) {
+            const label = entry.helpFormat || entry.name;
+            const padded = label.padEnd(COL_WIDTH);
+            lines.push(`    ${theme.command(padded)}${entry.description}`);
+          }
+        }
+        lines.push('');
+        lines.push(`  ${theme.separator(52)}`);
+        lines.push(`  ${theme.dim('Type')} ${theme.command('help <command>')} ${theme.dim('for detailed usage, e.g.')} ${theme.command('help open')}`);
+        lines.push(`  ${theme.dim('Type')} ${theme.command('help')} ${theme.dim('for overview of all categories')}`);
+        lines.push('');
+        console.log(lines.join('\n'));
+        return;
+      }
+    }
+
     // Per-command help: `help <command>` or `help long`, `help positions`, etc.
     if (lower.startsWith('help ') && lower !== 'help') {
       const cmdName = input.slice(5).trim();
@@ -2150,8 +2184,16 @@ export class FlashTerminal {
       }
     }
 
-    // Execute tool
-    if (!IS_AGENT) process.stdout.write(chalk.dim('  Executing...\r'));
+    // Execute tool — show progress ticker for slow commands
+    let progressTimer: ReturnType<typeof setInterval> | null = null;
+    if (!IS_AGENT) {
+      process.stdout.write(chalk.dim('  Loading...\r'));
+      let dots = 0;
+      progressTimer = setInterval(() => {
+        dots = (dots + 1) % 4;
+        process.stdout.write(chalk.dim(`  Loading${'.'.repeat(dots)}${' '.repeat(3 - dots)}\r`));
+      }, 500);
+    }
 
     let result: ToolResult;
     try {
@@ -2160,8 +2202,11 @@ export class FlashTerminal {
         COMMAND_TIMEOUT_MS,
         'execution',
       );
+      if (progressTimer) { clearInterval(progressTimer); progressTimer = null; }
       if (!IS_AGENT) process.stdout.write('               \r');
     } catch (error: unknown) {
+      if (progressTimer) { clearInterval(progressTimer); progressTimer = null; }
+      if (!IS_AGENT) process.stdout.write('               \r');
       if (IS_AGENT) {
         agentError('execution_error', { detail: getErrorMessage(error) });
       } else {

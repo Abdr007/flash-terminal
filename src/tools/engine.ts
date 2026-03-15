@@ -454,11 +454,21 @@ export class ToolEngine {
     const dim = theme.dim;
     const sec = theme.section;
 
-    const COL_WIDTH = 32; // fixed-width command column for alignment
+    // Example commands to highlight per category (2-3 each)
+    const categoryExamples: Record<string, string[]> = {
+      Trading: ['open 5x long SOL $500', 'close SOL long', 'positions'],
+      'Earn (Liquidity)': ['earn', 'earn add $100 crypto', 'earn best'],
+      'FAF Token': ['faf', 'faf stake', 'faf tier'],
+      'Market Data & Analytics': ['analyze <asset>', 'open interest', 'funding'],
+      'Portfolio & Risk': ['portfolio', 'dashboard', 'risk report'],
+      'Protocol Inspection': ['inspect protocol', 'inspect market <asset>'],
+      Wallet: ['wallet', 'wallet tokens', 'wallet list'],
+      Utilities: ['monitor', 'dryrun <command>', 'rpc status'],
+    };
 
     const lines = [
       '',
-      `  ${theme.accentBold('FLASH TERMINAL')}  ${dim('— Command Reference')}`,
+      `  ${theme.accentBold('FLASH TERMINAL')}  ${dim('— Quick Reference')}`,
       `  ${theme.separator(52)}`,
       '',
     ];
@@ -466,18 +476,20 @@ export class ToolEngine {
     const categories = getCommandsByCategory();
     for (const [category, entries] of categories) {
       if (entries.length === 0) continue;
+      const examples = categoryExamples[category] || [];
+      const exampleStr = examples.map(e => cmd(e)).join(dim(', '));
+      const remaining = entries.length - examples.length;
+      const moreStr = remaining > 0 ? dim(` ... +${remaining} more`) : '';
       lines.push(`  ${sec(category)}`);
-      for (const entry of entries) {
-        const label = entry.helpFormat || entry.name;
-        const padded = label.padEnd(COL_WIDTH);
-        lines.push(`    ${cmd(padded)}${entry.description}`);
-      }
+      lines.push(`    ${exampleStr}${moreStr}`);
       lines.push('');
     }
 
     lines.push(`  ${theme.separator(52)}`);
-    lines.push(`  ${cmd('help'.padEnd(COL_WIDTH))}Show this reference`);
-    lines.push(`  ${cmd('exit'.padEnd(COL_WIDTH))}Close the terminal`);
+    lines.push(`  ${dim("Type")} ${cmd("help <category>")} ${dim("for full command list, e.g.")} ${cmd("help trading")}`);
+    lines.push(`  ${dim("Type")} ${cmd("help <command>")}  ${dim("for detailed usage, e.g.")} ${cmd("help open")}`);
+    lines.push('');
+    lines.push(`  ${dim('Categories:')} ${dim('trading, earn, faf, analytics, portfolio, protocol, wallet, utilities')}`);
     lines.push('');
     lines.push(`  ${dim('Natural language is also supported.')}`);
     lines.push(`  ${dim('Example: "what\'s the price of SOL?" or "show me BTC analysis"')}`);
