@@ -275,7 +275,7 @@ export class WalletManager {
       'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263': 'BONK',
       'EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm': 'WIF',
       'BZLbGTNCSFfoth2GYDtwr7e4imWzpR5jqcUuGEwr646K': 'ORE',
-      '98so1YHdmeaVecYmL1eFUsDmBw6SUdP3DfLHPQ11xCN3': 'FAF',
+      'FAFxVxnkzZHMCodkWyoccgUNgVScqMw2mhhQBYDFjFAF': 'FAF',
       'KMNo3nJsBXfcpJTVhZcXLW7RmTwTt4GVFE7suUBo9sS': 'KMNO',
       '98sMhvDwXj1RQi5c5Mndm3vPe9cBqPrbLaufMXFNMh5g': 'HYPE',
     };
