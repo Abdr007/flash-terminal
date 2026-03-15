@@ -490,6 +490,13 @@ export class FlashTerminal {
 
       const lower = trimmed.toLowerCase();
       if (lower === 'exit' || lower === 'quit') {
+        if (!IS_AGENT && !this.config.simulationMode) {
+          const ok = await this.confirm('Exit Flash Terminal?');
+          if (!ok) {
+            this.rl.prompt();
+            return;
+          }
+        }
         this.shutdown();
         return;
       }
@@ -1957,6 +1964,20 @@ export class FlashTerminal {
           'parsing',
         );
         if (!IS_AGENT) process.stdout.write('              \r');
+
+        // Safety guard: block AI-inferred destructive actions
+        const { shouldBlockAiIntent } = await import('../core/command-safety.js');
+        if (shouldBlockAiIntent(input, intent.action)) {
+          const { getSafeCommandSuggestion } = await import('../core/command-safety.js');
+          const suggestion = getSafeCommandSuggestion(input);
+          console.log('');
+          console.log(chalk.yellow(`  Unknown command: ${input}`));
+          if (suggestion) {
+            console.log(chalk.dim(`  Did you mean: ${chalk.cyan(suggestion)}?`));
+          }
+          console.log('');
+          return;
+        }
       } catch (error: unknown) {
         console.log(chalk.red(`  ✖ Parse error: ${getErrorMessage(error)}`));
         return;
@@ -2061,15 +2082,21 @@ export class FlashTerminal {
         return;
       }
 
-      // Generic fallback
+      // Generic fallback — with "did you mean" for near-misses
       console.log('');
-      console.log(chalk.yellow(`  \u26A0 Unknown command: ${input}`));
+      console.log(chalk.yellow(`  Unknown command: ${input}`));
+      try {
+        const { getSafeCommandSuggestion } = await import('../core/command-safety.js');
+        const suggestion = getSafeCommandSuggestion(input);
+        if (suggestion) {
+          console.log(chalk.dim(`  Did you mean: ${chalk.cyan(suggestion)}?`));
+        }
+      } catch { /* non-critical */ }
       console.log('');
       console.log(`  ${theme.section('Try')}`);
       console.log(`    ${theme.command('help')}         List all commands`);
       console.log(`    ${theme.command('markets')}      View available markets`);
       console.log(`    ${theme.command('positions')}    View open positions`);
-      console.log(`    ${theme.command('monitor')}      Live market monitoring`);
       console.log('');
       return;
     }
