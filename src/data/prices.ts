@@ -321,7 +321,7 @@ export class PriceService {
   private compute24hChange(symbol: string, currentPrice: number): number {
     const history = _sharedHistory.get(symbol);
 
-    // Need at least 2 entries with ≥1 hour of data to compute meaningful change
+    // Need at least 2 entries
     if (!history || history.length < 2) {
       return NaN;
     }
@@ -329,12 +329,12 @@ export class PriceService {
     const oldestTimestamp = history[0].timestamp;
     const historyAgeMs = Date.now() - oldestTimestamp;
 
-    // Require at least 10 minutes of accumulated history before reporting change
-    if (historyAgeMs < 10 * 60_000) {
+    // Require at least 2 minutes of history
+    if (historyAgeMs < 2 * 60_000) {
       return NaN;
     }
 
-    // Find entry closest to 24h ago
+    // Find entry closest to 24h ago (or oldest available if <24h of history)
     const target = Date.now() - HISTORY_WINDOW_MS;
     let closest = history[0];
     for (const snap of history) {
