@@ -62,7 +62,7 @@ const MAX_RESPONSE_BYTES = 1024 * 1024; // 1MB max
 const HISTORY_INTERVAL_MS = 60_000; // record every 1 minute
 const HISTORY_WINDOW_MS = 24 * 60 * 60_000; // 24 hours
 const MAX_HISTORY_PER_SYMBOL = 1440; // 24h at 1min intervals
-const DISK_SAVE_INTERVAL_MS = 2 * 60_000; // persist to disk every 2 minutes
+const DISK_SAVE_INTERVAL_MS = 30_000; // persist to disk every 30 seconds
 const HISTORY_FILE = join(homedir(), '.flash', 'price-history.json');
 const MAX_HISTORY_FILE_BYTES = 5 * 1024 * 1024; // 5MB max file size
 
@@ -151,6 +151,12 @@ export class PriceService {
 
     // Record price history for 24h change computation
     this.recordPriceHistory(priceMap, now);
+
+    // Force immediate disk save on first fetch (ensures all symbols persist across restarts)
+    if (_lastDiskSave === 0 && priceMap.size > 0) {
+      this.saveHistoryToDisk();
+      _lastDiskSave = now;
+    }
 
     // Stale cache fallback for missing symbols
     const missing = uncached.filter(sym => !priceMap.has(sym));
