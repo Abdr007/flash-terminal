@@ -553,11 +553,17 @@ export const earnSimulateTool: ToolDefinition = {
     }
 
     if (m.apy7d === 0) {
-      // 7D fee data unavailable from fstats — show pool snapshot instead of failing
+      // 7D daily fee data unavailable — estimate from total fees / pool lifetime
       const flpTokens = amount / (m.flpPrice > 0 ? m.flpPrice : 1);
+      const lpFees = m.totalFees * (m.feeShareLp / 100);
+
+      // Estimate daily LP fees: total LP fees / estimated pool age (~365 days)
+      const estimatedDailyFees = lpFees > 0 && m.tvl > 0 ? lpFees / 365 : 0;
+      const estimatedApy = estimatedDailyFees > 0 ? (estimatedDailyFees / m.tvl) * 365 * 100 : 0;
+
       const lines = [
         '',
-        `  ${theme.accentBold(`${pool.displayName} — Deposit Preview`)}`,
+        `  ${theme.accentBold(`${pool.displayName} — Yield Estimate`)}`,
         `  ${theme.separator(45)}`,
         '',
         theme.pair('Deposit', formatUsd(amount)),
@@ -565,10 +571,22 @@ export const earnSimulateTool: ToolDefinition = {
         theme.pair('FLP Received', m.flpPrice > 0 ? `~${flpTokens.toFixed(2)} FLP` : 'unavailable'),
         theme.pair('Pool TVL', m.tvl > 0 ? formatUsd(m.tvl) : 'unavailable'),
         theme.pair('Fee Share', `${m.feeShareLp}%`),
-        theme.pair('Total Volume', m.totalVolume > 0 ? formatUsd(m.totalVolume) : 'unavailable'),
-        theme.pair('Total Fees', m.totalFees > 0 ? formatUsd(m.totalFees) : 'unavailable'),
         '',
       ];
+
+      if (estimatedApy > 0) {
+        const dailyReturn = amount * (estimatedApy / 100) / 365;
+        lines.push(
+          theme.pair('Est. APY', chalk.green(`~${estimatedApy.toFixed(1)}%`)),
+          '',
+          theme.pair('Daily', chalk.green(`~+${formatUsd(dailyReturn)}`)),
+          theme.pair('Monthly', chalk.green(`~+${formatUsd(dailyReturn * 30)}`)),
+          theme.pair('Yearly', chalk.green(`~+${formatUsd(dailyReturn * 365)}`)),
+          '',
+          chalk.dim('  * Estimate based on lifetime pool fees. Actual returns vary.'),
+        );
+      }
+      lines.push('');
       return { success: true, message: lines.join('\n') };
     }
 
