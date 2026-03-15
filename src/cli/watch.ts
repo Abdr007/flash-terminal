@@ -52,12 +52,6 @@ function validateWatchCommand(command: string): string | null {
   return null;
 }
 
-/** Strip ANSI escape codes for accurate line comparison */
-function stripAnsi(str: string): string {
-  // eslint-disable-next-line no-control-regex
-  return str.replace(/\x1B\[[0-9;]*[a-zA-Z]/g, '');
-}
-
 export interface WatchDeps {
   engine: ToolEngine;
   parseCommand: (input: string) => Promise<ParsedIntent>;

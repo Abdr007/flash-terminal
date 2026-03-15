@@ -26,38 +26,6 @@ export interface GuidanceResult {
   footer?: string;
 }
 
-// ─── Pool Aliases (mirror of interpreter — display only) ────────────────────
-
-const EARN_POOL_ALIASES: Record<string, string> = {
-  crypto: 'Crypto.1',
-  virtual: 'Virtual.1',
-  governance: 'Governance.1',
-  gov: 'Governance.1',
-  community: 'Community.1',
-  meme: 'Community.2',
-  trump: 'Trump.1',
-  ore: 'Ore.1',
-  ondo: 'Ondo.1',
-  stocks: 'Ondo.1',
-};
-
-const POOL_NAMES = Object.keys(EARN_POOL_ALIASES).filter(
-  k => k !== 'gov' && k !== 'stocks', // skip secondary aliases for display
-);
-
-// ─── Command Names (static, derived once) ───────────────────────────────────
-
-const ALL_COMMAND_NAMES: string[] = (() => {
-  const names = new Set<string>();
-  for (const entry of COMMAND_REGISTRY) {
-    names.add(entry.name);
-    if (entry.aliases) {
-      for (const a of entry.aliases) names.add(a);
-    }
-  }
-  return [...names];
-})();
-
 // ─── Core API ───────────────────────────────────────────────────────────────
 
 /**

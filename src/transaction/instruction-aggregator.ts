@@ -110,14 +110,14 @@ export function splitBatch(batch: InstructionBatch): [InstructionBatch, Instruct
 
   // Count instructions per label by tracking insertion order
   // The first label's instructions go into primary, rest into secondary
-  const primary = createBatch();
-  const secondary = createBatch();
+  const _primary = createBatch();
+  const _secondary = createBatch();
 
   // Find where the first label's instructions end
   // Each SDK result may produce multiple instructions, so we track by
   // counting unique label transitions
-  let currentLabelIdx = 0;
-  let ixIdx = 0;
+  const _currentLabelIdx = 0;
+  const _ixIdx = 0;
 
   // We need to know how many instructions each label contributed.
   // Since labels are pushed once per appendToBatch call, we track the ix boundaries.

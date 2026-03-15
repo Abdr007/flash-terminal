@@ -14,7 +14,6 @@ import {
   type AddressLookupTableAccount,
   type TransactionInstruction,
   type MessageV0,
-  PublicKey,
 } from '@solana/web3.js';
 import type { PoolConfig } from 'flash-sdk';
 import { getLogger } from '../utils/logger.js';

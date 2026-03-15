@@ -55,11 +55,11 @@ export async function getPoolMetrics(): Promise<Map<string, PoolMetrics>> {
   const registry = getPoolRegistry();
 
   // Step 1: Fetch pool prices from fstats /pools
-  let poolPrices: Record<string, { flp: number; sflp: number; vol: number; fees: number; trades: number; lpShare: number }> = {};
+  const poolPrices: Record<string, { flp: number; sflp: number; vol: number; fees: number; trades: number; lpShare: number }> = {};
   try {
     const res = await fetch(`${FSTATS_BASE_URL}/pools`, { signal: AbortSignal.timeout(6000) });
     if (res.ok) {
-      const json = await res.json() as { pools?: Array<any> };
+      const json = await res.json() as { pools?: Array<{ name?: string; lp_price_compounding?: number; lp_price_regular?: number; total_volume_usd?: number; total_fees_usd?: number; total_trades?: number; fee_split?: { lp?: number } }> };
       if (json.pools) {
         for (const p of json.pools) {
           if (!p.name || p.name.startsWith('Remora')) continue;

@@ -7,7 +7,7 @@
 
 import { Connection, PublicKey } from '@solana/web3.js';
 import { PoolConfig, PerpetualsClient, TokenStakeAccount } from 'flash-sdk';
-import { FAF_MINT, FAF_DECIMALS, FAF_TOKEN_VAULT, getVipTier, VipTier, VOLTAGE_TIERS } from './faf-registry.js';
+import { FAF_MINT, FAF_DECIMALS, getVipTier, VipTier, VOLTAGE_TIERS } from './faf-registry.js';
 import { getLogger } from '../utils/logger.js';
 import BN from 'bn.js';
 
@@ -39,7 +39,7 @@ export async function getFafStakeInfo(
 ): Promise<FafStakeInfo | null> {
   const logger = getLogger();
 
-  let stakeAccount: TokenStakeAccount | null = null;
+  let stakeAccount: TokenStakeAccount | null;
   try {
     stakeAccount = await perpClient.getTokenStakeAccount(poolConfig, userPublicKey);
   } catch {
@@ -107,7 +107,7 @@ export async function getFafUnstakeRequests(
   poolConfig: PoolConfig,
   userPublicKey: PublicKey,
 ): Promise<FafUnstakeRequest[]> {
-  let stakeAccount: TokenStakeAccount | null = null;
+  let stakeAccount: TokenStakeAccount | null;
   try {
     stakeAccount = await perpClient.getTokenStakeAccount(poolConfig, userPublicKey);
   } catch {
@@ -116,7 +116,7 @@ export async function getFafUnstakeRequests(
   if (!stakeAccount || !stakeAccount.isInitialized) return [];
 
   const requests: FafUnstakeRequest[] = [];
-  const withdrawRequests = (stakeAccount as any).withdrawRequests ?? (stakeAccount as any).withdrawRequest ?? [];
+  const withdrawRequests = (stakeAccount as unknown as Record<string, unknown>).withdrawRequests as Array<Record<string, unknown>> ?? (stakeAccount as unknown as Record<string, unknown>).withdrawRequest as Array<Record<string, unknown>> ?? [];
   for (let i = 0; i < withdrawRequests.length; i++) {
     const req = withdrawRequests[i];
     if (!req) continue;
@@ -150,7 +150,7 @@ export async function getVoltageInfo(
   poolConfig: PoolConfig,
   userPublicKey: PublicKey,
 ): Promise<FafVoltageInfo | null> {
-  let stakeAccount: TokenStakeAccount | null = null;
+  let stakeAccount: TokenStakeAccount | null;
   try {
     stakeAccount = await perpClient.getTokenStakeAccount(poolConfig, userPublicKey);
   } catch {
@@ -158,9 +158,9 @@ export async function getVoltageInfo(
   }
   if (!stakeAccount || !stakeAccount.isInitialized) return null;
 
-  const level = Math.min((stakeAccount as any).voltageLevel ?? 0, VOLTAGE_TIERS.length - 1);
+  const level = Math.min((stakeAccount as unknown as Record<string, unknown>).voltageLevel as number ?? 0, VOLTAGE_TIERS.length - 1);
   const tier = VOLTAGE_TIERS[level] ?? VOLTAGE_TIERS[0];
-  const tradeCounter = (stakeAccount as any).tradeCounter ?? 0;
+  const tradeCounter = (stakeAccount as unknown as Record<string, unknown>).tradeCounter ?? 0;
 
   return {
     level,

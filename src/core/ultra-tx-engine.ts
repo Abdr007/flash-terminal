@@ -23,12 +23,10 @@ import {
   ComputeBudgetProgram,
   VersionedTransaction,
   MessageV0,
-  type Commitment,
   type AddressLookupTableAccount,
 } from '@solana/web3.js';
 import { getLogger } from '../utils/logger.js';
 import { getRpcManagerInstance } from '../network/rpc-manager.js';
-import { createConnection } from '../wallet/connection.js';
 import { getErrorMessage } from '../utils/retry.js';
 import { getLeaderRouter, initLeaderRouter, shutdownLeaderRouter } from './leader-router.js';
 import { getTpuClient } from '../network/tpu-client.js';
@@ -48,9 +46,6 @@ const BLOCKHASH_FORK_SLOT_DROP = 5;
 /** Confirmation timeout per attempt */
 const CONFIRM_TIMEOUT_MS = 45_000;
 
-/** WebSocket confirmation timeout — fallback to polling if WS doesn't fire */
-const WS_CONFIRM_TIMEOUT_MS = 40_000;
-
 /** Rebroadcast interval during confirmation wait */
 const REBROADCAST_INTERVAL_MS = 3_000;
 
@@ -65,9 +60,6 @@ const PRIORITY_FEE_CEILING = 500_000;
 
 /** Compute unit limit for Flash Trade transactions (matches website) */
 const DEFAULT_CU_LIMIT = 220_000;
-
-/** Recent priority fee sample size for dynamic calculation */
-const PRIORITY_FEE_SAMPLE_SIZE = 20;
 
 /** Priority fee cache TTL — 5s refresh for responsive congestion tracking */
 const PRIORITY_FEE_CACHE_MS = 5_000;
@@ -514,13 +506,12 @@ export class UltraTxEngine {
     timeoutMs: number
   ): Promise<{ confirmedViaWs: boolean; rebroadcastCount: number }> {
     const logger = getLogger();
-    let confirmedViaWs = false;
+    let _confirmedViaWs = false;
     let rebroadcastCount = 0;
     let wsSubscriptionId: number | undefined;
 
     return new Promise<{ confirmedViaWs: boolean; rebroadcastCount: number }>((resolve, reject) => {
       let settled = false;
-      const startTime = Date.now();
 
       const cleanup = (viaWs: boolean) => {
         settled = true;
@@ -562,7 +553,7 @@ export class UltraTxEngine {
               if (result.err) {
                 onError(new Error(`Transaction failed on-chain: ${JSON.stringify(result.err)}`));
               } else {
-                confirmedViaWs = true;
+                _confirmedViaWs = true;
                 onConfirmed(true);
               }
             },
@@ -736,14 +727,14 @@ export class UltraTxEngine {
     let compileTimeMs = 0;
     let signTimeMs = 0;
     let broadcastTimeMs = 0;
-    let confirmLatencyMs = 0;
+    let confirmLatencyMs: number;
     let rebroadcastCount = 0;
-    let confirmedViaWs = false;
+    let confirmedViaWs: boolean;
     let priorityFee = this.config.computeUnitPrice;
     let leaderRouted = false;
     let submittedAtSlot = 0;
     let submissionLatencyMs = 0;
-    let tpuForwarded = false;
+    const tpuForwarded = false;
 
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
       const conn = this.primaryConnection;

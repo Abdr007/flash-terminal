@@ -84,7 +84,7 @@ export function filterOpportunities(
   positions: Position[],
   totalCapital: number,
   freeCapital: number,
-  maxPositionSize: number,
+  _maxPositionSize: number,
 ): PortfolioFilterResult {
   const accepted: Opportunity[] = [];
   const rejected: AllocationRejectReason[] = [];

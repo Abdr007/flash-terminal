@@ -298,15 +298,9 @@ export class LimitOrderEngine {
       const valuationPrice = priceMap.get(order.market);
       if (!valuationPrice || !Number.isFinite(valuationPrice) || valuationPrice <= 0) continue;
 
-      let conditionMet = false;
-
-      if (order.side === TradeSide.Long) {
-        // LONG limit order: trigger when price drops to limit
-        conditionMet = valuationPrice <= order.limitPrice;
-      } else {
-        // SHORT limit order: trigger when price rises to limit
-        conditionMet = valuationPrice >= order.limitPrice;
-      }
+      const conditionMet = order.side === TradeSide.Long
+        ? valuationPrice <= order.limitPrice   // LONG limit order: trigger when price drops to limit
+        : valuationPrice >= order.limitPrice;  // SHORT limit order: trigger when price rises to limit
 
       // Spike protection: increment or reset confirmation ticks
       if (conditionMet) {

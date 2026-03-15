@@ -1,5 +1,4 @@
 import { POOL_MARKETS } from '../config/index.js';
-import { IFlashClient } from '../types/index.js';
 import { theme } from './theme.js';
 import { getAutocompleteCommands } from './command-registry.js';
 
@@ -302,9 +301,9 @@ function getPositionAwareSuggestions(
  */
 function findDidYouMean(input: string): string | null {
   // Only try for inputs that look like commands (no special chars except hyphen/space)
-  if (/[^a-z0-9\s\-]/.test(input)) {
+  if (/[^a-z0-9\s-]/.test(input)) {
     // Strip non-alpha and try matching
-    const cleaned = input.replace(/[^a-z0-9\s\-]/g, '').trim();
+    const cleaned = input.replace(/[^a-z0-9\s-]/g, '').trim();
     if (cleaned) {
       const exact = COMMANDS.find(c => c === cleaned);
       if (exact) {

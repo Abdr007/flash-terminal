@@ -31,11 +31,6 @@ const MARKET_TAKING_PREFIXES = [
   'protocol fees', 'position debug',
 ];
 
-/** Check if a command accepts market names as arguments. */
-function takesMarketArg(cmd: string): boolean {
-  return MARKET_TAKING_PREFIXES.includes(cmd);
-}
-
 /** Get commands that take market arguments (just the first word for simple matching). */
 function getMarketCommands(): string[] {
   const first = new Set<string>();
@@ -83,7 +78,6 @@ complete -F _flash_completions flash
 // ─── Zsh ─────────────────────────────────────────────────────────────────────
 
 export function generateZshCompletion(): string {
-  const commands = getAllCommandWords();
   const markets = getAllMarkets();
   const marketCmds = getMarketCommands();
 

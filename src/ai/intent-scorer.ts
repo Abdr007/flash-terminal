@@ -101,7 +101,7 @@ export function resolveAmbiguous(
       leverage = lastLeverage ?? 2;
       defaults.push('leverage');
     }
-    let collateral = lastCollateral ?? 10;
+    const collateral = lastCollateral ?? 10;
     defaults.push('collateral');
 
     const confidence = defaults.length === 2 ? 0.60 : defaults.length === 1 ? 0.75 : 0.85;

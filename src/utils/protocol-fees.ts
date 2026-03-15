@@ -130,13 +130,14 @@ export async function getProtocolFeeRates(
       const poolName = getPoolForMarket(upper);
       if (poolName) {
         const pc = PoolConfig.fromIdsByName(poolName, 'mainnet-beta');
-        const custodies = pc.custodies as Array<{ custodyAccount: any; symbol: string }>;
+        const custodies = pc.custodies as unknown as Array<Record<string, unknown> & { symbol: string }>;
         const custody = custodies.find(c => c.symbol.toUpperCase() === upper);
         if (custody) {
-          const client = perpClient as any;
-          const rawData = await client.program.account.custody.fetch(custody.custodyAccount);
+          const client = perpClient as unknown as { program: { account: { custody: { fetch: (key: unknown) => Promise<unknown> } } } };
+          const custodyKey = custody.custodyAccount as Parameters<typeof CustodyAccount.from>[0];
+          const rawData = await client.program.account.custody.fetch(custodyKey);
           // Must wrap with CustodyAccount.from() to get proper field structure
-          const custodyAcct = CustodyAccount.from(custody.custodyAccount, rawData);
+          const custodyAcct = CustodyAccount.from(custodyKey, rawData as Parameters<typeof CustodyAccount.from>[1]);
           const openFeeRaw = parseFloat(custodyAcct.fees.openPosition.toString());
           const closeFeeRaw = parseFloat(custodyAcct.fees.closePosition.toString());
 
@@ -156,9 +157,9 @@ export async function getProtocolFeeRates(
           }
 
           // ── Max leverage validation ──
-          const rawMaxLev = (custodyAcct as any).pricing?.maxLeverage;
-          const maxLevRaw = typeof rawMaxLev === 'object' && rawMaxLev?.toNumber
-            ? rawMaxLev.toNumber()
+          const rawMaxLev = (custodyAcct as unknown as Record<string, Record<string, unknown>>).pricing?.maxLeverage as unknown;
+          const maxLevRaw = typeof rawMaxLev === 'object' && rawMaxLev !== null && 'toNumber' in rawMaxLev
+            ? (rawMaxLev as { toNumber: () => number }).toNumber()
             : typeof rawMaxLev === 'number' ? rawMaxLev : 0;
 
           const maxLeverage = maxLevRaw / BPS_POWER;

@@ -12,8 +12,8 @@ import { allSwapTools } from './swap-tools.js';
 import { allEarnTools } from './earn-tools.js';
 import { allEngineTools } from './engine-tools.js';
 import { allFafTools } from './faf-tools.js';
+import { profilingSummaryTool } from '../observability/profiler.js';
 import { runMiddleware } from '../core/execution-middleware.js';
-import chalk from 'chalk';
 import { theme } from '../cli/theme.js';
 import { getCommandsByCategory } from '../cli/command-registry.js';
 
@@ -47,6 +47,7 @@ export class ToolEngine {
     for (const tool of allFafTools) {
       this.registry.register(tool);
     }
+    this.registry.register(profilingSummaryTool);
     // Lock core tools — plugins cannot override them
     this.registry.lockCore();
   }
@@ -63,7 +64,7 @@ export class ToolEngine {
    */
   async dispatch(intent: ParsedIntent): Promise<ToolResult> {
     // Run execution middleware pipeline
-    const middlewareBlock = runMiddleware(intent, this.context);
+    const middlewareBlock = await runMiddleware(intent, this.context);
     if (middlewareBlock) return middlewareBlock;
 
     const mapping = this.getToolMapping(intent);
@@ -418,7 +419,7 @@ export class ToolEngine {
         return { toolName: 'faf_unstake', params: { amount: intent.amount } };
 
       case ActionType.FafClaim:
-        return { toolName: 'faf_claim', params: { type: (intent as any).type ?? 'all' } };
+        return { toolName: 'faf_claim', params: { type: (intent as Record<string, unknown>).type ?? 'all' } };
 
       case ActionType.FafTier:
         return { toolName: 'faf_tier', params: {} };
@@ -436,7 +437,7 @@ export class ToolEngine {
         return { toolName: 'faf_unstake_requests', params: {} };
 
       case ActionType.FafCancelUnstake:
-        return { toolName: 'faf_cancel_unstake', params: { requestId: (intent as any).requestId } };
+        return { toolName: 'faf_cancel_unstake', params: { requestId: (intent as Record<string, unknown>).requestId } };
 
       case ActionType.EngineStatus:
         return { toolName: 'engine_status', params: {} };

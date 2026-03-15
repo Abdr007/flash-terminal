@@ -8,7 +8,7 @@
  * ADDITIVE ONLY — never affects trading execution.
  */
 
-import { getMetrics, MetricSnapshot, HistogramSnapshot, METRIC } from './metrics.js';
+import { getMetrics, METRIC } from './metrics.js';
 
 // ─── Prometheus Format ───────────────────────────────────────────────────────
 

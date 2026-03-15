@@ -389,11 +389,11 @@ function flexParseOpen(input: string): ParsedIntent | null {
 
   if (!collateral || !Number.isFinite(collateral) || collateral <= 0) return null;
   // If no leverage found, try preferred from history, then default (2x)
-  let leverageDefaulted = false;
+  let _leverageDefaulted = false;
   if (!leverage) {
     const historyLev = getPreferredLeverage(market ?? '');
     leverage = historyLev ?? 2;
-    leverageDefaulted = true;
+    _leverageDefaulted = true;
   }
   if (!Number.isFinite(leverage) || leverage < 1) return null;
 
@@ -606,6 +606,7 @@ export function validateIntent(intent: ParsedIntent): CommandAlert | null {
  */
 export function localParse(input: string): ParsedIntent | null {
   // Sanitize: collapse whitespace (tabs, newlines, etc.) to single spaces, strip control chars
+  // eslint-disable-next-line no-control-regex
   const sanitized = input.replace(/[\x00-\x1f\x7f]/g, ' ').replace(/\s+/g, ' ').trim();
   // Expand trade templates first (e.g. "scalp" → "long sol 3x 50")
   const templateExpanded = expandTemplate(sanitized) ?? sanitized;
@@ -615,7 +616,7 @@ export function localParse(input: string): ParsedIntent | null {
   const aliased = expandAliases(userExpanded);
   // Pre-process: normalize number words and asset aliases
   const normalized = normalizeAssetAliases(normalizeNumberWords(aliased));
-  let lower = normalized.toLowerCase();
+  const lower = normalized.toLowerCase();
 
   // Fuzzy correction is applied later in the flex parser section only,
   // to avoid interfering with deterministic regex patterns above.
@@ -1506,6 +1507,7 @@ export class AIInterpreter {
     if (!ctx) return null;
 
     const lower = normalizeAssetAliases(normalizeNumberWords(userInput))
+      // eslint-disable-next-line no-control-regex
       .replace(/[\x00-\x1f\x7f]/g, ' ')
       .replace(/\s+/g, ' ')
       .trim()
@@ -1818,6 +1820,7 @@ export class OfflineInterpreter {
     if (!ctx) return null;
 
     const lower = normalizeAssetAliases(normalizeNumberWords(userInput))
+      // eslint-disable-next-line no-control-regex
       .replace(/[\x00-\x1f\x7f]/g, ' ')
       .replace(/\s+/g, ' ')
       .trim()

@@ -96,7 +96,7 @@ async function _buildRiskPreview(
     if (!md || !Number.isFinite(md.price) || md.price <= 0) return lines;
 
     const entryEst = md.price;
-    const perpClient = context.simulationMode ? null : (context.flashClient as any).perpClient ?? null;
+    const perpClient = context.simulationMode ? null : (context.flashClient as unknown as Record<string, unknown>).perpClient ?? null;
     const liqEst = await estimateLiqPrice(entryEst, leverage, side, market, perpClient);
     if (liqEst <= 0) return lines;
     const distancePct = Math.abs(entryEst - liqEst) / entryEst * 100;

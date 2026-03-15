@@ -1,4 +1,4 @@
-import { ToolDefinition, ToolContext, ToolResult } from '../types/index.js';
+import { ToolDefinition, ToolContext } from '../types/index.js';
 import { getLogger } from '../utils/logger.js';
 import { getErrorMessage } from '../utils/retry.js';
 

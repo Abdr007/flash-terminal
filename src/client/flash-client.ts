@@ -24,9 +24,7 @@ import {
   BN_ZERO,
   OraclePrice,
   ContractOraclePrice,
-  OrderAccount,
 } from 'flash-sdk';
-import type { LimitOrder as SdkLimitOrder, TriggerOrder as SdkTriggerOrder } from 'flash-sdk';
 import {
   Position,
   TradeSide,
@@ -51,13 +49,13 @@ import { getErrorMessage, withRetry } from '../utils/retry.js';
 import type { WalletManager } from '../wallet/walletManager.js';
 import { getRpcManagerInstance } from '../network/rpc-manager.js';
 import { getUltraTxEngine, initUltraTxEngine } from '../core/ultra-tx-engine.js';
-import { initStateCache, getStateCache, shutdownStateCache } from '../core/state-cache.js';
-import { initStateSnapshot, shutdownStateSnapshot } from '../core/state-snapshot.js';
-import { initTpuClient, getTpuClient, shutdownTpuClient } from '../network/tpu-client.js';
+import { initStateCache, getStateCache } from '../core/state-cache.js';
+import { initStateSnapshot } from '../core/state-snapshot.js';
+import { initTpuClient, getTpuClient } from '../network/tpu-client.js';
 
 import { createBatch, appendToBatch, isBatchWithinLimit, batchSummary, type SdkResult } from '../transaction/instruction-aggregator.js';
 import { resolveALTs, verifyALTAccountOverlap, logMessageALTDiagnostics } from '../transaction/alt-resolver.js';
-import { ensureATAs, buildATAIdempotentIxs } from '../transaction/ata-resolver.js';
+import { buildATAIdempotentIxs } from '../transaction/ata-resolver.js';
 
 // ─── Pyth Price Service ──────────────────────────────────────────────────────
 
@@ -88,7 +86,7 @@ class PythPriceService {
       }
     } catch (e) {
       if (e instanceof Error && e.message.includes('Pythnet')) throw e;
-      throw new Error(`Invalid Pythnet URL: ${pythnetUrl}`);
+      throw new Error(`Invalid Pythnet URL: ${pythnetUrl}`, { cause: e });
     }
     const conn = new Connection(pythnetUrl);
     this.pythClient = new PythHttpClient(conn, getPythProgramKeyForCluster('pythnet'));
@@ -1746,7 +1744,6 @@ export class FlashClient implements IFlashClient {
       if (!Number.isFinite(liqPrice) || liqPrice < 0) liqPrice = 0;
     } catch {
       // Fallback: SDK call failed, use 0 rather than approximate
-      liqPrice = 0;
     }
 
     const preview: DryRunPreview = {
@@ -1847,7 +1844,7 @@ export class FlashClient implements IFlashClient {
 
     // Batch-fetch all custody accounts for SDK liquidation math
     const custodyKeys = custodies.map(c => c.custodyAccount);
-    let custodyAccountMap = new Map<string, CustodyAccount>();
+    const custodyAccountMap = new Map<string, CustodyAccount>();
     try {
       const custodyData = await this.perpClient.program.account.custody.fetchMultiple(custodyKeys);
       for (let i = 0; i < custodies.length; i++) {
@@ -2552,12 +2549,12 @@ export class FlashClient implements IFlashClient {
       // Compute liquidation price
       let openLiqPrice = 0;
       try {
-        const targetCustodyAcct = CustodyAccount.from(outputCustody.custodyAccount, custodyAccounts[1]);
+        const _targetCustodyAcct = CustodyAccount.from(outputCustody.custodyAccount, custodyAccounts[1]);
         const openSizeUsd = targetPrice.price.getAssetAmountUsd(sizeAmount, targetToken.decimals);
         const openCollateralUsd = inputPrice.price.getAssetAmountUsd(collateralNative, inputToken.decimals);
         const liqResult = this.perpClient.getLiquidationPriceWithOrder(
           openCollateralUsd, sizeAmount, openSizeUsd, targetToken.decimals,
-          targetPrice.price, sdkSide, CustodyAccount.from(outputCustody.custodyAccount, custodyAccounts[1]),
+          targetPrice.price, sdkSide, _targetCustodyAcct,
         );
         const liqUi = parseFloat(liqResult.toUiPrice(8));
         if (Number.isFinite(liqUi) && liqUi > 0) openLiqPrice = liqUi;
@@ -2634,7 +2631,7 @@ export class FlashClient implements IFlashClient {
 
     const poolConfig = this.getPoolConfigForMarket(market);
     const sdkSide = toSdkSide(side);
-    const { targetSymbol, collateralSymbol } = this.resolveOrderTokens(poolConfig, market, sdkSide);
+    const { collateralSymbol } = this.resolveOrderTokens(poolConfig, market, sdkSide);
     const reserveSymbol = DEFAULT_COLLATERAL_TOKEN;
     const receiveSymbol = DEFAULT_COLLATERAL_TOKEN;
 
@@ -2661,7 +2658,7 @@ export class FlashClient implements IFlashClient {
     } catch (err: unknown) {
       const msg = getErrorMessage(err);
       logger.warn('CLIENT', `cancelLimitOrder via editLimitOrder failed: ${msg}`);
-      throw new Error(`Failed to cancel limit order #${orderId}: ${msg}`);
+      throw new Error(`Failed to cancel limit order #${orderId}: ${msg}`, { cause: err });
     }
   }
 
@@ -2894,7 +2891,7 @@ export class FlashClient implements IFlashClient {
     const token = this.findToken(poolConfig, tokenSymbol);
 
     const nativeAmount = uiDecimalsToNative(amountUsd.toString(), token.decimals);
-    const flpSymbol = (poolConfig as any).compoundingLpTokenSymbol || 'FLP';
+    const flpSymbol = (poolConfig as unknown as Record<string, unknown>).compoundingLpTokenSymbol || 'FLP';
 
     logger.info('CLIENT', `Add liquidity: ${amountUsd} ${tokenSymbol} → ${poolConfig.poolName} (${flpSymbol})`);
 
@@ -2922,7 +2919,7 @@ export class FlashClient implements IFlashClient {
     const logger = getLogger();
     const poolConfig = pool ? this.resolvePoolConfig(pool) : this.getPoolConfigForToken(tokenSymbol);
     const token = this.findToken(poolConfig, tokenSymbol);
-    const flpSymbol = (poolConfig as any).compoundingLpTokenSymbol || 'FLP';
+    const flpSymbol = (poolConfig as unknown as Record<string, unknown>).compoundingLpTokenSymbol || 'FLP';
 
     logger.info('CLIENT', `Remove liquidity: ${percent}% from ${poolConfig.poolName} (${flpSymbol})`);
 
@@ -2961,7 +2958,7 @@ export class FlashClient implements IFlashClient {
   async stakeFLP(amountUsd: number, pool?: string) {
     const logger = getLogger();
     const poolConfig = this.resolvePoolConfig(pool);
-    const sflpSymbol = (poolConfig as any).stakedLpTokenSymbol || 'sFLP';
+    const sflpSymbol = (poolConfig as unknown as Record<string, unknown>).stakedLpTokenSymbol || 'sFLP';
 
     // Use addLiquidityAndStake: deposits USDC → mints LP → stakes → sFLP in one tx.
     // This is the correct flow — depositStake alone requires raw LP tokens
@@ -2990,10 +2987,11 @@ export class FlashClient implements IFlashClient {
   async unstakeFLP(percent: number, pool?: string) {
     const logger = getLogger();
     const poolConfig = this.resolvePoolConfig(pool);
-    const sflpSymbol = (poolConfig as any).stakedLpTokenSymbol || 'sFLP';
+    const pcExt = poolConfig as unknown as Record<string, unknown>;
+    const sflpSymbol = pcExt.stakedLpTokenSymbol || 'sFLP';
 
     // Get user's staked FLP (sFLP) balance
-    const sflpMint = (poolConfig as any).stakedLpTokenMint;
+    const sflpMint = pcExt.stakedLpTokenMint as PublicKey | undefined;
     if (!sflpMint) {
       throw new Error(`Staking not available for ${poolConfig.poolName}`);
     }
@@ -3027,10 +3025,11 @@ export class FlashClient implements IFlashClient {
   async claimRewards(pool?: string) {
     const logger = getLogger();
     const poolConfig = this.resolvePoolConfig(pool);
-    const sflpSymbol = (poolConfig as any).stakedLpTokenSymbol || 'sFLP';
+    const pcExt = poolConfig as unknown as Record<string, unknown>;
+    const sflpSymbol = pcExt.stakedLpTokenSymbol || 'sFLP';
 
     // Check if user has staked LP tokens (sFLP) — required to have pending rewards
-    const sflpMint = (poolConfig as any).stakedLpTokenMint;
+    const sflpMint = pcExt.stakedLpTokenMint as PublicKey | undefined;
     if (sflpMint) {
       const sflpBalance = await this.getTokenBalance(sflpMint);
       if (sflpBalance.isZero()) {

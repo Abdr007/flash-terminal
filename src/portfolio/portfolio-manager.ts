@@ -2,9 +2,7 @@ import {
   Position,
   TradeSide,
   Opportunity,
-  Portfolio,
 } from '../types/index.js';
-import { computeExposure } from '../risk/exposure.js';
 import { computeAllocation, filterOpportunities } from './allocation-engine.js';
 import { checkPortfolioRisk } from './portfolio-risk.js';
 import { analyzeRebalance, RebalanceResult } from './rebalance.js';

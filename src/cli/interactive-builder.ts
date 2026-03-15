@@ -13,7 +13,7 @@ import { ActionType, TradeSide, ParsedIntent } from '../types/index.js';
 import { getMaxLeverage } from '../config/index.js';
 import { getAllMarkets, getPoolForMarket } from '../config/index.js';
 import { resolveMarket } from '../utils/market-resolver.js';
-import { getPreferredLeverage, getPredictions } from './trade-predictor.js';
+import { getPreferredLeverage } from './trade-predictor.js';
 import { theme } from './theme.js';
 import { IS_AGENT } from '../no-dna.js';
 

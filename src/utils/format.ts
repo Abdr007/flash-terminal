@@ -93,6 +93,7 @@ export function formatTable(headers: string[], rows: string[][]): string {
 
 /** Strip ANSI escape sequences for accurate width measurement. */
 export function stripAnsi(str: string): string {
+  // eslint-disable-next-line no-control-regex
   return str.replace(/\u001b\[[0-9;]*m/g, '');
 }
 

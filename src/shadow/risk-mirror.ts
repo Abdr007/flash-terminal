@@ -74,8 +74,8 @@ export class RiskMirror {
     const now = new Date().toISOString();
     const divergences: RiskDivergence[] = [];
 
-    let livePositions: Position[] = [];
-    let shadowPositions: Position[] = [];
+    let livePositions: Position[];
+    let shadowPositions: Position[];
 
     try {
       livePositions = await liveClient.getPositions();

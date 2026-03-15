@@ -1,12 +1,9 @@
-import chalk from 'chalk';
 import { Interface as ReadlineInterface } from 'readline';
 import { IFlashClient } from '../types/index.js';
 import { RpcManager } from '../network/rpc-manager.js';
 import { getReconciler } from '../core/state-reconciliation.js';
-import { formatUsd } from '../utils/format.js';
 import { getLogger } from '../utils/logger.js';
 import { getErrorMessage } from '../utils/retry.js';
-import { theme } from './theme.js';
 
 // ─── Status Bar ──────────────────────────────────────────────────────────────
 //

@@ -81,13 +81,13 @@ export class ShadowEngine {
         entryPrice: result.entryPrice,
         latencyMs: Date.now() - start,
       };
-    } catch (err: any) {
+    } catch (err: unknown) {
       return {
         action: 'open',
         market,
         side,
         success: false,
-        error: err.message,
+        error: err instanceof Error ? err.message : String(err),
         latencyMs: Date.now() - start,
       };
     }
@@ -112,13 +112,13 @@ export class ShadowEngine {
         exitPrice: result.exitPrice,
         latencyMs: Date.now() - start,
       };
-    } catch (err: any) {
+    } catch (err: unknown) {
       return {
         action: 'close',
         market,
         side,
         success: false,
-        error: err.message,
+        error: err instanceof Error ? err.message : String(err),
         latencyMs: Date.now() - start,
       };
     }
@@ -140,13 +140,13 @@ export class ShadowEngine {
         shadowBalance: this.client.getBalance(),
         latencyMs: Date.now() - start,
       };
-    } catch (err: any) {
+    } catch (err: unknown) {
       return {
         action: 'add_collateral',
         market,
         side,
         success: false,
-        error: err.message,
+        error: err instanceof Error ? err.message : String(err),
         latencyMs: Date.now() - start,
       };
     }
@@ -168,13 +168,13 @@ export class ShadowEngine {
         shadowBalance: this.client.getBalance(),
         latencyMs: Date.now() - start,
       };
-    } catch (err: any) {
+    } catch (err: unknown) {
       return {
         action: 'remove_collateral',
         market,
         side,
         success: false,
-        error: err.message,
+        error: err instanceof Error ? err.message : String(err),
         latencyMs: Date.now() - start,
       };
     }

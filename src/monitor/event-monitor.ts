@@ -10,7 +10,7 @@
 
 import chalk from 'chalk';
 import { theme } from '../cli/theme.js';
-import { formatUsd, formatPrice, formatPercent, colorPercent, colorPnl } from '../utils/format.js';
+import { formatUsd, formatPrice, formatPercent } from '../utils/format.js';
 import { PriceService, TokenPrice } from '../data/prices.js';
 import { FStatsClient } from '../data/fstats.js';
 import { getLogger } from '../utils/logger.js';

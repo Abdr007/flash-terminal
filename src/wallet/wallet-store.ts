@@ -1,4 +1,4 @@
-import { mkdirSync, writeFileSync, readFileSync, existsSync, chmodSync, realpathSync, statSync, lstatSync } from 'fs';
+import { mkdirSync, writeFileSync, readFileSync, existsSync, chmodSync, realpathSync, statSync, lstatSync, readdirSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
 import { Keypair } from '@solana/web3.js';
@@ -130,14 +130,13 @@ export class WalletStore {
     }
 
     // Read and validate the keypair to derive the address
-    let raw = readFileSync(realPath, 'utf-8');
+    const raw = readFileSync(realPath, 'utf-8');
     let secretKey: number[];
     try {
       secretKey = JSON.parse(raw);
     } catch {
       throw new Error('Invalid wallet file format. Expected a JSON array of 64 bytes.');
     }
-    raw = '';
 
     if (!Array.isArray(secretKey) || secretKey.length !== 64) {
       throw new Error(`Invalid keypair: expected 64-byte array, got ${Array.isArray(secretKey) ? secretKey.length : typeof secretKey}`);
@@ -281,7 +280,6 @@ export class WalletStore {
     if (!existsSync(LEGACY_WALLETS_DIR)) return;
 
     try {
-      const { readdirSync } = require('fs') as typeof import('fs');
       const files = readdirSync(LEGACY_WALLETS_DIR).filter(f => f.endsWith('.json'));
       if (files.length === 0) return;
 

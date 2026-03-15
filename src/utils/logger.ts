@@ -1,5 +1,5 @@
-import { appendFile, appendFileSync, mkdirSync, existsSync, writeFileSync, chmodSync, statSync, renameSync, realpathSync } from 'fs';
-import { join, dirname, resolve } from 'path';
+import { appendFile, appendFileSync, mkdirSync, existsSync, writeFileSync, chmodSync, statSync, renameSync } from 'fs';
+import { dirname, resolve } from 'path';
 import { homedir } from 'os';
 import chalk from 'chalk';
 

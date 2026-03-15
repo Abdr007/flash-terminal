@@ -112,10 +112,8 @@ export function analyzeRebalance(
   );
 
   const remainingExposure = new Map<string, number>();
-  let remainingTotal = 0;
   for (const pos of remainingPositions) {
     if (!pos.market || !Number.isFinite(pos.sizeUsd)) continue;
-    remainingTotal += pos.sizeUsd;
     const current = remainingExposure.get(pos.market) ?? 0;
     remainingExposure.set(pos.market, current + pos.sizeUsd);
   }

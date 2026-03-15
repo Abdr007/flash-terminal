@@ -1,7 +1,6 @@
 import chalk from 'chalk';
 import { ActionType, ToolContext, ToolResult, ParsedIntent } from '../types/index.js';
 import { getLogger } from '../utils/logger.js';
-import { getErrorMessage } from '../utils/retry.js';
 
 // ─── Structured Error Codes ─────────────────────────────────────────────────
 
@@ -97,7 +96,7 @@ interface MiddlewareResult {
   blocked?: ToolResult;
 }
 
-type Middleware = (intent: ParsedIntent, context: ToolContext) => MiddlewareResult;
+type Middleware = (intent: ParsedIntent, context: ToolContext) => MiddlewareResult | Promise<MiddlewareResult>;
 
 // ─── Middleware Definitions ──────────────────────────────────────────────────
 
@@ -106,14 +105,14 @@ type Middleware = (intent: ParsedIntent, context: ToolContext) => MiddlewareResu
  * Called when the walletManager reports isConnected=false (e.g. after idle timeout).
  * Returns true if restoration succeeded.
  */
-function tryRestoreWalletSession(context: ToolContext): boolean {
+async function tryRestoreWalletSession(context: ToolContext): Promise<boolean> {
   const wm = context.walletManager;
   if (!wm) return false;
 
   try {
     // Try to reload the last-used wallet from the wallet store
-    const { WalletStore } = require('../wallet/wallet-store.js');
-    const { getLastWallet } = require('../wallet/session.js');
+    const { WalletStore } = await import('../wallet/wallet-store.js');
+    const { getLastWallet } = await import('../wallet/session.js');
     const store = new WalletStore();
 
     // Priority: last session wallet → default wallet → single wallet
@@ -144,7 +143,7 @@ function tryRestoreWalletSession(context: ToolContext): boolean {
  * Wallet middleware: block trading commands when no wallet is connected (live mode).
  * Attempts automatic session restoration before blocking.
  */
-function walletMiddleware(intent: ParsedIntent, context: ToolContext): MiddlewareResult {
+async function walletMiddleware(intent: ParsedIntent, context: ToolContext): Promise<MiddlewareResult> {
   if (context.simulationMode) return { pass: true };
   if (!TRADING_ACTIONS.has(intent.action)) return { pass: true };
 
@@ -152,7 +151,7 @@ function walletMiddleware(intent: ParsedIntent, context: ToolContext): Middlewar
   if (wm?.isConnected) return { pass: true };
 
   // Wallet not connected — attempt automatic restoration from stored wallets
-  if (wm && tryRestoreWalletSession(context)) {
+  if (wm && await tryRestoreWalletSession(context)) {
     // Restoration succeeded — print a notice and continue
     process.stdout.write(chalk.yellow('  Wallet session restored.\n'));
     return { pass: true };
@@ -225,9 +224,9 @@ const MIDDLEWARE_CHAIN: Middleware[] = [
  * Run all middleware checks before executing a command.
  * Returns null if all middleware pass, or a ToolResult if blocked.
  */
-export function runMiddleware(intent: ParsedIntent, context: ToolContext): ToolResult | null {
+export async function runMiddleware(intent: ParsedIntent, context: ToolContext): Promise<ToolResult | null> {
   for (const mw of MIDDLEWARE_CHAIN) {
-    const result = mw(intent, context);
+    const result = await mw(intent, context);
     if (!result.pass && result.blocked) {
       return result.blocked;
     }

@@ -16,7 +16,6 @@ import { RegimeDetector, MarketRegime } from '../regime/index.js';
 import {
   formatUsd,
   formatPrice,
-  formatPercent,
   colorPercent,
   colorPnl,
   colorSide,
@@ -169,9 +168,9 @@ export const aiAnalyze: ToolDefinition = {
     const whalePositions = openPositions
       .filter((p) => {
         const sym = String(p.market_symbol ?? p.market ?? '').toUpperCase();
-        return sym === marketUpper && (Number(p.size_usd) ?? 0) >= 10_000;
+        return sym === marketUpper && (Number(p.size_usd) || 0) >= 10_000;
       })
-      .sort((a, b) => (Number(b.size_usd) ?? 0) - (Number(a.size_usd) ?? 0))
+      .sort((a, b) => (Number(b.size_usd) || 0) - (Number(a.size_usd) || 0))
       .slice(0, 5);
 
     if (whalePositions.length > 0) {
@@ -322,6 +321,7 @@ function boxBot(): string {
 }
 function boxLine(content: string): string {
   // Strip ANSI for length calculation
+  // eslint-disable-next-line no-control-regex
   const stripped = content.replace(/\x1b\[[0-9;]*m/g, '');
   const pad = Math.max(0, BOX_W - 4 - stripped.length);
   return chalk.dim('│') + '  ' + content + ' '.repeat(pad) + chalk.dim('│');
@@ -373,13 +373,14 @@ export const aiDashboard: ToolDefinition = {
     lines.push(boxTop(' Protocol Health '));
 
     // Use ProtocolStatsService for consistent market count
-    let psActiveMarkets = 0;
+    let psActiveMarkets: number;
     try {
       const { getProtocolStatsService } = await import('../data/protocol-stats.js');
       const pss = getProtocolStatsService(context.dataClient);
       const pStats = await pss.getStats();
       psActiveMarkets = pStats.activeMarkets;
     } catch {
+      // fallback: count markets with valid prices
       psActiveMarkets = snapshot.markets.filter(m => Number.isFinite(m.price) && m.price > 0).length;
     }
     lines.push(boxLine(dashPair('Active Markets:', String(psActiveMarkets))));

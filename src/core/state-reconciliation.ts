@@ -1,10 +1,9 @@
 import { appendFileSync, mkdirSync, existsSync, statSync, renameSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
-import { IFlashClient, Position, Portfolio } from '../types/index.js';
+import { IFlashClient, Position } from '../types/index.js';
 import { getLogger } from '../utils/logger.js';
 import { getErrorMessage } from '../utils/retry.js';
-import { safeNumber } from '../utils/safe-math.js';
 
 // ─── Reconciliation Engine ──────────────────────────────────────────────────
 //
@@ -191,7 +190,7 @@ export class StateReconciler {
       if (onChainMap.size < this.lastKnownPositions.size) {
         // ── RPC Retry ──
         await delay(RPC_RETRY_DELAY_MS);
-        let retrySucceeded = false;
+        let _retrySucceeded = false;
         let retryCount = 0;
         try {
           const retryPositions = await this.client.getPositions();
@@ -208,7 +207,7 @@ export class StateReconciler {
 
           if (retryMap.size >= this.lastKnownPositions.size) {
             // Retry resolved the mismatch — use retried data
-            retrySucceeded = true;
+            _retrySucceeded = true;
             writeReconcileLog({
               localCount: this.lastKnownPositions.size,
               rpcCount: onChainMap.size,

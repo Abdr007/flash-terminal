@@ -20,7 +20,7 @@
 
 import { Connection } from '@solana/web3.js';
 import { getLogger } from '../utils/logger.js';
-import { getRpcManagerInstance, type RpcEndpoint } from '../network/rpc-manager.js';
+import { getRpcManagerInstance } from '../network/rpc-manager.js';
 
 // ─── Configuration ───────────────────────────────────────────────────────────
 
@@ -32,9 +32,6 @@ const SCHEDULE_CACHE_TTL_MS = 300_000;
 
 /** Number of upcoming leader slots to look ahead */
 const LEADER_LOOKAHEAD_SLOTS = 4;
-
-/** Maximum age of slot data before considered stale */
-const SLOT_MAX_AGE_MS = 2_000;
 
 /** Timeout for leader schedule fetch (don't block on slow RPCs) */
 const SCHEDULE_FETCH_TIMEOUT_MS = 5_000;

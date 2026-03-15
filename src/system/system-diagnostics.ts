@@ -1,7 +1,7 @@
 import chalk from 'chalk';
-import { ToolContext, FlashConfig } from '../types/index.js';
+import { ToolContext } from '../types/index.js';
 import { RpcManager } from '../network/rpc-manager.js';
-import { formatUsd, formatPrice } from '../utils/format.js';
+import { formatUsd } from '../utils/format.js';
 import { getErrorMessage } from '../utils/retry.js';
 import { BUILD_INFO } from '../build-info.js';
 import { theme } from '../cli/theme.js';
@@ -564,7 +564,7 @@ export class SystemDiagnostics {
 
     try {
       const { PoolConfig: SDKPoolConfig, CustodyAccount: SDKCustodyAccount } = await import('flash-sdk');
-      const { POOL_MARKETS, getPoolForMarket } = await import('../config/index.js');
+      const { POOL_MARKETS } = await import('../config/index.js');
 
       // Try to detect which market the tx was for from logs
       let detectedMarket: string | null = null;
@@ -589,24 +589,25 @@ export class SystemDiagnostics {
           stateLines.push(`  ${chalk.bold(poolName)}`);
           stateLines.push(`    Program:  ${chalk.dim(pc.programId.toBase58())}`);
 
-          const markets = (pc.markets as Array<{ targetMint: any; side: any }>);
+          const markets = (pc.markets as Array<{ targetMint: unknown; side: unknown }>);
           stateLines.push(`    Markets:  ${markets.length}`);
 
           // If we detected a market, show its custody config
           if (detectedMarket) {
-            const tokens = pc.tokens as Array<{ symbol: string; mintKey: any }>;
+            const tokens = pc.tokens as Array<{ symbol: string; mintKey: unknown }>;
             const targetToken = tokens.find(t => t.symbol.toUpperCase() === detectedMarket);
             if (targetToken) {
-              const custodies = pc.custodies as Array<{ custodyAccount: any; symbol: string }>;
+              const custodies = pc.custodies as unknown as Array<Record<string, unknown> & { symbol: string }>;
               const custodyInfo = custodies.find(c => c.symbol === targetToken.symbol);
               if (custodyInfo) {
                 try {
-                  const perpClient = (this.context as any).flashClient?.perpClient;
+                  const custodyKey = custodyInfo.custodyAccount as Parameters<typeof SDKCustodyAccount.from>[0];
+                  const perpClient = ((this.context as unknown as Record<string, unknown>).flashClient as Record<string, unknown> | undefined)?.perpClient;
                   const custodyData = perpClient
-                    ? await perpClient.program?.account?.custody?.fetch(custodyInfo.custodyAccount)
+                    ? await (perpClient as { program?: { account?: { custody?: { fetch: (key: unknown) => Promise<unknown> } } } }).program?.account?.custody?.fetch(custodyKey)
                     : null;
                   if (custodyData) {
-                    const custodyAcct = SDKCustodyAccount.from(custodyInfo.custodyAccount, custodyData);
+                    const custodyAcct = SDKCustodyAccount.from(custodyKey, custodyData as Parameters<typeof SDKCustodyAccount.from>[1]);
                     stateLines.push('');
                     stateLines.push(`  ${chalk.bold(`${detectedMarket} Custody`)}`);
 
@@ -616,9 +617,9 @@ export class SystemDiagnostics {
                     stateLines.push(`    Close Fee:  ${closeFee.toFixed(4)}%`);
 
                     const BPS_POWER = 10_000;
-                    const rawMaxLev = (custodyAcct as any).pricing?.maxLeverage;
-                    const rawNum = typeof rawMaxLev === 'object' && rawMaxLev?.toNumber
-                      ? rawMaxLev.toNumber()
+                    const rawMaxLev = (custodyAcct as unknown as Record<string, Record<string, unknown>>).pricing?.maxLeverage as unknown;
+                    const rawNum = typeof rawMaxLev === 'object' && rawMaxLev !== null && 'toNumber' in rawMaxLev
+                      ? (rawMaxLev as { toNumber: () => number }).toNumber()
                       : typeof rawMaxLev === 'number' ? rawMaxLev : 0;
                     if (Number.isFinite(rawNum) && rawNum > 0) {
                       const humanMaxLev = rawNum / BPS_POWER;

@@ -11,7 +11,6 @@
 import { appendFileSync, mkdirSync, existsSync, writeFileSync, statSync, renameSync } from 'fs';
 import { join, dirname } from 'path';
 import { homedir } from 'os';
-import { TradeSide } from '../types/index.js';
 
 // ─── Configuration ────────────────────────────────────────────────────────────
 
@@ -87,7 +86,7 @@ export class SigningGuard {
     sizeUsd: number;
     market: string;
   }): TradeLimitCheck {
-    const { collateral, leverage, sizeUsd, market } = params;
+    const { collateral, leverage, sizeUsd, market: _market } = params;
 
     // Max collateral per trade
     if (this.config.maxCollateralPerTrade > 0 && collateral > this.config.maxCollateralPerTrade) {

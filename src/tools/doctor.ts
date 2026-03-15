@@ -1,4 +1,3 @@
-import chalk from 'chalk';
 import { IFlashClient, ToolContext, TradeSide } from '../types/index.js';
 import { RpcManager } from '../network/rpc-manager.js';
 import { WalletManager } from '../wallet/walletManager.js';

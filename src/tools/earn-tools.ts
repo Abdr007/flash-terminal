@@ -6,7 +6,7 @@ import chalk from 'chalk';
 import { theme } from '../cli/theme.js';
 import { getPoolRegistry, resolvePool, resolveTokenMint } from '../earn/pool-registry.js';
 import { getPoolMetrics, getPoolMetric } from '../earn/pool-data.js';
-import { IS_AGENT, agentOutput } from '../no-dna.js';
+import { IS_AGENT } from '../no-dna.js';
 
 const NOT_AVAILABLE_MSG = chalk.yellow(
   '  Earn features are not available in simulation mode. Connect a wallet for live LP/staking.',
@@ -396,11 +396,11 @@ export const earnPositionsTool: ToolDefinition = {
       return { success: true, message: chalk.dim('  No wallet connected.') };
     }
 
-    const registry = getPoolRegistry();
+    const _registry = getPoolRegistry();
     const metrics = await getPoolMetrics();
 
     // Get all token balances
-    let tokenData: { sol: number; tokens: Array<{ mint: string; amount: number }> } | null = null;
+    let tokenData: { sol: number; tokens: Array<{ mint: string; amount: number }> } | null;
     try {
       tokenData = await wm.getTokenBalances();
     } catch {
@@ -603,10 +603,10 @@ export const earnDashboardTool: ToolDefinition = {
       return { success: true, message: chalk.dim('  No wallet connected.') };
     }
 
-    const registry = getPoolRegistry();
+    const _registry = getPoolRegistry();
     const metrics = await getPoolMetrics();
 
-    let tokenData: { sol: number; tokens: Array<{ mint: string; amount: number }> } | null = null;
+    let tokenData: { sol: number; tokens: Array<{ mint: string; amount: number }> } | null;
     try {
       tokenData = await wm.getTokenBalances();
     } catch {
@@ -679,10 +679,10 @@ export const earnPnlTool: ToolDefinition = {
     const wm = context.walletManager;
     if (!wm || !wm.isConnected) return { success: true, message: chalk.dim('  No wallet connected.') };
 
-    const registry = getPoolRegistry();
+    const _registry = getPoolRegistry();
     const metrics = await getPoolMetrics();
 
-    let tokenData: { sol: number; tokens: Array<{ mint: string; amount: number }> } | null = null;
+    let tokenData: { sol: number; tokens: Array<{ mint: string; amount: number }> } | null;
     try { tokenData = await wm.getTokenBalances(); } catch { return { success: false, message: chalk.red('  Failed to fetch balances.') }; }
     if (!tokenData) return { success: true, message: chalk.dim('  No token data.') };
 
@@ -738,8 +738,8 @@ export const earnDemandTool: ToolDefinition = {
   description: 'Analyze liquidity demand across pools',
   parameters: z.object({}),
   execute: async (_params, _context): Promise<ToolResult> => {
-    const registry = getPoolRegistry();
-    const metrics = await getPoolMetrics();
+    const _registry = getPoolRegistry();
+    const _metrics = await getPoolMetrics();
     const { rankPools } = await import('../earn/yield-analytics.js');
     const ranked = await rankPools();
 
@@ -806,12 +806,12 @@ export const earnRotateTool: ToolDefinition = {
     const wm = context.walletManager;
     if (!wm || !wm.isConnected) return { success: true, message: chalk.dim('  No wallet connected.') };
 
-    const registry = getPoolRegistry();
+    const _registry = getPoolRegistry();
     const metrics = await getPoolMetrics();
     const { rankPools } = await import('../earn/yield-analytics.js');
     const ranked = await rankPools();
 
-    let tokenData: { sol: number; tokens: Array<{ mint: string; amount: number }> } | null = null;
+    let tokenData: { sol: number; tokens: Array<{ mint: string; amount: number }> } | null;
     try { tokenData = await wm.getTokenBalances(); } catch { return { success: false, message: chalk.red('  Failed to fetch balances.') }; }
     if (!tokenData) return { success: true, message: chalk.dim('  No token data.') };
 

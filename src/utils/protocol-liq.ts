@@ -15,9 +15,6 @@
 import { TradeSide } from '../types/index.js';
 import { getLogger } from '../utils/logger.js';
 
-const RATE_POWER = 1_000_000_000;
-const BPS_POWER = 10_000;
-
 /** Maximum acceptable deviation between CLI and SDK liquidation prices. */
 const DIVERGENCE_THRESHOLD = 0.005; // 0.5%
 
@@ -44,11 +41,11 @@ export function isDivergenceOk(): boolean {
 export async function checkLiquidationDivergence(
   cliLiqPrice: number,
   perpClient: unknown | null,
-  entryOraclePrice: any,
-  unsettledFees: any,
-  sdkSide: any,
-  custodyAcct: any,
-  posAcct: any,
+  entryOraclePrice: unknown,
+  unsettledFees: unknown,
+  sdkSide: unknown,
+  custodyAcct: unknown,
+  posAcct: unknown,
   market: string,
 ): Promise<number> {
   if (!perpClient || !entryOraclePrice || !custodyAcct || !posAcct) {
@@ -57,7 +54,7 @@ export async function checkLiquidationDivergence(
   }
 
   try {
-    const client = perpClient as any;
+    const client = perpClient as unknown as { getLiquidationPriceContractHelper: (...args: unknown[]) => { toUiPrice: (decimals: number) => string } };
     const liqOraclePrice = client.getLiquidationPriceContractHelper(
       entryOraclePrice, unsettledFees, sdkSide, custodyAcct, posAcct,
     );
@@ -122,15 +119,16 @@ export async function checkLiquidationDivergence(
  * @returns Liquidation price as a UI number, or 0 if unavailable
  */
 export function computeLiquidationPrice(
-  perpClient: any,
-  entryOraclePrice: any,
-  unsettledFees: any,
-  side: any,
-  custodyAcct: any,
-  posAcct: any,
+  perpClient: unknown,
+  entryOraclePrice: unknown,
+  unsettledFees: unknown,
+  side: unknown,
+  custodyAcct: unknown,
+  posAcct: unknown,
 ): number {
   try {
-    const liqOraclePrice = perpClient.getLiquidationPriceContractHelper(
+    const client = perpClient as { getLiquidationPriceContractHelper: (...args: unknown[]) => { toUiPrice: (decimals: number) => string } };
+    const liqOraclePrice = client.getLiquidationPriceContractHelper(
       entryOraclePrice, unsettledFees, side, custodyAcct, posAcct,
     );
     const liqUi = parseFloat(liqOraclePrice.toUiPrice(8));

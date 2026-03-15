@@ -26,7 +26,7 @@ import { getErrorMessage } from '../utils/retry.js';
 import { getProtocolFeeRates, calcFeeUsd, ProtocolParameterError } from '../utils/protocol-fees.js';
 import { DATA_STALENESS_WARNING_SECONDS } from '../core/risk-config.js';
 import { filterValidPositions } from '../core/invariants.js';
-import { getSigningGuard, SigningAuditEntry } from '../security/signing-guard.js';
+import { getSigningGuard } from '../security/signing-guard.js';
 import { getTradingGate } from '../security/trading-gate.js';
 import { getCircuitBreaker } from '../security/circuit-breaker.js';
 import {
@@ -161,7 +161,7 @@ export const flashOpenPosition: ToolDefinition = {
     const walletAddr = context.walletAddress ?? 'unknown';
 
     // Fetch fee rate from CustodyAccount via Flash SDK (cached, 60s TTL)
-    const perpClient = context.simulationMode ? null : (context.flashClient as any).perpClient ?? null;
+    const perpClient = context.simulationMode ? null : (context.flashClient as unknown as Record<string, unknown>).perpClient ?? null;
     let feeRates;
     try {
       feeRates = await getProtocolFeeRates(market, perpClient);
@@ -356,7 +356,7 @@ export const flashOpenPosition: ToolDefinition = {
 
             // TP/SL display lines
             const tpSlLines: string[] = [];
-            const atomicIncluded = (result as any).triggerOrdersIncluded === true;
+            const atomicIncluded = (result as unknown as Record<string, unknown>).triggerOrdersIncluded === true;
 
             if (atomicIncluded) {
               // TP/SL were included in the atomic transaction
@@ -491,7 +491,6 @@ export const flashClosePosition: ToolDefinition = {
     }
 
     // Pre-check: verify position exists and validate partial close
-    let positionSizeUsd = 0;
     try {
       const positions = await context.flashClient.getPositions();
       const pos = positions.find(p =>
@@ -500,7 +499,7 @@ export const flashClosePosition: ToolDefinition = {
       if (!pos) {
         return { success: false, message: chalk.red(`  No open ${side} position on ${market}.`) };
       }
-      positionSizeUsd = pos.sizeUsd;
+      const positionSizeUsd = pos.sizeUsd;
 
       // Validate partial close amount
       if (closePercent !== undefined) {
@@ -1173,7 +1172,7 @@ export const flashGetVolume: ToolDefinition = {
         ].join('\n'),
         data: { volume },
       };
-    } catch (error: unknown) {
+    } catch {
       return { success: false, message: theme.dim(`\n  Volume data unavailable.\n`) };
     }
   },
@@ -1212,7 +1211,7 @@ export const flashGetOpenInterest: ToolDefinition = {
         ].join('\n'),
         data: { openInterest: oi },
       };
-    } catch (error: unknown) {
+    } catch {
       return { success: false, message: theme.dim(`\n  Open interest data unavailable.\n`) };
     }
   },
@@ -1263,7 +1262,7 @@ export const flashGetLeaderboard: ToolDefinition = {
         ].join('\n'),
         data: { leaderboard: entries },
       };
-    } catch (error: unknown) {
+    } catch {
       return { success: false, message: theme.dim(`\n  Leaderboard data unavailable.\n`) };
     }
   },
@@ -1325,7 +1324,7 @@ export const flashGetFees: ToolDefinition = {
         message: lines.join('\n'),
         data: { fees },
       };
-    } catch (error: unknown) {
+    } catch {
       return { success: false, message: theme.dim(`\n  Fee data unavailable.\n`) };
     }
   },
@@ -1886,7 +1885,7 @@ export const systemStatusTool: ToolDefinition = {
   name: 'system_status',
   description: 'Display system health overview',
   parameters: z.object({}),
-  execute: async (_params, context): Promise<ToolResult> => {
+  execute: async (_params, _context): Promise<ToolResult> => {
     const { getSystemDiagnostics } = await import('../system/system-diagnostics.js');
     const diag = getSystemDiagnostics();
     if (!diag) {
@@ -1959,7 +1958,7 @@ export const protocolStatusTool: ToolDefinition = {
       lines.push(`  SDK:           ${chalk.yellow('Simulation mode (no live SDK)')}`);
     } else {
       try {
-        const perpClient = (context?.flashClient as any)?.perpClient;
+        const perpClient = (context?.flashClient as unknown as Record<string, unknown>)?.perpClient;
         if (perpClient) {
           lines.push(`  SDK:           ${chalk.green('Connected')}`);
         } else {
@@ -2352,7 +2351,7 @@ export const liquidationMapTool: ToolDefinition = {
         const mktWhales = whalePositions.filter(w => {
           const sym = (w.market_symbol ?? w.market ?? '').toUpperCase();
           return sym === mkt.symbol.toUpperCase() && Number.isFinite(w.size_usd) && (w.size_usd ?? 0) > 0;
-        }).sort((a, b) => (Number(b.size_usd) ?? 0) - (Number(a.size_usd) ?? 0));
+        }).sort((a, b) => (Number(b.size_usd) || 0) - (Number(a.size_usd) || 0));
 
         if (mktWhales.length > 0) {
           lines.push(`  ${theme.section('Whale Positions')}`);
@@ -2416,9 +2415,9 @@ export const fundingDashboardTool: ToolDefinition = {
       }
 
       // Enrich with real OI data from fstats (getMarketData returns zero OI)
-      const oiData = await context.dataClient.getOpenInterest().catch(() => ({ markets: [] }));
+      const oiData = await context.dataClient.getOpenInterest().catch(() => ({ markets: [] as MarketOI[] }));
       for (const mkt of markets) {
-        const oiEntry = oiData.markets.find((m: any) => m.market?.toUpperCase()?.includes(mkt.symbol.toUpperCase()));
+        const oiEntry = oiData.markets.find((m) => m.market?.toUpperCase()?.includes(mkt.symbol.toUpperCase()));
         if (oiEntry) {
           mkt.openInterestLong = oiEntry.longOi ?? 0;
           mkt.openInterestShort = oiEntry.shortOi ?? 0;
@@ -2473,15 +2472,18 @@ export const fundingDashboardTool: ToolDefinition = {
           const poolName = gp(mkt.symbol);
           if (poolName) {
             const pc = PoolConfig.fromIdsByName(poolName, 'mainnet-beta');
-            const custodies = pc.custodies as Array<{ custodyAccount: any; symbol: string }>;
+            const custodies = pc.custodies as Array<{ custodyAccount: unknown; symbol: string }>;
             const custody = custodies.find(c => c.symbol.toUpperCase() === mkt.symbol.toUpperCase());
             if (custody) {
-              const perpClient = (context.flashClient as any).perpClient;
+              const perpClient = (context.flashClient as unknown as Record<string, unknown>).perpClient as Record<string, unknown> | undefined;
               if (perpClient) {
                 const RATE_POWER = 1_000_000_000;
-                const custodyAcct = await perpClient.program.account.custody.fetch(custody.custodyAccount);
-                const openFee = parseFloat(custodyAcct.fees.openPosition.toString()) / RATE_POWER * 100;
-                const closeFee = parseFloat(custodyAcct.fees.closePosition.toString()) / RATE_POWER * 100;
+                const program = (perpClient as Record<string, unknown>).program as Record<string, unknown>;
+                const acct = (program.account as Record<string, unknown>).custody as Record<string, unknown>;
+                const custodyAcct = await (acct.fetch as (addr: unknown) => Promise<Record<string, unknown>>)(custody.custodyAccount);
+                const fees = custodyAcct.fees as Record<string, unknown>;
+                const openFee = parseFloat(String(fees.openPosition)) / RATE_POWER * 100;
+                const closeFee = parseFloat(String(fees.closePosition)) / RATE_POWER * 100;
                 lines.push('');
                 lines.push(theme.pair('Open Fee', `${openFee.toFixed(4)}%`));
                 lines.push(theme.pair('Close Fee', `${closeFee.toFixed(4)}%`));
@@ -2705,7 +2707,7 @@ const systemAuditTool: ToolDefinition = {
     const testMarkets = ['SOL', 'BTC', 'ETH'];
     for (const market of testMarkets) {
       try {
-        const rates = await getProtocolFeeRates(market, context.simulationMode ? null : (context.flashClient as any).perpClient ?? null);
+        const rates = await getProtocolFeeRates(market, context.simulationMode ? null : (context.flashClient as unknown as Record<string, unknown>).perpClient ?? null);
         if (rates.source === 'on-chain') {
           pass(`${market}: on-chain (open=${(rates.openFeeRate * 100).toFixed(4)}%, close=${(rates.closeFeeRate * 100).toFixed(4)}%)`);
         } else {

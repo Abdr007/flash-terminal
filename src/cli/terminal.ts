@@ -16,7 +16,7 @@ import { shortAddress } from '../utils/format.js';
 import { getErrorMessage } from '../utils/retry.js';
 import { initLogger, getLogger } from '../utils/logger.js';
 import { setAiApiKey, getInspector, getRegimeDetector } from '../agent/agent-tools.js';
-import { formatUsd, formatPrice, formatPercent, colorPercent, colorPnl, humanizeSdkError } from '../utils/format.js';
+import { formatUsd, formatPrice, formatPercent, colorPnl, humanizeSdkError } from '../utils/format.js';
 import { MarketRegime } from '../regime/regime-types.js';
 import { initSigningGuard } from '../security/signing-guard.js';
 import { RpcManager, buildRpcEndpoints, initRpcManager } from '../network/rpc-manager.js';
@@ -51,6 +51,7 @@ function resolveMarketAlias(input: string): string {
  */
 function normalizeInput(raw: string): string {
   return raw
+    // eslint-disable-next-line no-control-regex
     .replace(/[\x00-\x1f\x7f]/g, ' ')  // strip control chars
     .replace(/\s+/g, ' ')               // collapse whitespace
     .trim()
@@ -58,7 +59,6 @@ function normalizeInput(raw: string): string {
 }
 
 const COMMAND_TIMEOUT_MS = 120_000;
-const SLOW_COMMAND_MS = 3_000;
 const HISTORY_FILE = join(homedir(), '.flash', 'history');
 const MAX_HISTORY = 1000;
 
@@ -489,6 +489,7 @@ export class FlashTerminal {
       }
 
       // Sanitize: strip control chars (null bytes, etc.) and collapse whitespace
+      // eslint-disable-next-line no-control-regex
       const trimmed = line.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, '').trim();
 
       if (!trimmed) {
@@ -996,6 +997,7 @@ export class FlashTerminal {
         try {
           const { getFafStakeInfo } = await import('../token/faf-data.js');
           const { PublicKey } = await import('@solana/web3.js');
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
           const client = this.flashClient as any;
           if (client.perpClient && client.poolConfig) {
             const info = await Promise.race([
@@ -1069,6 +1071,7 @@ export class FlashTerminal {
         const { PublicKey } = await import('@solana/web3.js');
 
         if (this.flashClient && 'perpClient' in this.flashClient && 'poolConfig' in this.flashClient) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
           const client = this.flashClient as any;
           const userPk = new PublicKey(this.walletManager.address!);
 
@@ -1580,7 +1583,6 @@ export class FlashTerminal {
   // ─── Command Handler ──────────────────────────────────────────────
 
   private async handleInput(rawInput: string): Promise<void> {
-    const startTime = Date.now();
     const input = normalizeInput(rawInput);
     if (!input) return;
 
@@ -2025,6 +2027,7 @@ export class FlashTerminal {
     if (intent.action === ActionType.Help && !fastIntent) {
       try {
         const { resolveAmbiguous, needsConfirmation, formatConfirmation } = await import('../ai/intent-scorer.js');
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const ctx = (this.interpreter as any).context;
         const scored = resolveAmbiguous(
           input,
@@ -2088,6 +2091,7 @@ export class FlashTerminal {
       }
 
       // Legacy suggestion engine fallback
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const suggestion = getSuggestions(input, positions as any);
       if (suggestion) {
         console.log('');
@@ -2246,7 +2250,7 @@ export class FlashTerminal {
       if (progressTimer) { clearInterval(progressTimer); progressTimer = null; }
       if (!IS_AGENT) process.stdout.write('               \r');
     } catch (error: unknown) {
-      if (progressTimer) { clearInterval(progressTimer); progressTimer = null; }
+      if (progressTimer) { clearInterval(progressTimer); }
       if (!IS_AGENT) process.stdout.write('               \r');
       if (IS_AGENT) {
         agentError('execution_error', { detail: getErrorMessage(error) });
@@ -2266,7 +2270,7 @@ export class FlashTerminal {
 
       // Include structured data if available
       if (result.data) {
-        const { executeAction, ...safeData } = result.data;
+        const { executeAction: _executeAction, ...safeData } = result.data;
         Object.assign(agentPayload, safeData);
       }
       if (result.txSignature) agentPayload.tx_signature = result.txSignature;
@@ -2574,7 +2578,7 @@ export class FlashTerminal {
       slotLag: number;
       renderTimeMs: number;
     }
-    let telemetry: Telemetry = { rpcLatencyMs: -1, oracleLatencyMs: -1, slot: -1, slotLag: -1, renderTimeMs: 0 };
+    const telemetry: Telemetry = { rpcLatencyMs: -1, oracleLatencyMs: -1, slot: -1, slotLag: -1, renderTimeMs: 0 };
 
     // Slot freeze detection — tracks consecutive cycles where slot doesn't advance
     let previousSlot = -1;
@@ -2700,7 +2704,7 @@ export class FlashTerminal {
       return rows;
     };
 
-    const format1mMomentum = (sym: string): string | null => {
+    const _format1mMomentum = (sym: string): string | null => {
       const buf = marketHistory.get(sym);
       if (!buf || buf.length < 2) return null;
 
@@ -2770,7 +2774,7 @@ export class FlashTerminal {
         : chalk.red(`Lag ${lag}`);
 
       const renderStr = theme.dim(`Render ${telemetry.renderTimeMs}ms`);
-      const refreshStr = theme.dim(`Refresh ${REFRESH_MS / 1000}s`);
+      const _refreshStr = theme.dim(`Refresh ${REFRESH_MS / 1000}s`);
 
       // Divergence status from protocol-liq module (sync — no await needed)
       const divStr = isDivergenceOk() ? chalk.green('Divergence OK') : chalk.yellow('Divergence ⚠');
@@ -2977,12 +2981,6 @@ export class FlashTerminal {
     console.log('');
 
     // Attempt on-chain fetch
-    let rawOpen = 0;
-    let rawClose = 0;
-    let rawMaintenanceMargin = 0;
-    let rawMaxLeverage = 0;
-    let source = 'sdk-default';
-
     if (!this.config.simulationMode) {
       try {
         const { PoolConfig, CustodyAccount } = await import('flash-sdk');
@@ -2990,22 +2988,25 @@ export class FlashTerminal {
         const poolName = getPoolForMarket(upper);
         if (poolName) {
           const pc = PoolConfig.fromIdsByName(poolName, this.config.network);
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
           const custodies = pc.custodies as Array<{ custodyAccount: any; symbol: string }>;
           const custody = custodies.find(c => c.symbol.toUpperCase() === upper);
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
           const perpClient = (this.flashClient as any).perpClient;
 
           if (custody && perpClient?.program?.account?.custody) {
             const custodyData = await perpClient.program.account.custody.fetch(custody.custodyAccount);
             if (custodyData) {
               const custodyAcct = CustodyAccount.from(custody.custodyAccount, custodyData);
-              rawOpen = parseFloat(custodyAcct.fees.openPosition.toString());
-              rawClose = parseFloat(custodyAcct.fees.closePosition.toString());
-              rawMaintenanceMargin = parseFloat((custodyAcct as any).pricing?.maintenanceMargin?.toString() ?? '0');
+              const rawOpen = parseFloat(custodyAcct.fees.openPosition.toString());
+              const rawClose = parseFloat(custodyAcct.fees.closePosition.toString());
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              const rawMaintenanceMargin = parseFloat((custodyAcct as any).pricing?.maintenanceMargin?.toString() ?? '0');
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
               const rawMaxLev = (custodyAcct as any).pricing?.maxLeverage;
-              rawMaxLeverage = typeof rawMaxLev === 'object' && rawMaxLev?.toNumber
+              const rawMaxLeverage = typeof rawMaxLev === 'object' && rawMaxLev?.toNumber
                 ? rawMaxLev.toNumber()
                 : typeof rawMaxLev === 'number' ? rawMaxLev : 0;
-              source = 'on-chain';
 
               console.log(theme.pair('Source', chalk.green('CustodyAccount (on-chain)')));
               console.log(theme.pair('Custody', chalk.dim(custody.custodyAccount.toString())));
@@ -3163,6 +3164,7 @@ export class FlashTerminal {
       const passed: string[] = [];
       const failed: string[] = [];
 
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const perpClient = this.config.simulationMode ? null : (this.flashClient as any).perpClient ?? null;
 
       for (const mkt of markets) {
@@ -3192,6 +3194,7 @@ export class FlashTerminal {
         return { label: 'Fee engine', ok: true, detail: 'skipped (simulation mode — no perpClient)' };
       }
 
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const perpClient = (this.flashClient as any).perpClient ?? null;
       if (!perpClient?.program?.account?.custody) {
         return { label: 'Fee engine', ok: true, detail: 'skipped (no perpClient)' };
@@ -3208,6 +3211,7 @@ export class FlashTerminal {
           const poolName = getPoolForMarket(mkt);
           if (!poolName) continue;
           const pc = PoolConfig.fromIdsByName(poolName, this.config.network);
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
           const custodies = pc.custodies as Array<{ custodyAccount: any; symbol: string }>;
           const custody = custodies.find(c => c.symbol.toUpperCase() === mkt);
           if (!custody) continue;
@@ -3215,6 +3219,7 @@ export class FlashTerminal {
           const rawData = await timedTask(
             perpClient.program.account.custody.fetch(custody.custodyAccount),
             `Fee engine ${mkt}`,
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
           ) as any;
           const custodyAcct = CustodyAccount.from(custody.custodyAccount, rawData);
           const custodyOpen = parseFloat(custodyAcct.fees.openPosition.toString()) / RATE_POWER;
@@ -3243,6 +3248,7 @@ export class FlashTerminal {
     const verifyLiquidationEngine = async (): Promise<CheckResult> => {
       try {
         const { getProtocolFeeRates } = await import('../utils/protocol-fees.js');
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const perpClient = this.config.simulationMode ? null : (this.flashClient as any).perpClient ?? null;
         const rates = await getProtocolFeeRates('SOL', perpClient);
 
@@ -3286,6 +3292,7 @@ export class FlashTerminal {
     const validateProtocolParameters = async (): Promise<CheckResult> => {
       try {
         const { getProtocolFeeRates } = await import('../utils/protocol-fees.js');
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const perpClient = this.config.simulationMode ? null : (this.flashClient as any).perpClient ?? null;
         const violations: string[] = [];
 
@@ -3411,6 +3418,7 @@ export class FlashTerminal {
     console.log(theme.titleBlock('Protocol Fees'));
     try {
       const { getProtocolFeeRates } = await import('../utils/protocol-fees.js');
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const perpClient = this.config.simulationMode ? null : (this.flashClient as any).perpClient ?? null;
       const rates = await getProtocolFeeRates(upper, perpClient);
 
@@ -3422,6 +3430,7 @@ export class FlashTerminal {
         const poolName = getPoolForMarket(upper);
         if (poolName) {
           const pc = PoolConfig.fromIdsByName(poolName, 'mainnet-beta');
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
           const custodies = pc.custodies as Array<{ custodyAccount: any; symbol: string }>;
           const custody = custodies.find(c => c.symbol.toUpperCase() === upper);
           if (custody) {
@@ -3557,10 +3566,15 @@ export class FlashTerminal {
     const RATE_POWER = 1_000_000_000; // Flash SDK RATE_DECIMALS = 9
 
     // SDK objects retained for collateral scenario calculations
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let sdkCustodyAcct: any = null;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let sdkEntryOraclePrice: any = null;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let sdkRawPosition: any = null;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let sdkSide: any = null;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let sdkPerpClient: any = null;
 
     if (!this.config.simulationMode) {
@@ -3569,7 +3583,6 @@ export class FlashTerminal {
           PoolConfig: SDKPoolConfig,
           CustodyAccount: SDKCustodyAccount,
           OraclePrice: SDKOraclePrice,
-          PositionAccount: SDKPositionAccount,
           Side: SDKSide,
           BN_ZERO: SDK_BN_ZERO,
         } = await import('flash-sdk');
@@ -3578,9 +3591,12 @@ export class FlashTerminal {
         const poolName = getPoolForMarket(upper);
         if (poolName) {
           const pc = SDKPoolConfig.fromIdsByName(poolName, this.config.network);
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
           const custodies = pc.custodies as Array<{ custodyAccount: any; symbol: string }>;
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
           const tokens = pc.tokens as Array<{ symbol: string; mintKey: any }>;
           const targetToken = tokens.find(t => t.symbol.toUpperCase() === upper);
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
           const perpClient = (this.flashClient as any).perpClient;
 
           if (targetToken && perpClient) {
@@ -3600,6 +3616,7 @@ export class FlashTerminal {
                 // Human max leverage = maxLeverage / BPS_POWER
                 // Maintenance margin % = BPS_POWER / maxLeverage * 100
                 const BPS_POWER = 10_000;
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
                 const rawMaxLev = (custodyAcct as any).pricing?.maxLeverage;
                 const rawNum = typeof rawMaxLev === 'object' && rawMaxLev?.toNumber
                   ? rawMaxLev.toNumber()
@@ -3616,6 +3633,7 @@ export class FlashTerminal {
             }
 
             // Fetch raw position for SDK liquidation math in collateral scenarios
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
             const markets = pc.markets as Array<{ marketAccount: any; targetMint: any; side: any }>;
             const positionSide = pos.side === TradeSide.Long ? SDKSide.Long : SDKSide.Short;
             sdkSide = positionSide;
@@ -3625,6 +3643,7 @@ export class FlashTerminal {
 
             if (marketConfig && perpClient.program?.account?.position) {
               try {
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
                 const wallet = (this.flashClient as any).wallet?.publicKey;
                 if (wallet) {
                   const allPositions = await perpClient.program.account.position.all([
@@ -3749,7 +3768,7 @@ export class FlashTerminal {
       );
 
       if (isLiquidated) {
-        const liqDistAtScenario = Math.abs(simPrice - pos.liquidationPrice) / simPrice * 100;
+        const _liqDistAtScenario = Math.abs(simPrice - pos.liquidationPrice) / simPrice * 100;
         lines.push(`  Price ${pctMove > 0 ? '+' : ''}${pctMove}%     → ${chalk.red('LIQUIDATED')}`);
       } else {
         const scenarioLiqDist = pos.liquidationPrice > 0

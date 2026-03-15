@@ -20,7 +20,7 @@ interface ProtocolSnapshot {
   timestamp: number;
 }
 
-interface MarketSnapshot {
+interface _MarketSnapshot {
   market: string;
   pool: string;
   price: number;

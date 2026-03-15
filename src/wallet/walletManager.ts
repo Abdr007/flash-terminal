@@ -144,9 +144,6 @@ export class WalletManager {
       throw new Error('Invalid wallet file format.');
     }
 
-    // Clear the raw string reference — secretKey holds the parsed data now
-    raw = '';
-
     if (!Array.isArray(secretKey) || secretKey.length !== 64) {
       throw new Error(`Invalid keypair: expected 64-byte array, got ${Array.isArray(secretKey) ? secretKey.length : typeof secretKey}`);
     }

@@ -1,6 +1,7 @@
 import { ToolDefinition, ToolContext, ToolResult } from '../types/index.js';
 import { getErrorMessage } from '../utils/retry.js';
 import { getLogger } from '../utils/logger.js';
+import { isProfilingEnabled, profileStart, profileEnd } from '../observability/profiler.js';
 
 /**
  * Tool Registry — tools are registered by name and dispatched by the engine.
@@ -55,9 +56,13 @@ export class ToolRegistry {
       };
     }
 
+    const t0 = isProfilingEnabled() ? profileStart('command', toolName) : 0;
     try {
-      return await tool.execute(params, context);
+      const result = await tool.execute(params, context);
+      if (t0 !== 0) profileEnd('command', t0, toolName);
+      return result;
     } catch (error: unknown) {
+      if (t0 !== 0) profileEnd('command', t0, toolName);
       return {
         success: false,
         message: `Tool ${toolName} failed: ${getErrorMessage(error)}`,

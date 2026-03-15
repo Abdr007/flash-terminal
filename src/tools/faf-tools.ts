@@ -6,7 +6,7 @@
  */
 
 import { z } from 'zod';
-import { ToolDefinition, ToolResult } from '../types/index.js';
+import { ToolDefinition, ToolResult, ToolContext } from '../types/index.js';
 import { formatUsd } from '../utils/format.js';
 import { getErrorMessage } from '../utils/retry.js';
 import chalk from 'chalk';
@@ -20,11 +20,12 @@ import { getFafStakeInfo, getFafBalance, getFafUnstakeRequests, getVoltageInfo }
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
-async function getStakeContext(context: any) {
+async function getStakeContext(context: ToolContext) {
   const wm = context.walletManager;
   if (!wm?.isConnected) return { error: chalk.dim('  No wallet connected.') };
 
-  const client = context.flashClient;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK client exposes perpClient/poolConfig/connection not in IFlashClient interface
+  const client = context.flashClient as any;
   if (!client?.perpClient || !client?.poolConfig) {
     return { error: chalk.dim('  FAF staking requires a live trading connection.') };
   }
@@ -402,10 +403,10 @@ export const fafReferralTool: ToolDefinition = {
     // Read claimable rebate from raw account
     let claimableRebateUsd = 0;
     try {
-      const raw = info?.rawAccount as any;
+      const raw = info?.rawAccount as Record<string, unknown> | undefined;
       if (raw?.claimableRebateUsd) {
         const BN = (await import('bn.js')).default;
-        claimableRebateUsd = new BN(raw.claimableRebateUsd.toString()).toNumber() / Math.pow(10, 6);
+        claimableRebateUsd = new BN(String(raw.claimableRebateUsd)).toNumber() / Math.pow(10, 6);
       }
     } catch { /* non-critical */ }
 

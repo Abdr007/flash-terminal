@@ -1,6 +1,5 @@
 import { z } from 'zod';
 import { ToolDefinition, ToolResult } from '../types/index.js';
-import { formatUsd } from '../utils/format.js';
 import { getErrorMessage } from '../utils/retry.js';
 import chalk from 'chalk';
 import { theme } from '../cli/theme.js';
