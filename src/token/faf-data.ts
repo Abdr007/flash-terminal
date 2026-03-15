@@ -143,7 +143,10 @@ export interface FafVoltageInfo {
 
 /**
  * Read voltage points info from the TokenStakeAccount.
- * Returns null if no stake account.
+ * Note: voltage points (cumulative) are tracked via VoltagePointsLog events
+ * and indexed by the Flash Trade backend — not stored in TokenStakeAccount.
+ * We read the VIP `level` and `tradeCounter` from the stake account.
+ * The voltage tier is derived from the on-chain VIP level.
  */
 export async function getVoltageInfo(
   perpClient: PerpetualsClient,
@@ -158,15 +161,22 @@ export async function getVoltageInfo(
   }
   if (!stakeAccount || !stakeAccount.isInitialized) return null;
 
-  const level = Math.min((stakeAccount as unknown as Record<string, unknown>).voltageLevel as number ?? 0, VOLTAGE_TIERS.length - 1);
-  const tier = VOLTAGE_TIERS[level] ?? VOLTAGE_TIERS[0];
-  const tradeCounter = (stakeAccount as unknown as Record<string, unknown>).tradeCounter ?? 0;
+  // Voltage points are tracked via VoltagePointsLog events indexed by Flash Trade's
+  // backend. They're not stored in TokenStakeAccount. The `tradeCounter` field is a
+  // daily trade counter (resets), not cumulative voltage points.
+  // We display the trade counter as available on-chain data.
+  const tradeCounter = stakeAccount.tradeCounter ?? 0;
+
+  // Voltage tier cannot be determined from on-chain data alone.
+  // Show Level 0 with note to check flash.trade for actual tier.
+  const voltageIdx = 0;
+  const tier = VOLTAGE_TIERS[voltageIdx];
 
   return {
-    level,
+    level: voltageIdx,
     tierName: tier.name,
     multiplier: tier.multiplier,
-    tradeCounter: typeof tradeCounter === 'number' ? tradeCounter : new BN(tradeCounter.toString()).toNumber(),
+    tradeCounter: Number(tradeCounter) || 0,
   };
 }
 

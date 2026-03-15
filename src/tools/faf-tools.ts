@@ -490,19 +490,19 @@ export const fafPointsTool: ToolDefinition = {
       `  ${theme.accentBold('VOLTAGE POINTS')}`,
       `  ${theme.separator(40)}`,
       '',
-      theme.pair('Tier', chalk.cyan(voltage.tierName)),
-      theme.pair('Multiplier', `${voltage.multiplier}x`),
-      theme.pair('Trade Counter', `${voltage.tradeCounter}`),
+      theme.pair('Trade Counter', `${voltage.tradeCounter} (daily)`),
+      '',
+      chalk.dim('  Voltage tier and points are tracked by Flash Trade\'s'),
+      chalk.dim('  backend and not available via on-chain data.'),
+      chalk.dim('  Check https://flash.trade for your current tier.'),
       '',
     ];
 
-    // Show all tiers
+    // Show tier reference table
     lines.push(`  ${'Tier'.padEnd(16)} Multiplier`);
     lines.push(`  ${theme.separator(30)}`);
-    for (let i = 0; i < VOLTAGE_TIERS.length; i++) {
-      const vt = VOLTAGE_TIERS[i];
-      const marker = i === voltage.level ? chalk.green(' ←') : '';
-      lines.push(`  ${vt.name.padEnd(16)} ${vt.multiplier}x${marker}`);
+    for (const vt of VOLTAGE_TIERS) {
+      lines.push(`  ${vt.name.padEnd(16)} ${vt.multiplier}x`);
     }
     lines.push('');
 
