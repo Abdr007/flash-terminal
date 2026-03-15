@@ -136,9 +136,9 @@ describe('Risk Classification Edge Cases', () => {
 // ─── Cache Configuration ────────────────────────────────────────────────────
 
 describe('Cache Configuration', () => {
-  it('pool metrics cache TTL is 10 seconds', () => {
+  it('pool metrics cache TTL is 30 seconds', () => {
     const src = readFileSync(resolve(ROOT, 'src/earn/pool-data.ts'), 'utf8');
-    assert.ok(src.includes('10_000'), 'cache TTL should be 10_000ms');
+    assert.ok(src.includes('30_000'), 'cache TTL should be 30_000ms');
   });
 
   it('pool registry is lazily loaded and cached', () => {

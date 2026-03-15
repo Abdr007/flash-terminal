@@ -106,7 +106,7 @@ function computeApyFromSnapshots(poolId: string, currentPrice: number): number |
   return Math.round(apy * 100) / 100;
 }
 
-const CACHE_TTL_MS = 10_000;
+const CACHE_TTL_MS = 30_000;
 
 export interface PoolMetrics {
   poolId: string;
@@ -241,21 +241,29 @@ export async function getPoolMetrics(): Promise<Map<string, PoolMetrics>> {
   }
   recordFlpPrices(currentFlpPrices);
 
-  for (const pool of registry) {
-    const prices = poolPrices[pool.poolId];
-    const flpPrice = prices?.flp ?? 0;
-    const sflpPrice = prices?.sflp ?? 0;
-
-    let tvl = 0;
-    if (conn && flpPrice > 0) {
+  // Fetch all token supplies in parallel across all pools
+  const tvlByPool: Record<string, number> = {};
+  if (conn) {
+    const supplyPromises = registry.map(async (pool) => {
+      const flpPrice = poolPrices[pool.poolId]?.flp ?? 0;
+      const sflpPrice = poolPrices[pool.poolId]?.sflp ?? 0;
+      if (flpPrice <= 0) return;
       try {
         const [flpSupply, sflpSupply] = await Promise.all([
           conn.getTokenSupply(pool.flpMint).then(s => s.value.uiAmount ?? 0).catch(() => 0),
           conn.getTokenSupply(pool.sflpMint).then(s => s.value.uiAmount ?? 0).catch(() => 0),
         ]);
-        tvl = (flpSupply * flpPrice) + (sflpSupply * sflpPrice);
+        tvlByPool[pool.poolId] = (flpSupply * flpPrice) + (sflpSupply * sflpPrice);
       } catch { /* non-critical */ }
-    }
+    });
+    await Promise.all(supplyPromises);
+  }
+
+  for (const pool of registry) {
+    const prices = poolPrices[pool.poolId];
+    const flpPrice = prices?.flp ?? 0;
+    const sflpPrice = prices?.sflp ?? 0;
+    const tvl = tvlByPool[pool.poolId] ?? 0;
 
     // APY priority:
     // 1. FLP price growth from snapshots (most accurate — captures all revenue)

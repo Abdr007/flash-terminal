@@ -6,6 +6,7 @@ import chalk from 'chalk';
 import { theme } from '../cli/theme.js';
 import { getPoolRegistry, resolvePool, resolveTokenMint } from '../earn/pool-registry.js';
 import { getPoolMetrics, getPoolMetric } from '../earn/pool-data.js';
+import { recordEarnAction, getEarnJournal } from '../earn/earn-journal.js';
 import { IS_AGENT } from '../no-dna.js';
 
 const NOT_AVAILABLE_MSG = chalk.yellow(
@@ -201,23 +202,58 @@ export const earnAddLiquidityTool: ToolDefinition = {
       return { success: false, message: chalk.red('  Amount must be a positive number.') };
     }
 
-    try {
-      const result = await client.addLiquidity('USDC', amount, pool.poolId);
-      const lines = [
-        '',
-        `  ${theme.accentBold('DEPOSIT CONFIRMED')}`,
-        '',
-        theme.pair('Pool', pool.displayName),
-        theme.pair('Deposited', formatUsd(amount) + ' USDC'),
-        theme.pair('Received', pool.flpSymbol + ' (auto-compound)'),
-        '',
-        `  ${chalk.dim('Tx:')} ${result.txSignature}`,
-        '',
-      ];
-      return { success: true, message: lines.join('\n'), txSignature: result.txSignature };
-    } catch (err: unknown) {
-      return { success: false, message: chalk.red(`  Deposit failed: ${getErrorMessage(err)}`) };
+    // Fetch FLP price for deposit preview
+    const m = await getPoolMetric(pool.poolId);
+    const flpPrice = m?.flpPrice ?? 0;
+    const flpEstimate = flpPrice > 0 ? amount / flpPrice : 0;
+
+    const previewLines = [
+      '',
+      `  ${theme.accentBold('DEPOSIT PREVIEW')}`,
+      `  ${theme.separator(35)}`,
+      theme.pair('Pool', pool.displayName),
+      theme.pair('Deposit', formatUsd(amount) + ' USDC'),
+    ];
+    if (flpPrice > 0) {
+      previewLines.push(theme.pair('FLP Price', `$${flpPrice.toFixed(3)}`));
+      previewLines.push(theme.pair('Est. Receive', `~${flpEstimate.toFixed(2)} ${pool.flpSymbol} (auto-compound)`));
     }
+    previewLines.push('');
+
+    return {
+      success: true,
+      message: previewLines.join('\n'),
+      requiresConfirmation: true,
+      confirmationPrompt: 'Type "yes" to sign or "no" to cancel',
+      data: {
+        executeAction: async (): Promise<ToolResult> => {
+          try {
+            const result = await client.addLiquidity!('USDC', amount, pool.poolId);
+            recordEarnAction({
+              pool: pool.poolId,
+              action: 'deposit',
+              amountUsd: amount,
+              timestamp: Date.now(),
+              txSignature: result.txSignature,
+            });
+            const lines = [
+              '',
+              `  ${theme.accentBold('DEPOSIT CONFIRMED')}`,
+              '',
+              theme.pair('Pool', pool.displayName),
+              theme.pair('Deposited', formatUsd(amount) + ' USDC'),
+              theme.pair('Received', pool.flpSymbol + ' (auto-compound)'),
+              '',
+              `  ${chalk.dim('Tx:')} ${result.txSignature}`,
+              '',
+            ];
+            return { success: true, message: lines.join('\n'), txSignature: result.txSignature };
+          } catch (err: unknown) {
+            return { success: false, message: chalk.red(`  Deposit failed: ${getErrorMessage(err)}`) };
+          }
+        },
+      },
+    };
   },
 };
 
@@ -246,6 +282,18 @@ export const earnRemoveLiquidityTool: ToolDefinition = {
 
     try {
       const result = await client.removeLiquidity('USDC', percent, pool.poolId);
+      // Estimate withdrawn USD for journal (use FLP price × approximate tokens)
+      const m = await getPoolMetric(pool.poolId);
+      const estimatedUsd = m?.flpPrice ? m.flpPrice * percent : 0; // rough estimate
+      if (estimatedUsd > 0) {
+        recordEarnAction({
+          pool: pool.poolId,
+          action: 'withdraw',
+          amountUsd: estimatedUsd,
+          timestamp: Date.now(),
+          txSignature: result.txSignature,
+        });
+      }
       const lines = [
         '',
         `  ${theme.accentBold('WITHDRAWAL CONFIRMED')}`,
@@ -288,6 +336,13 @@ export const earnStakeTool: ToolDefinition = {
 
     try {
       const result = await client.stakeFLP(amount, pool.poolId);
+      recordEarnAction({
+        pool: pool.poolId,
+        action: 'stake',
+        amountUsd: amount,
+        timestamp: Date.now(),
+        txSignature: result.txSignature,
+      });
       const lines = [
         '',
         `  ${theme.accentBold('STAKE CONFIRMED')}`,
@@ -330,6 +385,18 @@ export const earnUnstakeTool: ToolDefinition = {
 
     try {
       const result = await client.unstakeFLP(percent, pool.poolId);
+      // Estimate unstaked USD for journal
+      const m = await getPoolMetric(pool.poolId);
+      const estimatedUsd = m?.sflpPrice ? m.sflpPrice * percent : 0;
+      if (estimatedUsd > 0) {
+        recordEarnAction({
+          pool: pool.poolId,
+          action: 'unstake',
+          amountUsd: estimatedUsd,
+          timestamp: Date.now(),
+          txSignature: result.txSignature,
+        });
+      }
       const lines = [
         '',
         `  ${theme.accentBold('UNSTAKE CONFIRMED')}`,
@@ -365,22 +432,41 @@ export const earnClaimRewardsTool: ToolDefinition = {
     const pool = resolvePool(poolName);
     if (!pool) return poolNotFound(poolName);
 
-    try {
-      const result = await client.claimRewards(pool.poolId);
-      const lines = [
-        '',
-        `  ${theme.accentBold('REWARDS CLAIMED')}`,
-        '',
-        theme.pair('Pool', pool.displayName),
-        theme.pair('Received', 'USDC rewards'),
-        '',
-        `  ${chalk.dim('Tx:')} ${result.txSignature}`,
-        '',
-      ];
-      return { success: true, message: lines.join('\n'), txSignature: result.txSignature };
-    } catch (err: unknown) {
-      return { success: false, message: chalk.red(`  Claim failed: ${getErrorMessage(err)}`) };
-    }
+    const previewLines = [
+      '',
+      `  ${theme.accentBold('CLAIM REWARDS')}`,
+      `  ${theme.separator(35)}`,
+      theme.pair('Pool', pool.displayName),
+      theme.pair('Action', 'Claim sFLP staking rewards'),
+      '',
+    ];
+
+    return {
+      success: true,
+      message: previewLines.join('\n'),
+      requiresConfirmation: true,
+      confirmationPrompt: 'Type "yes" to sign or "no" to cancel',
+      data: {
+        executeAction: async (): Promise<ToolResult> => {
+          try {
+            const result = await client.claimRewards!(pool.poolId);
+            const lines = [
+              '',
+              `  ${theme.accentBold('REWARDS CLAIMED')}`,
+              '',
+              theme.pair('Pool', pool.displayName),
+              theme.pair('Received', 'USDC rewards'),
+              '',
+              `  ${chalk.dim('Tx:')} ${result.txSignature}`,
+              '',
+            ];
+            return { success: true, message: lines.join('\n'), txSignature: result.txSignature };
+          } catch (err: unknown) {
+            return { success: false, message: chalk.red(`  Claim failed: ${getErrorMessage(err)}`) };
+          }
+        },
+      },
+    };
   },
 };
 
@@ -705,18 +791,50 @@ export const earnPnlTool: ToolDefinition = {
       positions.push({ pool: pool.aliases[0], type, tokens: token.amount, value, price });
     }
 
+    // Journal-based PnL: sum deposits/withdrawals per pool
+    const journal = getEarnJournal();
+    const poolTotals = new Map<string, { deposited: number; withdrawn: number }>();
+    for (const entry of journal) {
+      const t = poolTotals.get(entry.pool) ?? { deposited: 0, withdrawn: 0 };
+      if (entry.action === 'deposit' || entry.action === 'stake') {
+        t.deposited += entry.amountUsd;
+      } else if (entry.action === 'withdraw' || entry.action === 'unstake') {
+        t.withdrawn += entry.amountUsd;
+      }
+      poolTotals.set(entry.pool, t);
+    }
+
+    let totalDeposited = 0;
+    let totalWithdrawn = 0;
+    for (const t of poolTotals.values()) {
+      totalDeposited += t.deposited;
+      totalWithdrawn += t.withdrawn;
+    }
+    const netDeposited = totalDeposited - totalWithdrawn;
+    const pnl = totalValue - netDeposited;
+    const hasJournal = journal.length > 0;
+
     if (IS_AGENT) {
-      return { success: true, message: JSON.stringify({ action: 'earn_pnl', total_value: totalValue, positions }) };
+      return { success: true, message: JSON.stringify({ action: 'earn_pnl', total_value: totalValue, total_deposited: totalDeposited, total_withdrawn: totalWithdrawn, pnl, positions }) };
     }
 
     const lines = [
       '',
       `  ${theme.accentBold('EARN PERFORMANCE')}`,
-      `  ${theme.separator(45)}`,
+      `  ${theme.separator(55)}`,
       '',
       theme.pair('Current Value', totalValue > 0 ? chalk.green(formatUsd(totalValue)) : formatUsd(0)),
-      '',
     ];
+
+    if (hasJournal) {
+      lines.push(theme.pair('Total Deposited', formatUsd(totalDeposited)));
+      if (totalWithdrawn > 0) lines.push(theme.pair('Total Withdrawn', formatUsd(totalWithdrawn)));
+      lines.push(theme.pair('Net Deposited', formatUsd(netDeposited)));
+      const pnlStr = pnl >= 0 ? chalk.green(`+${formatUsd(pnl)}`) : chalk.red(formatUsd(pnl));
+      lines.push(theme.pair('PnL', pnlStr));
+    }
+
+    lines.push('');
 
     if (positions.length === 0) {
       lines.push(chalk.dim('  No active positions.'));
@@ -728,9 +846,11 @@ export const earnPnlTool: ToolDefinition = {
       }
     }
 
-    lines.push('');
-    lines.push(chalk.dim('  * PnL tracking requires comparing against deposit history.'));
-    lines.push(chalk.dim('    Current value shown — deposit tracking coming soon.'));
+    if (!hasJournal) {
+      lines.push('');
+      lines.push(chalk.dim('  * No deposit history yet. PnL will be tracked after your first deposit.'));
+    }
+
     lines.push('');
     return { success: true, message: lines.join('\n') };
   },
