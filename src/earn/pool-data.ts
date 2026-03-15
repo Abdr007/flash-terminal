@@ -3,18 +3,108 @@
  *
  * Fetches live pool metrics from multiple sources:
  * - fstats.io /pools — FLP/sFLP prices, total volume, total fees
- * - fstats.io /fees/daily — per-pool weekly fee revenue (primary APY source)
- * - fstats.io /volume/daily — per-pool 7D volume (fallback APY: volume × fee rate × LP share)
+ * - FLP price snapshots — APY from actual FLP price growth over time
+ * - fstats.io /fees/daily + /volume/daily — fallback APY when no snapshots exist
  * - Solana RPC — FLP/sFLP token supply for TVL calculation
  *
- * APY = (7D LP fees / TVL) * 52 * 100 (annualized)
+ * APY = ((current_flp / old_flp) - 1) * (365 / days) * 100 (primary)
+ * APY = (7D LP fees / TVL) * 52 * 100 (fallback)
  * TVL = (FLP supply * FLP price) + (sFLP supply * sFLP price)
  */
 
 import { Connection } from '@solana/web3.js';
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
+import { homedir } from 'os';
+import { join } from 'path';
 import { getPoolRegistry } from './pool-registry.js';
 import { FSTATS_BASE_URL } from '../config/index.js';
 import { getLogger } from '../utils/logger.js';
+
+// ─── FLP Price Snapshots ─────────────────────────────────────────────────────
+// Store FLP prices over time to compute APY from actual price growth.
+// FLP price compounds ALL revenue (trading fees, borrow fees, liquidation PnL).
+
+interface FlpSnapshot {
+  timestamp: number;
+  prices: Record<string, number>; // poolId → flpPrice
+}
+
+const SNAPSHOT_FILE = join(homedir(), '.flash', 'flp-snapshots.json');
+const SNAPSHOT_INTERVAL_MS = 3600_000; // Save at most once per hour
+const MAX_SNAPSHOTS = 168; // 7 days of hourly snapshots
+
+function loadSnapshots(): FlpSnapshot[] {
+  try {
+    if (!existsSync(SNAPSHOT_FILE)) return [];
+    const data = JSON.parse(readFileSync(SNAPSHOT_FILE, 'utf8'));
+    return Array.isArray(data) ? data : [];
+  } catch { return []; }
+}
+
+function saveSnapshots(snapshots: FlpSnapshot[]): void {
+  try {
+    const dir = join(homedir(), '.flash');
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
+    writeFileSync(SNAPSHOT_FILE, JSON.stringify(snapshots), { mode: 0o600 });
+  } catch { /* non-critical */ }
+}
+
+function recordFlpPrices(prices: Record<string, number>): void {
+  const snapshots = loadSnapshots();
+  const now = Date.now();
+
+  // Don't save more than once per hour
+  if (snapshots.length > 0 && now - snapshots[snapshots.length - 1].timestamp < SNAPSHOT_INTERVAL_MS) {
+    return;
+  }
+
+  snapshots.push({ timestamp: now, prices });
+
+  // Keep only the last MAX_SNAPSHOTS entries
+  while (snapshots.length > MAX_SNAPSHOTS) snapshots.shift();
+
+  saveSnapshots(snapshots);
+}
+
+/**
+ * Compute APY from FLP price growth between two snapshots.
+ * Uses the oldest snapshot within 7 days for best accuracy.
+ * Minimum 1 hour of data required.
+ */
+function computeApyFromSnapshots(poolId: string, currentPrice: number): number | null {
+  if (currentPrice <= 0) return null;
+
+  const snapshots = loadSnapshots();
+  if (snapshots.length < 2) return null;
+
+  const now = Date.now();
+  const maxAge = 7 * 24 * 3600_000; // 7 days
+  const minAge = 3600_000; // 1 hour minimum
+
+  // Find oldest snapshot within 7 days that has a price for this pool
+  let bestSnapshot: FlpSnapshot | null = null;
+  for (const snap of snapshots) {
+    const age = now - snap.timestamp;
+    if (age < minAge || age > maxAge) continue;
+    if (!snap.prices[poolId] || snap.prices[poolId] <= 0) continue;
+    if (!bestSnapshot || snap.timestamp < bestSnapshot.timestamp) {
+      bestSnapshot = snap;
+    }
+  }
+
+  if (!bestSnapshot) return null;
+
+  const oldPrice = bestSnapshot.prices[poolId];
+  const elapsedDays = (now - bestSnapshot.timestamp) / (24 * 3600_000);
+  if (elapsedDays < 0.04) return null; // Less than ~1 hour
+
+  const growth = (currentPrice / oldPrice) - 1;
+  if (growth <= 0) return 0; // Pool lost money in this period
+
+  // Annualize: APY = growth * (365 / days)
+  const apy = growth * (365 / elapsedDays) * 100;
+  return Math.round(apy * 100) / 100;
+}
 
 const CACHE_TTL_MS = 10_000;
 
@@ -142,6 +232,15 @@ export async function getPoolMetrics(): Promise<Map<string, PoolMetrics>> {
 
   // Step 3: Fetch token supplies from RPC for TVL
   const conn = _rpcConnection;
+
+  // Record current FLP prices for snapshot tracking
+  const currentFlpPrices: Record<string, number> = {};
+  for (const pool of registry) {
+    const flp = poolPrices[pool.poolId]?.flp ?? 0;
+    if (flp > 0) currentFlpPrices[pool.poolId] = flp;
+  }
+  recordFlpPrices(currentFlpPrices);
+
   for (const pool of registry) {
     const prices = poolPrices[pool.poolId];
     const flpPrice = prices?.flp ?? 0;
@@ -158,11 +257,21 @@ export async function getPoolMetrics(): Promise<Map<string, PoolMetrics>> {
       } catch { /* non-critical */ }
     }
 
-    // APY = (weeklyLpFees / TVL) * 52 * 100
+    // APY priority:
+    // 1. FLP price growth from snapshots (most accurate — captures all revenue)
+    // 2. Volume-weighted fee distribution (fallback for first run)
+    const snapshotApy = computeApyFromSnapshots(pool.poolId, flpPrice);
     const weeklyFees = weeklyFeesByPool[pool.poolId] ?? 0;
-    const apy7d = tvl > 0 && weeklyFees > 0 ? (weeklyFees / tvl) * 52 * 100 : 0;
-    // APR ≈ APY for staked (sFLP gets fees directly, not compounded)
-    const apr7d = apy7d; // Close approximation
+    const volumeApy = tvl > 0 && weeklyFees > 0 ? (weeklyFees / tvl) * 52 * 100 : 0;
+
+    const apy7d = snapshotApy ?? volumeApy;
+    const apr7d = apy7d;
+
+    if (snapshotApy !== null) {
+      logger.debug('EARN', `${pool.poolId}: APY ${apy7d.toFixed(1)}% (from FLP price growth)`);
+    } else {
+      logger.debug('EARN', `${pool.poolId}: APY ${apy7d.toFixed(1)}% (from volume estimate — no snapshots yet)`);
+    }
 
     metrics.set(pool.poolId, {
       poolId: pool.poolId,
