@@ -1186,8 +1186,8 @@ export function localParse(input: string): ParsedIntent | null {
     if (/^faf\s+rewards?$/.test(lower)) {
       return { action: ActionType.FafRewards };
     }
-    // "faf referral"
-    if (/^faf\s+referrals?$/.test(lower)) {
+    // "faf referral" (+ common misspellings: referal, refferal, referrals)
+    if (/^faf\s+ref{1,2}er{1,2}als?$/.test(lower)) {
       return { action: ActionType.FafReferral };
     }
     // "faf points" / "faf voltage"

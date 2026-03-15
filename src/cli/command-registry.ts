@@ -687,7 +687,7 @@ export const COMMAND_REGISTRY: CommandEntry[] = [
     action: ActionType.FafReferral,
     category: 'FAF Token',
     description: 'Referral status + claimable rebates',
-    aliases: ['faf referrals'],
+    aliases: ['faf referrals', 'faf referal', 'faf refferal'],
   },
   {
     name: 'faf points',
