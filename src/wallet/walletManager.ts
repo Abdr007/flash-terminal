@@ -267,6 +267,17 @@ export class WalletManager {
     const KNOWN_MINTS: Record<string, string> = {
       [USDC_MINT]: 'USDC',
       'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB': 'USDT',
+      'So11111111111111111111111111111111111111112': 'WSOL',
+      'JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN': 'JUP',
+      'HZ1JovNiVvGrGNiiYvEozEVgZ58xaU3RKwX8eACQBCt3': 'PYTH',
+      'jtojtomepa8beP8AuQc6eXt5FriJwfFMwQx2v2f9mCL': 'JTO',
+      '4k3Dyjzvzp8eMZWUXbBCjEvwSkkk59S5iCNLY3QrkX6R': 'RAY',
+      'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263': 'BONK',
+      'EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm': 'WIF',
+      'BZLbGTNCSFfoth2GYDtwr7e4imWzpR5jqcUuGEwr646K': 'ORE',
+      '98so1YHdmeaVecYmL1eFUsDmBw6SUdP3DfLHPQ11xCN3': 'FAF',
+      'KMNo3nJsBXfcpJTVhZcXLW7RmTwTt4GVFE7suUBo9sS': 'KMNO',
+      'HypE2ePUBiAW3CEKDV6FRsXBk6Q14r9GcfJb3bqCWhdr': 'HYPE',
     };
 
     const [solBalance, tokenAccounts] = await withRetry(

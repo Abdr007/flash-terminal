@@ -1677,7 +1677,8 @@ export const walletBalance: ToolDefinition = {
         theme.pair('SOL', theme.positive(sol.toFixed(4) + ' SOL')),
       ];
       for (const t of tokens) {
-        lines.push(theme.pair(t.symbol, theme.positive(t.amount.toFixed(t.symbol === 'USDC' || t.symbol === 'USDT' ? 2 : 4) + ' ' + t.symbol)));
+        const decimals = t.symbol === 'USDC' || t.symbol === 'USDT' ? 2 : t.amount >= 1000 ? 2 : 4;
+        lines.push(theme.pair(t.symbol, theme.positive(`${t.amount.toFixed(decimals)} ${t.symbol}`)));
       }
       if (tokens.length === 0) {
         lines.push(theme.dim('  No SPL tokens found'));
