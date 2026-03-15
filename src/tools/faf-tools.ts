@@ -148,7 +148,7 @@ export const fafStakeTool: ToolDefinition = {
 
       const remainingWallet = balance - amount;
       const stakeInfo = await getFafStakeInfo(perpClient, poolConfig, userPk).catch(() => null);
-      const totalStaked = (stakeInfo?.stakedAmount ?? 0) + amount;
+      const totalStaked = stakeInfo?.stakedAmount ?? amount;
       const newTier = getVipTier(totalStaked);
       const lines = [
         '',
