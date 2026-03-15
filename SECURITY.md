@@ -125,3 +125,23 @@ Key dependencies with security implications:
 - Markets without reliable price data are excluded from analysis
 - If external data sources (CoinGecko, fstats.io) are unreachable, affected features degrade gracefully rather than producing incorrect results
 - Oracle price validation rejects zero or negative values from Pyth
+
+---
+
+## Known Vulnerability Allowlist
+
+The following vulnerabilities are present in upstream dependencies and cannot be fixed in Flash Terminal. They are allowlisted in CI and documented here for transparency.
+
+### bigint-buffer (high severity)
+
+- **Advisory**: [GHSA-3gc7-fjrx-p6mg](https://github.com/advisories/GHSA-3gc7-fjrx-p6mg)
+- **Severity**: High
+- **Issue**: Buffer overflow in `toBigIntLE()` function
+- **Dependency chain**: `flash-sdk` → `@solana/spl-token` → `@solana/buffer-layout-utils` → `bigint-buffer`
+- **Status**: No fix available upstream
+- **Risk assessment**: The vulnerable function is not exposed to user-controlled input in Flash Terminal. All bigint conversions use internally validated on-chain data from Solana RPC responses.
+- **Allowlisted since**: v1.0.0 (2026-03-15)
+
+### Review schedule
+
+Allowlisted vulnerabilities are reviewed monthly. When an upstream fix becomes available, the dependency will be upgraded and the entry removed from this list.

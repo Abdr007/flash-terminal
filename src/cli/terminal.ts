@@ -183,6 +183,15 @@ export class FlashTerminal {
       }
     } catch { /* config validation is non-critical */ }
 
+    // ─── SDK Compatibility Check ─────────────────────────────────────
+    try {
+      const { checkSdkCompatibility } = await import('../config/sdk-compat.js');
+      const sdkCompat = checkSdkCompatibility();
+      if (!sdkCompat.compatible) {
+        console.log(chalk.yellow(`  ⚠ Incompatible Flash SDK detected (v${sdkCompat.installed}). Expected ${sdkCompat.expected}. Upgrade recommended.`));
+      }
+    } catch { /* sdk compat check is non-critical */ }
+
     // ─── Alert Consumers ──────────────────────────────────────────────
     try {
       const { autoRegisterWebhook } = await import('../observability/alert-consumers/webhook-consumer.js');
@@ -1619,7 +1628,7 @@ export class FlashTerminal {
       return;
     }
 
-    if (lower === 'doctor') {
+    if (lower === 'doctor' || lower === 'flash doctor' || lower === 'health' || lower === 'flash health') {
       const output = await runDoctor(
         this.flashClient,
         this.rpcManager,

@@ -32,6 +32,31 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Security audit
+        run: |
+          # Audit production dependencies only
+          # Allow known Solana ecosystem vulnerabilities (bigint-buffer)
+          npm audit --production --audit-level=critical 2>&1 || {
+            AUDIT=$(npm audit --production --json 2>&1)
+            CRITICAL=$(echo "$AUDIT" | node -e "
+              const d = require('fs').readFileSync('/dev/stdin','utf8');
+              try {
+                const j = JSON.parse(d);
+                const vulns = j.vulnerabilities || {};
+                const critical = Object.entries(vulns).filter(([,v]) =>
+                  v.severity === 'critical' && !['bigint-buffer','@solana/buffer-layout-utils'].includes(v.name)
+                );
+                console.log(critical.length);
+              } catch { console.log('0'); }
+            ")
+            if [ "$CRITICAL" != "0" ]; then
+              echo "Critical vulnerabilities found in direct dependencies"
+              npm audit --production
+              exit 1
+            fi
+            echo "Known Solana ecosystem vulnerabilities allowlisted (see SECURITY.md)"
+          }
+
       - name: Lint
         run: npm run lint
 

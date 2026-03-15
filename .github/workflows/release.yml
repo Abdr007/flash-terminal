@@ -32,8 +32,11 @@ jobs:
       - name: Build
         run: npm run build
 
-      - name: Run tests
-        run: npm test
+      - name: Lint
+        run: npm run lint
+
+      - name: Run tests with coverage
+        run: npm run coverage
 
       - name: Verify test count
         run: |
@@ -44,6 +47,14 @@ jobs:
             exit 1
           fi
           echo "Test count: $PASS_COUNT (minimum: 800)"
+
+      - name: Upload coverage reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage/
+          retention-days: 14
 
   release:
     needs: test
@@ -74,7 +85,7 @@ jobs:
         run: |
           TAG_NAME="${GITHUB_REF#refs/tags/}"
           TARBALL="flash-terminal-${TAG_NAME}.tar.gz"
-          tar -czf "$TARBALL" dist/ package.json README.md
+          tar -czf "$TARBALL" dist/ package.json README.md CHANGELOG.md coverage/
           sha256sum "$TARBALL" > "${TARBALL}.sha256"
           echo "TARBALL=$TARBALL" >> "$GITHUB_ENV"
           echo "TAG_NAME=$TAG_NAME" >> "$GITHUB_ENV"

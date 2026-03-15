@@ -18,7 +18,8 @@
   <a href="https://www.typescriptlang.org"><img src="https://img.shields.io/badge/TypeScript-Strict-3178C6?style=flat-square&logo=typescript&logoColor=white" alt="TypeScript" /></a>&nbsp;
   <a href="https://www.flash.trade"><img src="https://img.shields.io/badge/Flash_SDK-Integrated-26d97f?style=flat-square" alt="Flash SDK" /></a>&nbsp;
   <a href="https://github.com/Abdr007/flash-terminal/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue?style=flat-square" alt="MIT License" /></a>&nbsp;
-  <a href="https://nodejs.org"><img src="https://img.shields.io/badge/Node-%3E%3D20-brightgreen?style=flat-square&logo=node.js&logoColor=white" alt="Node.js" /></a>
+  <a href="https://nodejs.org"><img src="https://img.shields.io/badge/Node-%3E%3D20-brightgreen?style=flat-square&logo=node.js&logoColor=white" alt="Node.js" /></a>&nbsp;
+  <img src="https://img.shields.io/badge/Status-Stable_(v1.x_maintenance)-green?style=flat-square" alt="Stable" />
 </p>
 
 <p align="center">
@@ -594,6 +595,18 @@ The Docker image uses a multi-stage build (builder + production) with a non-root
 ## Contributing
 
 Contributions are welcome. See **[CONTRIBUTING.md](CONTRIBUTING.md)** for development setup, code style, and pull request guidelines.
+
+---
+
+## Maintenance
+
+Flash Terminal is in **stable maintenance mode** (v1.x). Future updates are limited to:
+
+- Bug fixes and security patches
+- Dependency updates (via Dependabot)
+- Minor improvements
+
+No architectural rewrites or new protocol features are planned. The system is production-ready with minimal maintenance overhead.
 
 ---
 

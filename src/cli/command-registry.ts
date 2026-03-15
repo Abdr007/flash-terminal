@@ -461,7 +461,7 @@ export const COMMAND_REGISTRY: CommandEntry[] = [
     action: null,
     category: 'Utilities',
     description: 'Run terminal diagnostic',
-    aliases: ['flash doctor'],
+    aliases: ['flash doctor', 'health', 'flash health'],
   },
   {
     name: 'engine status',
