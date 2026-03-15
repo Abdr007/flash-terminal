@@ -1423,19 +1423,14 @@ export class FlashClient implements IFlashClient {
 
       if (shouldFullClose) {
         // ── Full close ──
-        if (receivingToken.symbol === marketCollateralSymbol) {
-          logger.debug('TRADE', `Using closePosition(${targetToken.symbol}, ${marketCollateralSymbol})`);
-          result = await this.perpClient.closePosition(
-            targetToken.symbol, marketCollateralSymbol, priceAfterSlippage,
-            sdkSide, poolConfig, Privilege.None
-          );
-        } else {
-          logger.debug('TRADE', `Using closeAndSwap(${targetToken.symbol}, ${receivingToken.symbol}, ${marketCollateralSymbol})`);
-          result = await this.perpClient.closeAndSwap(
-            targetToken.symbol, receivingToken.symbol, marketCollateralSymbol,
-            priceAfterSlippage, sdkSide, poolConfig, Privilege.None
-          );
-        }
+        // Always close to the market's collateral token first.
+        // closeAndSwap can fail with IllegalOwner on pools where collateral != USDC
+        // (e.g., Governance.1 PYTH LONG uses JUP collateral).
+        logger.debug('TRADE', `Using closePosition(${targetToken.symbol}, ${marketCollateralSymbol})`);
+        result = await this.perpClient.closePosition(
+          targetToken.symbol, marketCollateralSymbol, priceAfterSlippage,
+          sdkSide, poolConfig, Privilege.None
+        );
       } else {
         // ── Partial close via decreaseSize ──
         const { position } = await this.findUserPosition(poolConfig, market, side);
