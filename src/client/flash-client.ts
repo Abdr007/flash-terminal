@@ -2228,15 +2228,10 @@ export class FlashClient implements IFlashClient {
 
       logger.info('CLIENT', `Limit order: target=${targetSymbol} collateral=${collateralSymbol} reserve=${reserveSymbol} receive=${receiveSymbol} side=${sdkSide === Side.Long ? 'Long' : 'Short'} price=${limitPrice} collateralNative=${collateralNative.toString()} sizeAmount=${sizeAmount.toString()}`);
 
-      // Limit orders require external oracle accounts (ConstraintRaw on target_oracle_account
-      // fails with internal oracle). Create a temporary client with useExtOracleAccount=true.
-      const extOracleClient = new PerpetualsClient(
-        this.provider, this.poolConfig.programId, this.poolConfig.perpComposibilityProgramId,
-        this.poolConfig.fbNftRewardProgramId, this.poolConfig.rewardDistributionProgram.programId,
-        { prioritizationFee: this.config.computeUnitPrice }, true,
-      );
-
-      const result = await extOracleClient.placeLimitOrder(
+      // Flash Trade team: always use useExtOracleAccount=false for trade-side interactions.
+      // Note: placeLimitOrder currently fails with InvalidArgument on mainnet —
+      // likely requires a Pyth Lazer price update that the SDK doesn't include yet.
+      const result = await this.perpClient.placeLimitOrder(
         targetSymbol, collateralSymbol, reserveSymbol, receiveSymbol,
         sdkSide, limitPriceContract, collateralNative, sizeAmount,
         slPrice, tpPrice, poolConfig
