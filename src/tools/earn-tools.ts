@@ -509,6 +509,7 @@ export const earnPositionsTool: ToolDefinition = {
 
     const positions: Array<{ pool: string; type: string; balance: number; value: number; rewards: string }> = [];
 
+    // Check token accounts for FLP (compounding) positions
     for (const token of tokenData.tokens) {
       const resolved = resolveTokenMint(token.mint);
       if (!resolved) continue;
@@ -528,6 +529,44 @@ export const earnPositionsTool: ToolDefinition = {
         });
       }
     }
+
+    // Check FlpStakeAccount PDAs for sFLP (staked) positions
+    // sFLP is stored in program PDAs, not as regular token accounts
+    try {
+      const { PublicKey } = await import('@solana/web3.js');
+      const { BN } = await import('bn.js');
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK client needed for program.coder
+      const flashClient = context.flashClient as any;
+      if (flashClient?.perpClient?.program?.coder && flashClient?.connection) {
+        const registry = getPoolRegistry();
+        const walletPk = new PublicKey(context.walletAddress);
+        for (const pool of registry) {
+          try {
+            const [pda] = PublicKey.findProgramAddressSync(
+              [Buffer.from('stake'), walletPk.toBuffer(), pool.poolConfig.poolAddress.toBuffer()],
+              pool.poolConfig.programId,
+            );
+            const info = await flashClient.connection.getAccountInfo(pda);
+            if (!info) continue;
+            const decoded = flashClient.perpClient.program.coder.accounts.decode('flpStake', info.data);
+            const active = new BN(decoded.stakeStats.activeAmount.toString());
+            const pending = new BN(decoded.stakeStats.pendingActivation.toString());
+            const total = active.add(pending).toNumber() / Math.pow(10, pool.lpDecimals);
+            if (total > 0.001) {
+              const m = metrics.get(pool.poolId);
+              const price = m?.sflpPrice ?? 0;
+              positions.push({
+                pool: pool.aliases[0],
+                type: 'sFLP',
+                balance: total,
+                value: total * price,
+                rewards: 'USDC hourly',
+              });
+            }
+          } catch { /* skip pool on error */ }
+        }
+      }
+    } catch { /* non-critical — staking PDA check failed */ }
 
     if (positions.length === 0) {
       return {
