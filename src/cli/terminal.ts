@@ -37,7 +37,7 @@ import { buildFastDispatch } from './command-registry.js';
 import { getCommandGuidance } from '../utils/command-guidance.js';
 import { resolveMarket } from '../utils/market-resolver.js';
 import { computeSimulationLiquidationPrice, isDivergenceOk } from '../utils/protocol-liq.js';
-import { IS_AGENT, agentError, agentOutput } from '../no-dna.js';
+import { IS_AGENT, agentError, agentOutput, enableStructuredOutput, restoreOutputMode } from '../no-dna.js';
 
 
 /** Alias for backward compat — delegates to centralized resolver */
@@ -2330,6 +2330,9 @@ export class FlashTerminal {
       }, 500);
     }
 
+    // Enable structured output during dispatch so tools return JSON in message
+    if (flags.jsonOutput) enableStructuredOutput();
+
     let result: ToolResult;
     try {
       result = await withTimeout(
@@ -2337,9 +2340,12 @@ export class FlashTerminal {
         COMMAND_TIMEOUT_MS,
         'execution',
       );
+      // Restore output mode BEFORE any IS_AGENT display checks
+      if (flags.jsonOutput) restoreOutputMode();
       if (progressTimer) { clearInterval(progressTimer); progressTimer = null; }
       if (!IS_AGENT && !flags.jsonOutput) process.stdout.write('               \r');
     } catch (error: unknown) {
+      if (flags.jsonOutput) restoreOutputMode();
       if (progressTimer) { clearInterval(progressTimer); }
       if (!IS_AGENT && !flags.jsonOutput) process.stdout.write('               \r');
       if (flags.jsonOutput) {
@@ -2415,16 +2421,26 @@ export class FlashTerminal {
     }
 
     // ── JSON output mode (--format json) ───────────────────────────
+    // Tools returned structured JSON in result.message (via IS_AGENT path during dispatch).
+    // Parse it and output clean JSON.
     if (flags.jsonOutput) {
-      const jsonPayload: Record<string, unknown> = {
+      let jsonPayload: Record<string, unknown> = {
         success: result.success,
         action: intent.action,
       };
 
-      // Include structured data if available
-      if (result.data) {
-        const { executeAction: _ea, ...safeData } = result.data;
-        Object.assign(jsonPayload, safeData);
+      // Try to parse structured data from message (tools return JSON strings in IS_AGENT mode)
+      try {
+        const parsed = JSON.parse(result.message);
+        if (typeof parsed === 'object' && parsed !== null) {
+          jsonPayload = { success: result.success, ...parsed };
+        }
+      } catch {
+        // Not JSON — include raw data if available
+        if (result.data) {
+          const { executeAction: _ea, ...safeData } = result.data;
+          Object.assign(jsonPayload, safeData);
+        }
       }
       if (result.txSignature) jsonPayload.tx_signature = result.txSignature;
 

@@ -14,7 +14,20 @@
  */
 
 /** True when the NO_DNA env var is present and non-empty. */
-export const IS_AGENT = !!process.env.NO_DNA;
+export let IS_AGENT = !!process.env.NO_DNA;
+
+/**
+ * Temporarily enable structured output mode (used by --format json).
+ * Must call restoreOutputMode() after dispatch completes.
+ */
+let _savedAgentState = false;
+export function enableStructuredOutput(): void {
+  _savedAgentState = IS_AGENT;
+  IS_AGENT = true;
+}
+export function restoreOutputMode(): void {
+  IS_AGENT = _savedAgentState;
+}
 
 /** Write a structured JSON error to stderr and optionally exit. */
 export function agentError(
