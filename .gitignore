@@ -48,3 +48,6 @@ coverage/
 
 # Command history
 .flash_terminal_history
+
+# Generated PDFs (rebuild from markdown source)
+docs/*.pdf

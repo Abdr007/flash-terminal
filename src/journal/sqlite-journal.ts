@@ -14,6 +14,7 @@ import { homedir } from 'os';
 import { mkdirSync, existsSync } from 'fs';
 import { createRequire } from 'module';
 import type { JournalEntry, JournalStatus } from './trade-journal.js';
+import type { BetterSqliteDatabase, BetterSqliteConstructor } from '../types/flash-sdk-interfaces.js';
 
 const DB_DIR = join(homedir(), '.flash');
 const DB_PATH = join(DB_DIR, 'journal.db');
@@ -21,9 +22,7 @@ const MAX_ENTRIES = 1000;
 
 const require = createRequire(import.meta.url);
 
-/* eslint-disable @typescript-eslint/no-explicit-any */
-
-let _db: any = null;
+let _db: BetterSqliteDatabase | null = null;
 
 interface DbRow {
   id: string;
@@ -39,12 +38,12 @@ interface DbRow {
   updated_at: number;
 }
 
-function getDb(): any {
+function getDb(): BetterSqliteDatabase {
   if (_db) return _db;
 
-  let Database: any;
+  let Database: BetterSqliteConstructor;
   try {
-    Database = require('better-sqlite3');
+    Database = require('better-sqlite3') as BetterSqliteConstructor;
   } catch {
     throw new Error('better-sqlite3 not installed. Run: npm install better-sqlite3');
   }
@@ -98,7 +97,7 @@ function rowToEntry(row: DbRow): JournalEntry {
 }
 
 export class SqliteJournal {
-  private db: any;
+  private db: BetterSqliteDatabase;
 
   constructor() {
     this.db = getDb();
@@ -141,19 +140,19 @@ export class SqliteJournal {
   }
 
   getPending(): JournalEntry[] {
-    return this.db.prepare(
+    return (this.db.prepare(
       "SELECT * FROM trades WHERE status IN ('pending', 'sent') ORDER BY created_at ASC"
-    ).all().map(rowToEntry);
+    ).all() as unknown as DbRow[]).map(rowToEntry);
   }
 
   getAll(): JournalEntry[] {
-    return this.db.prepare(
+    return (this.db.prepare(
       'SELECT * FROM trades ORDER BY created_at DESC LIMIT 100'
-    ).all().map(rowToEntry);
+    ).all() as unknown as DbRow[]).map(rowToEntry);
   }
 
   private prune(): void {
-    const count = this.db.prepare('SELECT COUNT(*) as cnt FROM trades').get().cnt;
+    const count = (this.db.prepare('SELECT COUNT(*) as cnt FROM trades').get() as { cnt: number } | undefined)?.cnt ?? 0;
     if (count > MAX_ENTRIES) {
       this.db.prepare(`
         DELETE FROM trades WHERE id IN (
@@ -170,8 +169,6 @@ export class SqliteJournal {
     }
   }
 }
-
-/* eslint-enable @typescript-eslint/no-explicit-any */
 
 /** Check if SQLite journal is configured. */
 export function isSqliteJournalEnabled(): boolean {

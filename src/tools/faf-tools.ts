@@ -24,8 +24,7 @@ async function getStakeContext(context: ToolContext) {
   const wm = context.walletManager;
   if (!wm?.isConnected) return { error: chalk.dim('  No wallet connected.') };
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK client exposes perpClient/poolConfig/connection not in IFlashClient interface
-  const client = context.flashClient as any;
+  const client = context.flashClient as unknown as import('../types/flash-sdk-interfaces.js').FlashClientInternals;
   if (!client?.perpClient || !client?.poolConfig) {
     return { error: chalk.dim('  FAF staking requires a live trading connection.') };
   }
@@ -604,8 +603,7 @@ export const fafSetReferrerTool: ToolDefinition = {
     }
 
     // Clear cached referral params in flash client so they're re-derived
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const client = context.flashClient as any;
+    const client = context.flashClient as unknown as import('../types/flash-sdk-interfaces.js').FlashClientInternals;
     if (client?.clearReferralCache) {
       client.clearReferralCache();
     }

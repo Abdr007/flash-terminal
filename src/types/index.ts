@@ -1092,8 +1092,7 @@ export interface ToolExecutionData {
   riskAssessments?: RiskAssessment[];
   exposure?: ExposureSummary;
   opportunities?: Opportunity[];
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  [key: string]: any;
+  [key: string]: unknown;
 }
 
 export interface ToolResult {

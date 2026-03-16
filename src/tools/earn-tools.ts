@@ -535,8 +535,7 @@ export const earnPositionsTool: ToolDefinition = {
     try {
       const { PublicKey } = await import('@solana/web3.js');
       const { BN } = await import('bn.js');
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK client needed for program.coder
-      const flashClient = context.flashClient as any;
+      const flashClient = context.flashClient as unknown as import('../types/flash-sdk-interfaces.js').FlashClientInternals;
       if (flashClient?.perpClient?.program?.coder && flashClient?.connection) {
         const registry = getPoolRegistry();
         const walletPk = new PublicKey(context.walletAddress);
@@ -548,7 +547,7 @@ export const earnPositionsTool: ToolDefinition = {
             );
             const info = await flashClient.connection.getAccountInfo(pda);
             if (!info) continue;
-            const decoded = flashClient.perpClient.program.coder.accounts.decode('flpStake', info.data);
+            const decoded = flashClient.perpClient.program.coder.accounts.decode('flpStake', info.data) as { stakeStats: { activeAmount: { toString(): string }; pendingActivation: { toString(): string } } };
             const active = new BN(decoded.stakeStats.activeAmount.toString());
             const pending = new BN(decoded.stakeStats.pendingActivation.toString());
             const total = active.add(pending).toNumber() / Math.pow(10, pool.lpDecimals);
