@@ -41,9 +41,9 @@ jobs:
       - name: Verify test count
         run: |
           TEST_OUTPUT=$(npm test 2>&1)
-          PASS_COUNT=$(echo "$TEST_OUTPUT" | grep -oP '\d+ passed' | grep -oP '\d+')
-          if [ "$PASS_COUNT" -lt 800 ]; then
-            echo "Test count dropped below 800 (got $PASS_COUNT). Failing build."
+          PASS_COUNT=$(echo "$TEST_OUTPUT" | grep -oP '\d+ passed' | grep -oP '\d+' | sort -n | tail -1)
+          if [ -z "$PASS_COUNT" ] || [ "$PASS_COUNT" -lt 800 ]; then
+            echo "Test count dropped below 800 (got ${PASS_COUNT:-0}). Failing build."
             exit 1
           fi
           echo "Test count: $PASS_COUNT (minimum: 800)"
