@@ -3066,8 +3066,19 @@ export class FlashClient implements IFlashClient {
       poolConfig,
     );
 
-    const allIxs = [...preInstructions, ...result.instructions];
-    const sig = await this.sendTx(allIxs, result.additionalSigners, poolConfig);
+    // After unstakeInstant, tokens move to "deactivated" state.
+    // withdrawStake extracts the deactivated LP tokens back to the wallet.
+    const withdrawResult = await this.perpClient.withdrawStake(
+      poolConfig, false, true, true,
+    );
+
+    const allIxs = [
+      ...preInstructions,
+      ...result.instructions,
+      ...withdrawResult.instructions,
+    ];
+    const allSigners = [...result.additionalSigners, ...withdrawResult.additionalSigners];
+    const sig = await this.sendTx(allIxs, allSigners, poolConfig);
 
     return {
       txSignature: sig,
