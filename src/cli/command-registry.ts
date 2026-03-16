@@ -690,6 +690,22 @@ export const COMMAND_REGISTRY: CommandEntry[] = [
     aliases: ['faf referrals', 'faf referal', 'faf refferal'],
   },
   {
+    name: 'faf create-referral',
+    action: ActionType.FafCreateReferral,
+    category: 'FAF Token',
+    description: 'Create on-chain referral account',
+    aliases: ['faf create referral', 'faf referral create'],
+  },
+  {
+    name: 'faf set-referrer',
+    action: null,
+    category: 'FAF Token',
+    description: 'Set referrer address for fee rebates',
+    helpFormat: 'faf set-referrer <address>',
+    parameterized: true,
+    aliases: ['faf set referrer', 'faf referrer'],
+  },
+  {
     name: 'faf points',
     action: ActionType.FafPoints,
     category: 'FAF Token',

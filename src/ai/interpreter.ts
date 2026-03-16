@@ -1190,6 +1190,15 @@ export function localParse(input: string): ParsedIntent | null {
     if (/^faf\s+ref{1,2}er{1,2}als?$/.test(lower)) {
       return { action: ActionType.FafReferral };
     }
+    // "faf create-referral" / "faf create referral" / "faf referral create"
+    if (/^faf\s+(?:create[- ]ref{1,2}er{1,2}al|ref{1,2}er{1,2}al\s+create)$/.test(lower)) {
+      return { action: ActionType.FafCreateReferral };
+    }
+    // "faf set-referrer <address>" / "faf set referrer <address>" / "faf referrer <address>"
+    const setReferrerMatch = input.match(/^faf\s+(?:set[- ]?referr?er|referr?er)\s+([1-9A-HJ-NP-Za-km-z]{32,44})$/i);
+    if (setReferrerMatch) {
+      return { action: ActionType.FafSetReferrer, address: setReferrerMatch[1] } as ParsedIntent;
+    }
     // "faf points" / "faf voltage"
     if (/^faf\s+(?:points?|voltage)$/.test(lower)) {
       return { action: ActionType.FafPoints };

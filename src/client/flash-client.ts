@@ -360,6 +360,9 @@ export class FlashClient implements IFlashClient {
   /** Per-market mutex to prevent concurrent transactions on the same market/side */
   private activeTrades = new Set<string>();
 
+  /** Cached referral params for trade calls */
+  private referralParams: { privilege: typeof Privilege.Referral; tokenStakeAccount: PublicKey; userReferralAccount: PublicKey } | null = null;
+
   /** Recent trade cache — prevents duplicate submissions within a short window */
   private recentTrades = new Map<string, number>(); // tradeKey -> timestamp
   private static readonly TRADE_CACHE_TTL_MS = 120_000;
@@ -584,6 +587,89 @@ export class FlashClient implements IFlashClient {
     if (leverage > limits.max) {
       throw new Error(`Maximum leverage for ${market}: ${limits.max}x`);
     }
+  }
+
+  // ─── Referral Params ─────────────────────────────────────────────────────
+
+  /**
+   * Resolve referral parameters for trade calls.
+   * If a referrer is configured, derives the referrer's tokenStakeAccount PDA
+   * and the user's referral PDA. Caches result for subsequent calls.
+   * Returns null if no referrer is set or derivation fails.
+   */
+  /** Whether we've already checked the referral PDA on-chain (one-time) */
+  private referralChecked = false;
+
+  private getReferralParams(): { privilege: typeof Privilege.Referral; tokenStakeAccount: PublicKey; userReferralAccount: PublicKey } | null {
+    if (this.referralParams) return this.referralParams;
+    if (!this.config.referrerAddress) return null;
+    // If we already checked and it was invalid, don't retry
+    if (this.referralChecked) return null;
+
+    try {
+      const referrerPk = new PublicKey(this.config.referrerAddress);
+      const userPk = this.wallet.publicKey;
+      const programId = this.poolConfig.programId;
+
+      // Referrer's tokenStakeAccount PDA: ["token_stake", referrer_pubkey]
+      const [referrerStakeAccount] = PublicKey.findProgramAddressSync(
+        [Buffer.from('token_stake'), referrerPk.toBuffer()],
+        programId,
+      );
+
+      // User's referral account PDA: ["referral", user_pubkey]
+      const [userReferralAccount] = PublicKey.findProgramAddressSync(
+        [Buffer.from('referral'), userPk.toBuffer()],
+        programId,
+      );
+
+      this.referralParams = {
+        privilege: Privilege.Referral,
+        tokenStakeAccount: referrerStakeAccount,
+        userReferralAccount,
+      };
+
+      const logger = getLogger();
+      logger.info('REFERRAL', `Referral active: referrer=${referrerPk.toBase58().slice(0, 8)}... stakeAcct=${referrerStakeAccount.toBase58().slice(0, 8)}... referralPDA=${userReferralAccount.toBase58().slice(0, 8)}...`);
+
+      return this.referralParams;
+    } catch (err: unknown) {
+      const logger = getLogger();
+      logger.info('REFERRAL', `Failed to resolve referral params: ${getErrorMessage(err)}`);
+      this.referralChecked = true;
+      return null;
+    }
+  }
+
+  /**
+   * Async referral validation — checks that referral PDA exists on-chain.
+   * Called once before the first trade. If PDA doesn't exist, clears referral
+   * params and warns user to run "faf create-referral".
+   */
+  async validateReferralOnChain(): Promise<void> {
+    if (this.referralChecked) return;
+    this.referralChecked = true;
+
+    const params = this.getReferralParams();
+    if (!params) return;
+
+    const logger = getLogger();
+    try {
+      const acctInfo = await this.connection.getAccountInfo(params.userReferralAccount);
+      if (!acctInfo) {
+        logger.info('REFERRAL', 'User referral PDA not found on-chain. Run "faf create-referral" first. Falling back to no referral.');
+        this.referralParams = null;
+      }
+    } catch {
+      // RPC failure — keep referral params, let the trade attempt decide
+      logger.info('REFERRAL', 'Could not verify referral PDA on-chain (RPC error). Will attempt with referral.');
+    }
+  }
+
+  /** Clear cached referral params (e.g. on wallet switch) */
+  clearReferralCache(): void {
+    this.referralParams = null;
+    this.referralChecked = false;
   }
 
   // ─── Pool Management ──────────────────────────────────────────────────────
@@ -1103,6 +1189,9 @@ export class FlashClient implements IFlashClient {
   ): Promise<OpenPositionResult> {
     const logger = getLogger();
 
+    // Validate referral PDA exists on-chain (one-time, before first trade)
+    await this.validateReferralOnChain();
+
     // Pre-trade validation (synchronous checks before locking)
     this.validateLeverage(market, leverage);
     const sideStr = side === TradeSide.Long ? 'long' : 'short';
@@ -1241,20 +1330,27 @@ export class FlashClient implements IFlashClient {
         // No existing position — will open new
       }
 
+      const ref = this.getReferralParams();
+      const privilege = ref?.privilege ?? Privilege.None;
+      const stakeAcct = ref?.tokenStakeAccount;
+      const refAcct = ref?.userReferralAccount;
+
       let result: { instructions: TransactionInstruction[]; additionalSigners: Signer[] };
       if (existingPositionPubkey) {
         // Increase existing position size
         logger.debug('TRADE', `Using increaseSize(${targetToken.symbol}, ${marketCollateralSymbol}, ${existingPositionPubkey.toBase58()})`);
         result = await quietSdk(() => this.perpClient.increaseSize(
           targetToken.symbol, marketCollateralSymbol, existingPositionPubkey!,
-          sdkSide, poolConfig, priceAfterSlippage, sizeAmount, Privilege.None
+          sdkSide, poolConfig, priceAfterSlippage, sizeAmount, privilege,
+          stakeAcct, refAcct
         ));
       } else if (inputToken.symbol === marketCollateralSymbol) {
         // User's input token matches the market's collateral custody → direct open
         logger.debug('TRADE', `Using openPosition(${targetToken.symbol}, ${marketCollateralSymbol})`);
         result = await quietSdk(() => this.perpClient.openPosition(
           targetToken.symbol, marketCollateralSymbol, priceAfterSlippage,
-          collateralNative, sizeAmount, sdkSide, poolConfig, Privilege.None
+          collateralNative, sizeAmount, sdkSide, poolConfig, privilege,
+          stakeAcct, refAcct
         ));
       } else {
         // User's input token differs from market collateral → swap first
@@ -1262,7 +1358,8 @@ export class FlashClient implements IFlashClient {
         result = await quietSdk(() => this.perpClient.swapAndOpen(
           targetToken.symbol, marketCollateralSymbol, inputToken.symbol,
           collateralNative, priceAfterSlippage, sizeAmount, sdkSide,
-          poolConfig, Privilege.None
+          poolConfig, privilege,
+          stakeAcct, refAcct
         ));
       }
 
@@ -1444,6 +1541,11 @@ export class FlashClient implements IFlashClient {
         `partial=${isPartial} fullClose=${shouldFullClose} closeSizeUsd=${closeSizeUsd.toFixed(2)} ` +
         `receiveToken=${receivingToken.symbol} marketCollateral=${marketCollateralSymbol}`);
 
+      const ref = this.getReferralParams();
+      const privilege = ref?.privilege ?? Privilege.None;
+      const stakeAcct = ref?.tokenStakeAccount;
+      const refAcct = ref?.userReferralAccount;
+
       let result: { instructions: TransactionInstruction[]; additionalSigners: Signer[] };
 
       if (shouldFullClose) {
@@ -1454,7 +1556,8 @@ export class FlashClient implements IFlashClient {
         logger.debug('TRADE', `Using closePosition(${targetToken.symbol}, ${marketCollateralSymbol})`);
         result = await quietSdk(() => this.perpClient.closePosition(
           targetToken.symbol, marketCollateralSymbol, priceAfterSlippage,
-          sdkSide, poolConfig, Privilege.None
+          sdkSide, poolConfig, privilege,
+          stakeAcct, refAcct
         ));
       } else {
         // ── Partial close via decreaseSize ──
@@ -1484,7 +1587,8 @@ export class FlashClient implements IFlashClient {
         result = await quietSdk(() => this.perpClient.decreaseSize(
           targetToken.symbol, marketCollateralSymbol, sdkSide,
           position.pubkey, poolConfig, priceAfterSlippage,
-          sizeDelta, Privilege.None
+          sizeDelta, privilege,
+          stakeAcct, refAcct
         ));
       }
 
@@ -1702,17 +1806,24 @@ export class FlashClient implements IFlashClient {
       ? this.resolveTokenSymbol(poolConfig, matchedMarket.collateralMint)
       : targetToken.symbol;
 
+    const ref = this.getReferralParams();
+    const privilege = ref?.privilege ?? Privilege.None;
+    const stakeAcct = ref?.tokenStakeAccount;
+    const refAcct = ref?.userReferralAccount;
+
     let result: { instructions: TransactionInstruction[]; additionalSigners: Signer[] };
     if (inputToken.symbol === marketCollateralSymbol) {
       result = await this.perpClient.openPosition(
         targetToken.symbol, marketCollateralSymbol, priceAfterSlippage,
-        collateralNative, sizeAmount, sdkSide, poolConfig, Privilege.None,
+        collateralNative, sizeAmount, sdkSide, poolConfig, privilege,
+        stakeAcct, refAcct,
       );
     } else {
       result = await this.perpClient.swapAndOpen(
         targetToken.symbol, marketCollateralSymbol, inputToken.symbol,
         collateralNative, priceAfterSlippage, sizeAmount, sdkSide,
-        poolConfig, Privilege.None,
+        poolConfig, privilege,
+        stakeAcct, refAcct,
       );
     }
 
@@ -2472,22 +2583,30 @@ export class FlashClient implements IFlashClient {
       }
 
       // ── Build open position instructions ──
+      const ref = this.getReferralParams();
+      const privilege = ref?.privilege ?? Privilege.None;
+      const stakeAcct = ref?.tokenStakeAccount;
+      const refAcct = ref?.userReferralAccount;
+
       let openResult: SdkResult;
       if (existingPositionPubkey) {
         openResult = await this.perpClient.increaseSize(
           targetToken.symbol, marketCollateralSymbol, existingPositionPubkey,
-          sdkSide, poolConfig, priceAfterSlippage, sizeAmount, Privilege.None,
+          sdkSide, poolConfig, priceAfterSlippage, sizeAmount, privilege,
+          stakeAcct, refAcct,
         );
       } else if (inputToken.symbol === marketCollateralSymbol) {
         openResult = await this.perpClient.openPosition(
           targetToken.symbol, marketCollateralSymbol, priceAfterSlippage,
-          collateralNative, sizeAmount, sdkSide, poolConfig, Privilege.None,
+          collateralNative, sizeAmount, sdkSide, poolConfig, privilege,
+          stakeAcct, refAcct,
         );
       } else {
         openResult = await this.perpClient.swapAndOpen(
           targetToken.symbol, marketCollateralSymbol, inputToken.symbol,
           collateralNative, priceAfterSlippage, sizeAmount, sdkSide,
-          poolConfig, Privilege.None,
+          poolConfig, privilege,
+          stakeAcct, refAcct,
         );
       }
 

@@ -3,7 +3,7 @@ import { FlashConfig, VALID_NETWORKS, Network, injectLeverageFn } from '../types
 import { homedir } from 'os';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { existsSync, readFileSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { createRequire } from 'module';
 
 // Load .env from multiple locations (first match wins):
@@ -115,6 +115,7 @@ interface ConfigFileData {
   max_trades_per_minute?: number;
   min_delay_between_trades_ms?: number;
   log_level?: string;
+  referrer_address?: string;
 }
 
 function loadConfigFile(): ConfigFileData {
@@ -128,6 +129,27 @@ function loadConfigFile(): ConfigFileData {
   } catch {
     return {};
   }
+}
+
+/** Persist a single field to ~/.flash/config.json (merge with existing) */
+export function saveConfigField(key: string, value: string | number | boolean | undefined): void {
+  const configPath = resolve(homedir(), '.flash', 'config.json');
+  let data: Record<string, unknown> = {};
+  try {
+    if (existsSync(configPath)) {
+      data = JSON.parse(readFileSync(configPath, 'utf8'));
+      if (typeof data !== 'object' || data === null || Array.isArray(data)) data = {};
+    }
+  } catch { /* start fresh */ }
+
+  if (value === undefined) {
+    delete data[key];
+  } else {
+    data[key] = value;
+  }
+
+  mkdirSync(resolve(homedir(), '.flash'), { recursive: true });
+  writeFileSync(configPath, JSON.stringify(data, null, 2) + '\n', 'utf8');
 }
 
 export function loadConfig(): FlashConfig {
@@ -173,6 +195,7 @@ export function loadConfig(): FlashConfig {
     computeBufferPercent: parseIntSafe(process.env.FLASH_CU_BUFFER_PCT, typeof file.compute_buffer_percent === 'number' ? file.compute_buffer_percent : 20),
     leaderRouting: (process.env.FLASH_LEADER_ROUTING ?? '1').toLowerCase() !== '0' && (process.env.FLASH_LEADER_ROUTING ?? '1').toLowerCase() !== 'false',
     rebroadcastIntervalMs: parseIntSafe(process.env.FLASH_REBROADCAST_MS, 800),
+    referrerAddress: process.env.REFERRER_ADDRESS || (typeof file.referrer_address === 'string' ? file.referrer_address : undefined),
   };
 }
 

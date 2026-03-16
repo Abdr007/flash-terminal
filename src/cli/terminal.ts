@@ -59,6 +59,44 @@ function normalizeInput(raw: string): string {
 }
 
 const COMMAND_TIMEOUT_MS = 120_000;
+
+// ─── Global Flag Extraction ─────────────────────────────────────────────────
+// Strips --format json and --key <name> from input before command parsing.
+
+interface CommandFlags {
+  /** Output as structured JSON instead of formatted text */
+  jsonOutput: boolean;
+  /** Temporary wallet override (name or file path) */
+  keyOverride: string | null;
+  /** Cleaned input with flags removed */
+  cleanInput: string;
+}
+
+function extractFlags(input: string): CommandFlags {
+  let jsonOutput = false;
+  let keyOverride: string | null = null;
+  let clean = input;
+
+  // Extract --format json (or --format=json)
+  const formatMatch = clean.match(/\s+--format[\s=]+json\b/i) || clean.match(/^--format[\s=]+json\b\s*/i);
+  if (formatMatch) {
+    jsonOutput = true;
+    clean = clean.replace(formatMatch[0], ' ');
+  }
+
+  // Extract --key <name-or-path> (or --key=<name>)
+  const keyMatch = clean.match(/\s+--key[\s=]+(\S+)/) || clean.match(/^--key[\s=]+(\S+)\s*/);
+  if (keyMatch) {
+    keyOverride = keyMatch[1];
+    clean = clean.replace(keyMatch[0], ' ');
+  }
+
+  return {
+    jsonOutput,
+    keyOverride,
+    cleanInput: clean.replace(/\s+/g, ' ').trim(),
+  };
+}
 const HISTORY_FILE = join(homedir(), '.flash', 'history');
 const MAX_HISTORY = 1000;
 
@@ -343,6 +381,7 @@ export class FlashTerminal {
       walletAddress: walletInfo?.address ?? this.flashClient.walletAddress ?? 'unknown',
       walletName: walletInfo?.name ?? '',
       walletManager: this.walletManager,
+      config: this.config,
       sessionTrades,
     };
 
@@ -1592,7 +1631,9 @@ export class FlashTerminal {
   // ─── Command Handler ──────────────────────────────────────────────
 
   private async handleInput(rawInput: string): Promise<void> {
-    const input = normalizeInput(rawInput);
+    // ── Extract global flags (--format json, --key <wallet>) ──
+    const flags = extractFlags(rawInput);
+    const input = normalizeInput(flags.cleanInput);
     if (!input) return;
 
     const lower = input.toLowerCase();
@@ -1605,8 +1646,10 @@ export class FlashTerminal {
         const m = getSessionMetrics();
         const stats = m.getStats();
 
-        if (IS_AGENT) {
-          agentOutput({ action: 'metrics', ...stats, uptime: m.getUptime(), cache_hit_rate: m.getCacheHitRate() });
+        if (IS_AGENT || flags.jsonOutput) {
+          const payload = { action: 'metrics', ...stats, uptime: m.getUptime(), cache_hit_rate: m.getCacheHitRate() };
+          if (IS_AGENT) agentOutput(payload);
+          else console.log(JSON.stringify(payload, null, 2));
           return;
         }
 
@@ -2238,9 +2281,47 @@ export class FlashTerminal {
       }
     }
 
+    // ── Per-command wallet override (--key <name|path>) ──────────────
+    let walletRestoreData: { address: string; name: string } | null = null;
+    if (flags.keyOverride) {
+      try {
+        const walletStore = new WalletStore();
+        let walletPath: string;
+
+        // Try as a registered wallet name first, then as a file path
+        if (walletStore.hasWallet(flags.keyOverride)) {
+          walletPath = walletStore.getWalletPath(flags.keyOverride);
+        } else {
+          walletPath = walletStore.validateWalletPath(flags.keyOverride);
+        }
+
+        // Save current wallet state for restoration
+        walletRestoreData = {
+          address: this.context.walletAddress,
+          name: this.context.walletName,
+        };
+
+        // Load temporary wallet
+        const { address } = this.walletManager.loadFromFile(walletPath);
+        this.context.walletAddress = address;
+        this.context.walletName = flags.keyOverride;
+
+        if (!flags.jsonOutput && !IS_AGENT) {
+          console.log(chalk.dim(`  Using wallet: ${flags.keyOverride} (${address.slice(0, 4)}...${address.slice(-4)})`));
+        }
+      } catch (err: unknown) {
+        if (flags.jsonOutput) {
+          console.log(JSON.stringify({ success: false, error: `Wallet override failed: ${getErrorMessage(err)}` }, null, 2));
+        } else {
+          console.log(chalk.red(`  Invalid --key: ${getErrorMessage(err)}`));
+        }
+        return;
+      }
+    }
+
     // Execute tool — show progress ticker for slow commands
     let progressTimer: ReturnType<typeof setInterval> | null = null;
-    if (!IS_AGENT) {
+    if (!IS_AGENT && !flags.jsonOutput) {
       process.stdout.write(chalk.dim('  Loading...\r'));
       let dots = 0;
       progressTimer = setInterval(() => {
@@ -2257,15 +2338,18 @@ export class FlashTerminal {
         'execution',
       );
       if (progressTimer) { clearInterval(progressTimer); progressTimer = null; }
-      if (!IS_AGENT) process.stdout.write('               \r');
+      if (!IS_AGENT && !flags.jsonOutput) process.stdout.write('               \r');
     } catch (error: unknown) {
       if (progressTimer) { clearInterval(progressTimer); }
-      if (!IS_AGENT) process.stdout.write('               \r');
-      if (IS_AGENT) {
+      if (!IS_AGENT && !flags.jsonOutput) process.stdout.write('               \r');
+      if (flags.jsonOutput) {
+        console.log(JSON.stringify({ success: false, error: getErrorMessage(error) }, null, 2));
+      } else if (IS_AGENT) {
         agentError('execution_error', { detail: getErrorMessage(error) });
       } else {
         console.log(chalk.red(`  ✖ Execution error: ${getErrorMessage(error)}`));
       }
+      this.restoreWallet(walletRestoreData);
       return;
     }
 
@@ -2326,6 +2410,38 @@ export class FlashTerminal {
       if (result.data?.walletConnected && !this.config.simulationMode) {
         await this.handleWalletReconnected();
       }
+      this.restoreWallet(walletRestoreData);
+      return;
+    }
+
+    // ── JSON output mode (--format json) ───────────────────────────
+    if (flags.jsonOutput) {
+      const jsonPayload: Record<string, unknown> = {
+        success: result.success,
+        action: intent.action,
+      };
+
+      // Include structured data if available
+      if (result.data) {
+        const { executeAction: _ea, ...safeData } = result.data;
+        Object.assign(jsonPayload, safeData);
+      }
+      if (result.txSignature) jsonPayload.tx_signature = result.txSignature;
+
+      // For confirmation-required commands, don't auto-execute — return details
+      if (result.requiresConfirmation) {
+        jsonPayload.action_required = 'confirmation';
+        jsonPayload.prompt = result.confirmationPrompt ?? 'Confirm?';
+      }
+
+      console.log(JSON.stringify(jsonPayload, null, 2));
+
+      // Handle wallet state changes (non-trade commands like wallet use)
+      if (result.data?.disconnected) this.handleWalletDisconnected();
+      if (result.data?.walletConnected && !this.config.simulationMode) {
+        await this.handleWalletReconnected();
+      }
+      this.restoreWallet(walletRestoreData);
       return;
     }
 
@@ -2353,6 +2469,7 @@ export class FlashTerminal {
         // Prevent trade execution during wallet rebuild
         if (this.walletRebuilding) {
           console.log(chalk.red('  Wallet switch in progress — trade cancelled for safety.'));
+          this.restoreWallet(walletRestoreData);
           return;
         }
 
@@ -2392,6 +2509,23 @@ export class FlashTerminal {
         console.log(chalk.dim('  Cancelled.'));
       }
     }
+
+    this.restoreWallet(walletRestoreData);
+  }
+
+  /** Restore session wallet after --key override */
+  private restoreWallet(restoreData: { address: string; name: string } | null): void {
+    if (!restoreData) return;
+    // Reload the original wallet
+    try {
+      const walletStore = new WalletStore();
+      if (walletStore.hasWallet(restoreData.name)) {
+        const walletPath = walletStore.getWalletPath(restoreData.name);
+        this.walletManager.loadFromFile(walletPath);
+      }
+    } catch { /* best-effort restore */ }
+    this.context.walletAddress = restoreData.address;
+    this.context.walletName = restoreData.name;
   }
 
   // ─── Execution Timer ─────────────────────────────────────────

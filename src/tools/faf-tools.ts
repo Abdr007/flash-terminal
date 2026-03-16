@@ -401,7 +401,7 @@ export const fafRewardsTool: ToolDefinition = {
 
 export const fafReferralTool: ToolDefinition = {
   name: 'faf_referral',
-  description: 'Show referral status and claimable rebates',
+  description: 'Show referral status, referral PDA, referrer, and claimable rebates',
   parameters: z.object({}),
   execute: async (_params, context): Promise<ToolResult> => {
     const ctx = await getStakeContext(context);
@@ -409,6 +409,22 @@ export const fafReferralTool: ToolDefinition = {
 
     const { perpClient, poolConfig, userPk } = ctx;
     const info = await getFafStakeInfo(perpClient, poolConfig, userPk);
+
+    const { PublicKey } = await import('@solana/web3.js');
+    const programId = poolConfig.programId;
+
+    // Derive user's referral PDA
+    const [referralPDA] = PublicKey.findProgramAddressSync(
+      [Buffer.from('referral'), userPk.toBuffer()],
+      programId,
+    );
+
+    // Check if referral account exists on-chain
+    let referralExists = false;
+    try {
+      const acctInfo = await perpClient.provider.connection.getAccountInfo(referralPDA);
+      referralExists = acctInfo !== null;
+    } catch { /* non-critical */ }
 
     // Read claimable rebate from raw account
     let claimableRebateUsd = 0;
@@ -422,12 +438,16 @@ export const fafReferralTool: ToolDefinition = {
 
     const tier = info?.tier;
     const rebateRate = tier?.referralRebate ?? 2;
+    const referrerAddr = context.config?.referrerAddress;
 
     if (IS_AGENT) {
       return {
         success: true,
         message: JSON.stringify({
           action: 'faf_referral',
+          referral_pda: referralPDA.toBase58(),
+          referral_active: referralExists,
+          referrer_address: referrerAddr ?? null,
           claimable_rebate_usd: claimableRebateUsd,
           referral_rebate_rate: rebateRate,
           vip_level: info?.level ?? 0,
@@ -438,19 +458,168 @@ export const fafReferralTool: ToolDefinition = {
     const lines = [
       '',
       `  ${theme.accentBold('REFERRAL STATUS')}`,
-      `  ${theme.separator(40)}`,
+      `  ${theme.separator(50)}`,
       '',
+      theme.pair('Referral PDA', referralPDA.toBase58()),
+      theme.pair('Account Active', referralExists ? chalk.green('Yes') : chalk.yellow('No — use "faf create-referral" to activate')),
       theme.pair('Rebate Rate', `${rebateRate}%`),
       theme.pair('VIP Level', `${info?.level ?? 0}`),
       theme.pair('Claimable Rebates', claimableRebateUsd > 0 ? chalk.green(formatUsd(claimableRebateUsd)) : chalk.dim('$0.00')),
-      '',
     ];
+
+    if (referrerAddr) {
+      lines.push(theme.pair('Referrer', referrerAddr));
+    } else {
+      lines.push(theme.pair('Referrer', chalk.dim('Not set — use "faf set-referrer <address>"')));
+    }
+
+    lines.push('');
 
     if (claimableRebateUsd > 0) {
       lines.push(chalk.dim('  Use "faf claim rebate" to collect referral rebates.'));
       lines.push('');
     }
 
+    if (!referralExists) {
+      lines.push(chalk.dim('  Create your referral account to start earning rebates on referred trades.'));
+      lines.push(chalk.dim('  Share your wallet address as your referral code.'));
+      lines.push('');
+    }
+
+    return { success: true, message: lines.join('\n') };
+  },
+};
+
+// ─── faf create-referral ──────────────────────────────────────────────────
+
+export const fafCreateReferralTool: ToolDefinition = {
+  name: 'faf_create_referral',
+  description: 'Create your on-chain referral account (required before earning rebates)',
+  parameters: z.object({}),
+  execute: async (_params, context): Promise<ToolResult> => {
+    const ctx = await getStakeContext(context);
+    if ('error' in ctx) return { success: false, message: ctx.error as string };
+
+    const { client, perpClient, poolConfig, userPk } = ctx;
+    const { PublicKey } = await import('@solana/web3.js');
+    const programId = poolConfig.programId;
+
+    // Derive user's referral PDA
+    const [referralPDA] = PublicKey.findProgramAddressSync(
+      [Buffer.from('referral'), userPk.toBuffer()],
+      programId,
+    );
+
+    // Check if already exists
+    try {
+      const acctInfo = await perpClient.provider.connection.getAccountInfo(referralPDA);
+      if (acctInfo !== null) {
+        const lines = [
+          '',
+          `  ${theme.accentBold('REFERRAL ACCOUNT')}`,
+          '',
+          theme.pair('Status', chalk.green('Already active')),
+          theme.pair('Referral PDA', referralPDA.toBase58()),
+          '',
+          chalk.dim('  Share your wallet address as your referral code.'),
+          '',
+        ];
+        return { success: true, message: lines.join('\n') };
+      }
+    } catch { /* continue to create */ }
+
+    try {
+      // Ensure user has a token stake account (required by addReferral)
+      // depositTokenStake with 0 amount creates the account if it doesn't exist
+      const BN = (await import('bn.js')).default;
+      let stakeInfo = await getFafStakeInfo(perpClient, poolConfig, userPk);
+      if (!stakeInfo) {
+        const depositResult = await perpClient.depositTokenStake(userPk, userPk, new BN(0), poolConfig);
+        await client.sendTx(depositResult.instructions, depositResult.additionalSigners, poolConfig);
+        stakeInfo = await getFafStakeInfo(perpClient, poolConfig, userPk);
+      }
+
+      // Derive token stake account PDA
+      const [tokenStakeAccount] = PublicKey.findProgramAddressSync(
+        [Buffer.from('token_stake'), userPk.toBuffer()],
+        programId,
+      );
+
+      // addReferral internally calls createReferral to create the PDA
+      const result = await perpClient.addReferral(tokenStakeAccount, referralPDA);
+      const sig = await client.sendTx(result.instructions, result.additionalSigners, poolConfig);
+
+      const lines = [
+        '',
+        `  ${theme.accentBold('REFERRAL ACCOUNT CREATED')}`,
+        '',
+        theme.pair('Referral PDA', referralPDA.toBase58()),
+        theme.pair('Status', chalk.green('Active')),
+        '',
+        chalk.dim('  Share your wallet address as your referral code.'),
+        chalk.dim('  Referred traders earn fee discounts, you earn rebates.'),
+        '',
+        `  ${chalk.dim('Tx:')} ${sig}`,
+        '',
+      ];
+      return { success: true, message: lines.join('\n'), txSignature: sig };
+    } catch (err: unknown) {
+      return { success: false, message: chalk.red(`  Create referral failed: ${getErrorMessage(err)}`) };
+    }
+  },
+};
+
+// ─── faf set-referrer ─────────────────────────────────────────────────────
+
+export const fafSetReferrerTool: ToolDefinition = {
+  name: 'faf_set_referrer',
+  description: 'Set a referrer wallet address to earn them rebates on your trades',
+  parameters: z.object({
+    address: z.string().describe('Referrer wallet address (Solana public key)'),
+  }),
+  execute: async (params, context): Promise<ToolResult> => {
+    const { address } = params as { address: string };
+
+    // Validate the address is a valid public key
+    const { PublicKey } = await import('@solana/web3.js');
+    let referrerPk: InstanceType<typeof PublicKey>;
+    try {
+      referrerPk = new PublicKey(address);
+    } catch {
+      return { success: false, message: chalk.red('  Invalid Solana address.') };
+    }
+
+    // Don't allow self-referral
+    if (context.walletAddress && referrerPk.toBase58() === context.walletAddress) {
+      return { success: false, message: chalk.red('  Cannot set yourself as referrer.') };
+    }
+
+    // Save to config file
+    const { saveConfigField } = await import('../config/index.js');
+    saveConfigField('referrer_address', referrerPk.toBase58());
+
+    // Update runtime config
+    if (context.config) {
+      (context.config as unknown as Record<string, unknown>).referrerAddress = referrerPk.toBase58();
+    }
+
+    // Clear cached referral params in flash client so they're re-derived
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const client = context.flashClient as any;
+    if (client?.clearReferralCache) {
+      client.clearReferralCache();
+    }
+
+    const lines = [
+      '',
+      `  ${theme.accentBold('REFERRER SET')}`,
+      '',
+      theme.pair('Referrer', referrerPk.toBase58()),
+      '',
+      chalk.dim('  All future trades will pass this referrer for fee rebates.'),
+      chalk.dim('  Saved to ~/.flash/config.json — persists across sessions.'),
+      '',
+    ];
     return { success: true, message: lines.join('\n') };
   },
 };
@@ -638,6 +807,8 @@ export const allFafTools: ToolDefinition[] = [
   fafTierTool,
   fafRewardsTool,
   fafReferralTool,
+  fafCreateReferralTool,
+  fafSetReferrerTool,
   fafPointsTool,
   fafUnstakeRequestsTool,
   fafCancelUnstakeTool,
