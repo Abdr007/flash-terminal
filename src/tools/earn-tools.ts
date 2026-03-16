@@ -150,6 +150,7 @@ export const earnInfoTool: ToolDefinition = {
       if (m.totalVolume > 0) lines.push(theme.pair('Total Volume', formatUsd(m.totalVolume)));
       if (m.totalFees > 0) lines.push(theme.pair('Total Fees', formatUsd(m.totalFees)));
       if (m.totalTrades > 0) lines.push(theme.pair('Total Trades', m.totalTrades.toLocaleString()));
+      if (m.apy7d > 0) lines.push(theme.pair('Est. APY', chalk.green(`~${m.apy7d.toFixed(1)}%`)));
       lines.push('');
     }
 
@@ -218,6 +219,9 @@ export const earnAddLiquidityTool: ToolDefinition = {
       previewLines.push(theme.pair('FLP Price', `$${flpPrice.toFixed(3)}`));
       previewLines.push(theme.pair('Est. Receive', `~${flpEstimate.toFixed(2)} ${pool.flpSymbol} (auto-compound)`));
     }
+    if (m?.apy7d) {
+      previewLines.push(theme.pair('Est. APY', chalk.green(`~${m.apy7d.toFixed(1)}%`)));
+    }
     previewLines.push('');
 
     return {
@@ -280,10 +284,43 @@ export const earnRemoveLiquidityTool: ToolDefinition = {
     const pool = resolvePool(poolName);
     if (!pool) return poolNotFound(poolName);
 
+    // Estimate withdrawal value from FLP balance × FLP price × (percent/100)
+    const m = await getPoolMetric(pool.poolId);
+
     try {
       const result = await client.removeLiquidity('USDC', percent, pool.poolId);
-      // Don't record withdraw amount — actual USDC received isn't available from client response.
-      // Better no data than wrong data. PnL uses current_value + total_withdrawn - total_deposited.
+      // Estimate withdrawn USD from FLP price and percent
+      if (m?.flpPrice && m.flpPrice > 0) {
+        // Get current position value from token balances
+        let positionValue = 0;
+        const wm = context.walletManager;
+        if (wm && wm.isConnected) {
+          try {
+            const tokenData = await wm.getTokenBalances();
+            if (tokenData) {
+              for (const token of tokenData.tokens) {
+                const resolved = resolveTokenMint(token.mint);
+                if (resolved && resolved.pool.poolId === pool.poolId && resolved.type === 'FLP') {
+                  // Balance already reduced by withdraw — estimate pre-withdraw balance
+                  const preWithdrawBalance = token.amount / (1 - percent / 100);
+                  positionValue = preWithdrawBalance * m.flpPrice;
+                  break;
+                }
+              }
+            }
+          } catch { /* non-critical */ }
+        }
+        const estimatedWithdraw = positionValue > 0 ? positionValue * (percent / 100) : 0;
+        if (estimatedWithdraw > 0) {
+          recordEarnAction({
+            pool: pool.poolId,
+            action: 'withdraw',
+            amountUsd: estimatedWithdraw,
+            timestamp: Date.now(),
+            txSignature: result.txSignature,
+          });
+        }
+      }
       const lines = [
         '',
         `  ${theme.accentBold('WITHDRAWAL CONFIRMED')}`,
@@ -642,10 +679,11 @@ export const earnSimulateTool: ToolDefinition = {
       '',
       `  ${theme.section('Estimated Returns')}`,
       '',
-      theme.pair('Daily', chalk.green(`~+${formatUsd(proj.days7 / 7)}`)),
-      theme.pair('Weekly', chalk.green(`~+${formatUsd(proj.days7)}`)),
-      theme.pair('Monthly', chalk.green(`~+${formatUsd(proj.days30)}`)),
-      theme.pair('Yearly', chalk.green(`~+${formatUsd(proj.days365)}`)),
+      theme.pair('Daily Return', chalk.green(`~+${formatUsd(proj.days7 / 7)}`)),
+      theme.pair('Weekly Return', chalk.green(`~+${formatUsd(proj.days7)}`)),
+      theme.pair('Monthly Return', chalk.green(`~+${formatUsd(proj.days30)}`)),
+      theme.pair('Yearly Return', chalk.green(`~+${formatUsd(proj.days365)}`)),
+      theme.pair('Projected Value (1yr)', chalk.green(formatUsd(amount + proj.days365))),
       '',
       chalk.dim('  * Based on 7-day trading volume and on-chain fee rates.'),
     ];
@@ -716,7 +754,7 @@ export const earnDashboardTool: ToolDefinition = {
       `  ${theme.accentBold('FLASH EARN PORTFOLIO')}`,
       `  ${theme.separator(45)}`,
       '',
-      theme.pair('Total Deposited', totalValue > 0 ? chalk.green(formatUsd(totalValue)) : formatUsd(0)),
+      theme.pair('Total Value', totalValue > 0 ? chalk.green(formatUsd(totalValue)) : formatUsd(0)),
       '',
     ];
 
