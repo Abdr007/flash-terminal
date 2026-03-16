@@ -3020,14 +3020,21 @@ export class FlashClient implements IFlashClient {
     const pcExt = poolConfig as unknown as Record<string, unknown>;
     const sflpSymbol = pcExt.stakedLpTokenSymbol || 'sFLP';
 
-    // Get user's staked FLP (sFLP) balance
-    const sflpMint = pcExt.stakedLpTokenMint as PublicKey | undefined;
-    if (!sflpMint) {
-      throw new Error(`Staking not available for ${poolConfig.poolName}`);
+    // Read staked balance from FlpStakeAccount PDA (not a regular token account)
+    const [flpStakePda] = PublicKey.findProgramAddressSync(
+      [Buffer.from('stake'), this.wallet.publicKey.toBuffer(), poolConfig.poolAddress.toBuffer()],
+      poolConfig.programId,
+    );
+    const stakeAccountInfo = await this.connection.getAccountInfo(flpStakePda);
+    if (!stakeAccountInfo) {
+      throw new Error(`No ${sflpSymbol} position found. Use "earn stake" to deposit first.`);
     }
-    const sflpBalance = await this.getTokenBalance(sflpMint);
+    const decoded = this.perpClient.program.coder.accounts.decode('flpStake', stakeAccountInfo.data) as {
+      stakeStats: { activeAmount: BN; pendingActivation: BN; pendingDeactivation: BN; deactivatedAmount: BN };
+    };
+    const sflpBalance = decoded.stakeStats.activeAmount.add(decoded.stakeStats.pendingActivation);
     if (sflpBalance.isZero()) {
-      throw new Error(`No ${sflpSymbol} tokens found. Stake FLP first.`);
+      throw new Error(`No ${sflpSymbol} tokens staked. Stake FLP first.`);
     }
 
     const unstakeAmount = sflpBalance.mul(new BN(percent)).div(new BN(100));
@@ -3058,13 +3065,14 @@ export class FlashClient implements IFlashClient {
     const pcExt = poolConfig as unknown as Record<string, unknown>;
     const sflpSymbol = pcExt.stakedLpTokenSymbol || 'sFLP';
 
-    // Check if user has staked LP tokens (sFLP) — required to have pending rewards
-    const sflpMint = pcExt.stakedLpTokenMint as PublicKey | undefined;
-    if (sflpMint) {
-      const sflpBalance = await this.getTokenBalance(sflpMint);
-      if (sflpBalance.isZero()) {
-        throw new Error(`No ${sflpSymbol} tokens found for ${poolConfig.poolName}. Use "earn stake" to deposit first.`);
-      }
+    // Check if user has staked LP via FlpStakeAccount PDA
+    const [flpStakePda] = PublicKey.findProgramAddressSync(
+      [Buffer.from('stake'), this.wallet.publicKey.toBuffer(), poolConfig.poolAddress.toBuffer()],
+      poolConfig.programId,
+    );
+    const stakeAccountInfo = await this.connection.getAccountInfo(flpStakePda);
+    if (!stakeAccountInfo) {
+      throw new Error(`No ${sflpSymbol} position found for ${poolConfig.poolName}. Use "earn stake" to deposit first.`);
     }
 
     logger.info('CLIENT', `Claim rewards from ${poolConfig.poolName}`);
