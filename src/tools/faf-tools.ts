@@ -164,7 +164,7 @@ export const fafStakeTool: ToolDefinition = {
       ];
       return { success: true, message: lines.join('\n'), txSignature: sig };
     } catch (err: unknown) {
-      return { success: false, message: chalk.red(`  Stake failed: ${getErrorMessage(err)}`) };
+      return { success: false, message: chalk.red(`  FAF stake failed: ${getErrorMessage(err)}`) };
     }
   },
 };
@@ -213,7 +213,7 @@ export const fafUnstakeTool: ToolDefinition = {
       ];
       return { success: true, message: lines.join('\n'), txSignature: sig };
     } catch (err: unknown) {
-      return { success: false, message: chalk.red(`  Unstake request failed: ${getErrorMessage(err)}`) };
+      return { success: false, message: chalk.red(`  FAF unstake request failed: ${getErrorMessage(err)}`) };
     }
   },
 };
@@ -290,7 +290,7 @@ export const fafClaimTool: ToolDefinition = {
       lines.push('');
       return { success: true, message: lines.join('\n'), txSignature: sigs[0] };
     } catch (err: unknown) {
-      return { success: false, message: chalk.red(`  Claim failed: ${getErrorMessage(err)}`) };
+      return { success: false, message: chalk.red(`  FAF reward claim failed: ${getErrorMessage(err)}`) };
     }
   },
 };
@@ -564,7 +564,7 @@ export const fafCreateReferralTool: ToolDefinition = {
       ];
       return { success: true, message: lines.join('\n'), txSignature: sig };
     } catch (err: unknown) {
-      return { success: false, message: chalk.red(`  Create referral failed: ${getErrorMessage(err)}`) };
+      return { success: false, message: chalk.red(`  FAF referral creation failed: ${getErrorMessage(err)}`) };
     }
   },
 };
@@ -792,7 +792,7 @@ export const fafCancelUnstakeTool: ToolDefinition = {
       ];
       return { success: true, message: lines.join('\n'), txSignature: sig };
     } catch (err: unknown) {
-      return { success: false, message: chalk.red(`  Cancel unstake failed: ${getErrorMessage(err)}`) };
+      return { success: false, message: chalk.red(`  FAF cancel unstake failed: ${getErrorMessage(err)}`) };
     }
   },
 };

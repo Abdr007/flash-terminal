@@ -139,7 +139,7 @@ describe('Execution Middleware Wallet Checks', () => {
 describe('Idle Timer Safety', () => {
   it('default session timeout is 15 minutes', () => {
     const src = readFileSync(resolve(ROOT, 'src/wallet/walletManager.ts'), 'utf8');
-    assert.ok(src.includes("'900000'"),
+    assert.ok(src.includes('900_000') || src.includes("'900000'"),
       'default SESSION_TIMEOUT_MS should be 900000 (15 min)');
   });
 

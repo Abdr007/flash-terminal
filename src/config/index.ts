@@ -5,19 +5,23 @@ import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { createRequire } from 'module';
+import { safeJsonParse } from '../utils/safe-json.js';
 
-// Load .env from multiple locations (first match wins):
-// 1. Current working directory (local dev)
-// 2. ~/.flash/.env (user config for global install)
-// 3. Package install directory (bundled fallback)
+// Load .env from multiple locations (merged, highest priority first):
+// Priority: environment variables > cwd/.env > ~/.flash/.env > package dir/.env
+// dotenv's default behavior: does NOT overwrite existing process.env values.
+// So the first file to set a key wins → load highest priority first.
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const envPaths = [
-  resolve(process.cwd(), '.env'),
-  resolve(homedir(), '.flash', '.env'),
-  resolve(__dirname, '..', '.env'),
+  resolve(process.cwd(), '.env'),             // 1. Current working directory (highest)
+  resolve(homedir(), '.flash', '.env'),       // 2. ~/.flash/.env (user config)
+  resolve(__dirname, '..', '.env'),           // 3. Package install directory (lowest)
 ];
-const envFile = envPaths.find((p) => existsSync(p));
-dotenv.config({ path: envFile });
+for (const envPath of envPaths) {
+  if (existsSync(envPath)) {
+    dotenv.config({ path: envPath });
+  }
+}
 
 function resolveHome(filepath: string): string {
   if (filepath.startsWith('~/')) {
@@ -123,7 +127,7 @@ function loadConfigFile(): ConfigFileData {
     const configPath = resolve(homedir(), '.flash', 'config.json');
     if (!existsSync(configPath)) return {};
     const raw = readFileSync(configPath, 'utf8');
-    const data = JSON.parse(raw);
+    const data = safeJsonParse<unknown>(raw, {}, 'config.json');
     if (typeof data !== 'object' || data === null || Array.isArray(data)) return {};
     return data as ConfigFileData;
   } catch {
@@ -137,8 +141,10 @@ export function saveConfigField(key: string, value: string | number | boolean | 
   let data: Record<string, unknown> = {};
   try {
     if (existsSync(configPath)) {
-      data = JSON.parse(readFileSync(configPath, 'utf8'));
-      if (typeof data !== 'object' || data === null || Array.isArray(data)) data = {};
+      const parsed = safeJsonParse<unknown>(readFileSync(configPath, 'utf8'), {}, 'config.json');
+      if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
+        data = parsed as Record<string, unknown>;
+      }
     }
   } catch { /* start fresh */ }
 

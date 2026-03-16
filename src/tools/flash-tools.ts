@@ -3076,7 +3076,9 @@ const limitOrderPlaceTool: ToolDefinition = {
     if (context.simulationMode) {
       return {
         success: false,
-        message: '  On-chain limit orders require live mode. Limit orders are placed on the Flash Trade protocol and require a real wallet.',
+        message: '  Limit orders are simulated locally in simulation mode.\n' +
+                 '  On-chain limit orders require live mode with a connected wallet.\n' +
+                 chalk.dim('  Switch to live mode with "wallet connect <path>" to place on-chain limit orders.'),
       };
     }
 

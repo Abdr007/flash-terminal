@@ -4,6 +4,7 @@ import { resolve } from 'path';
 import { homedir } from 'os';
 import { getLogger } from '../utils/logger.js';
 import { withRetry } from '../utils/retry.js';
+import { safeEnvNumber } from '../utils/safe-env.js';
 
 const RPC_RETRY_OPTS = { maxAttempts: 2, baseDelayMs: 500, maxDelayMs: 3000 };
 
@@ -16,7 +17,7 @@ export class WalletManager {
 
   // [H-3] Session timeout — auto-disconnect keypair after inactivity
   private idleTimer: ReturnType<typeof setTimeout> | null = null;
-  private static readonly SESSION_TIMEOUT_MS = parseInt(process.env.SESSION_TIMEOUT_MS || '900000', 10); // 15 min default
+  private static readonly SESSION_TIMEOUT_MS = safeEnvNumber('SESSION_TIMEOUT_MS', 900_000); // 15 min default
 
   constructor(connection: Connection) {
     this.connection = connection;

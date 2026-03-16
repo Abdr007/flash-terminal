@@ -2,6 +2,7 @@ import { mkdirSync, writeFileSync, readFileSync, existsSync, chmodSync, realpath
 import { join } from 'path';
 import { homedir } from 'os';
 import { Keypair } from '@solana/web3.js';
+import { safeJsonParse } from '../utils/safe-json.js';
 
 const FLASH_DIR = join(homedir(), '.flash');
 const REGISTRY_FILE = join(FLASH_DIR, 'wallets.json');
@@ -33,7 +34,14 @@ function ensureDir(): void {
 function loadRegistry(): WalletRegistry {
   try {
     const raw = readFileSync(REGISTRY_FILE, 'utf-8');
-    return JSON.parse(raw) as WalletRegistry;
+    const parsed = safeJsonParse<unknown>(raw, null, 'wallets.json');
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      const obj = parsed as Record<string, unknown>;
+      if (Array.isArray(obj.wallets)) {
+        return parsed as WalletRegistry;
+      }
+    }
+    return { wallets: [] };
   } catch {
     return { wallets: [] };
   }

@@ -63,6 +63,7 @@ export interface SigningAuditEntry {
 // ─── Signing Guard ────────────────────────────────────────────────────────────
 
 const MAX_AUDIT_LOG_BYTES = 10 * 1024 * 1024; // 10MB max
+const MAX_SIGNING_HISTORY = 100; // Hard cap on timestamp array size
 
 export class SigningGuard {
   private config: SigningGuardConfig;
@@ -159,6 +160,11 @@ export class SigningGuard {
     this.lastSigningTime = now;
     this.signingTimestamps.push(now);
 
+    // Hard cap: prevent unbounded growth under any condition
+    if (this.signingTimestamps.length > MAX_SIGNING_HISTORY) {
+      this.signingTimestamps = this.signingTimestamps.slice(-MAX_SIGNING_HISTORY);
+    }
+
     return { allowed: true };
   }
 
@@ -169,9 +175,12 @@ export class SigningGuard {
   recordSigning(): void {
     const now = Date.now();
     this.lastSigningTime = now;
-    // Trim old timestamps (keep last 2 minutes)
+    // Trim old timestamps (keep last 2 minutes) + enforce hard cap
     const twoMinutesAgo = now - 120_000;
     this.signingTimestamps = this.signingTimestamps.filter(t => t > twoMinutesAgo);
+    if (this.signingTimestamps.length > MAX_SIGNING_HISTORY) {
+      this.signingTimestamps = this.signingTimestamps.slice(-MAX_SIGNING_HISTORY);
+    }
   }
 
   // ─── Audit Log ──────────────────────────────────────────────────────────

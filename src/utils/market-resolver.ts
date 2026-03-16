@@ -10,6 +10,7 @@
  */
 
 import { getAllMarkets, getPoolForMarket } from '../config/index.js';
+import { getLogger } from './logger.js';
 
 // ─── Alias Dictionary ───────────────────────────────────────────────────────
 // Maps lowercase alias → canonical UPPERCASE market symbol.
@@ -114,8 +115,15 @@ export function resolveMarket(input: string): string {
  */
 export function resolveAndValidateMarket(input: string): string | null {
   const resolved = resolveMarket(input);
-  if (!resolved) return null;
-  return getPoolForMarket(resolved) ? resolved : null;
+  if (!resolved) {
+    getLogger().debug('MARKET', `Market symbol rejected (empty): "${input}"`);
+    return null;
+  }
+  if (!getPoolForMarket(resolved)) {
+    getLogger().debug('MARKET', `Unknown market symbol rejected: "${input}" (resolved: "${resolved}")`);
+    return null;
+  }
+  return resolved;
 }
 
 /**

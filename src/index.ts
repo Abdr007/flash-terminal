@@ -504,10 +504,20 @@ program
     }
 
     try {
-      const { execSync } = await import('child_process');
-      execSync('npm install -g flash-terminal@latest', {
-        stdio: IS_AGENT ? 'pipe' : 'inherit',
-        timeout: 120_000,
+      // Use spawn with shell:false and explicit args to prevent command injection.
+      // Only the whitelisted command 'npm install -g flash-terminal@latest' is allowed.
+      const { spawn } = await import('child_process');
+      await new Promise<void>((resolveP, rejectP) => {
+        const child = spawn('npm', ['install', '-g', 'flash-terminal@latest'], {
+          shell: false,
+          stdio: IS_AGENT ? 'pipe' : 'inherit',
+          timeout: 120_000,
+        });
+        child.on('close', (code) => {
+          if (code === 0) resolveP();
+          else rejectP(new Error(`npm install exited with code ${code}`));
+        });
+        child.on('error', rejectP);
       });
 
       if (IS_AGENT) {

@@ -54,6 +54,8 @@ export class RpcManager {
   private slotHistory: Map<string, number> = new Map();
   /** Consecutive monitor failures — suppress log spam during prolonged outages */
   private consecutiveMonitorFailures = 0;
+  /** Mutex: prevents overlapping health check cycles */
+  private healthCheckInProgress = false;
   /** Network partition state — true = partition detected, broadcast should pause */
   private _partitionDetected = false;
   /** When partition was first detected */
@@ -318,6 +320,7 @@ export class RpcManager {
         this._connection = createConnection(ep.url);
         this.failoverCount++;
         this.lastFailoverTime = Date.now();
+        this._allEndpointsDown = false;
 
         // Notify FlashClient of connection change
         if (this.onConnectionChange) {
@@ -329,7 +332,16 @@ export class RpcManager {
     }
 
     logger.error('RPC', 'No healthy backup RPC found');
+    this._allEndpointsDown = true;
     return false;
+  }
+
+  /** True when the last failover attempt found no healthy endpoints */
+  private _allEndpointsDown = false;
+
+  /** Whether all RPC endpoints are currently unreachable */
+  get allEndpointsDown(): boolean {
+    return this._allEndpointsDown;
   }
 
   /**
@@ -380,6 +392,9 @@ export class RpcManager {
     logger.info('RPC', `Health monitor started (interval: ${HEALTH_MONITOR_INTERVAL_MS / 1000}s)`);
 
     this.monitorTimer = setInterval(async () => {
+      // Mutex: skip if previous health check is still in-flight
+      if (this.healthCheckInProgress) return;
+      this.healthCheckInProgress = true;
       try {
         const health = await this.checkHealth(this.activeEndpoint);
         this.recordResult(health.healthy);
@@ -404,11 +419,12 @@ export class RpcManager {
           }
           this.consecutiveMonitorFailures = 0;
         } else {
-          // Healthy — reset consecutive failure counter
+          // Healthy — reset consecutive failure counter and degraded flag
           if (this.consecutiveMonitorFailures > 0) {
             logger.info('RPC', `Active RPC ${this.activeEndpoint.label} recovered after ${this.consecutiveMonitorFailures} consecutive failures`);
           }
           this.consecutiveMonitorFailures = 0;
+          this._allEndpointsDown = false;
         }
 
         // Run partition detection on every health check cycle
@@ -416,6 +432,8 @@ export class RpcManager {
       } catch {
         // Monitor must never crash
         this.consecutiveMonitorFailures++;
+      } finally {
+        this.healthCheckInProgress = false;
       }
     }, HEALTH_MONITOR_INTERVAL_MS);
 

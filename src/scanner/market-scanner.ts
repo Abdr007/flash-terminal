@@ -15,6 +15,7 @@ import { MarketRegime } from '../regime/regime-types.js';
 import { getLogger } from '../utils/logger.js';
 
 const SCAN_CACHE_TTL = 30_000; // 30s cache
+const SCAN_TIMEOUT_MS = 15_000; // 15s max per scan cycle
 
 /**
  * Compute opportunity score from component signals.
@@ -132,11 +133,27 @@ export class MarketScanner {
       return this.scanInProgress;
     }
 
-    this.scanInProgress = this.doScan(balance, topN);
+    this.scanInProgress = this.doScanWithTimeout(balance, topN);
     try {
       return await this.scanInProgress;
     } finally {
       this.scanInProgress = null;
+    }
+  }
+
+  private async doScanWithTimeout(balance: number, topN: number): Promise<Opportunity[]> {
+    const logger = getLogger();
+    try {
+      return await Promise.race([
+        this.doScan(balance, topN),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('scan timeout')), SCAN_TIMEOUT_MS),
+        ),
+      ]);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'unknown';
+      logger.warn('SCANNER', `Scan aborted: ${msg} — returning cached or empty results`);
+      return this.cachedResults ?? [];
     }
   }
 

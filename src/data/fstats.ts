@@ -10,9 +10,12 @@ import {
   IDataClient,
   RawActivityRecord,
 } from '../types/index.js';
-import { FSTATS_BASE_URL } from '../config/index.js';
+import { FSTATS_BASE_URL, POOL_NAMES } from '../config/index.js';
 import { getLogger } from '../utils/logger.js';
 import { getErrorMessage } from '../utils/retry.js';
+
+/** Whitelist of valid pool names for API queries. Loaded from SDK config. */
+const VALID_POOLS = new Set(POOL_NAMES);
 
 const FETCH_TIMEOUT_MS = 10_000;
 
@@ -214,6 +217,11 @@ export class FStatsClient implements IDataClient {
 
   async getVolume(days = 30, pool?: string): Promise<VolumeData> {
     days = Math.max(1, Math.min(days, 365));
+    if (pool && !VALID_POOLS.has(pool)) {
+      const logger = getLogger();
+      logger.warn('ANALYTICS', `Invalid pool parameter rejected: "${pool}"`);
+      pool = undefined; // Fall back to all pools
+    }
     const poolParam = pool ? `&pool=${encodeURIComponent(pool)}` : '';
     const raw = await safeFetchJson<unknown>(`/volume/daily?days=${encodeURIComponent(String(days))}${poolParam}`);
     const daily = safeArray<RawDailyVolume>(raw);

@@ -103,6 +103,24 @@ const MAX_HISTORY = 1000;
 /** Single-token fast dispatch — derived from command registry */
 const FAST_DISPATCH = buildFastDispatch() as Record<string, ParsedIntent>;
 
+/** Actions that require a working RPC connection (blocked in degraded mode) */
+const TRADE_ACTIONS = new Set<string>([
+  ActionType.OpenPosition,
+  ActionType.ClosePosition,
+  ActionType.AddCollateral,
+  ActionType.RemoveCollateral,
+  ActionType.SetTpSl,
+  ActionType.RemoveTpSl,
+  ActionType.LimitOrder,
+  ActionType.CancelOrder,
+  ActionType.EditLimitOrder,
+  ActionType.CloseAll,
+  ActionType.Swap,
+  ActionType.EarnAddLiquidity,
+  ActionType.EarnRemoveLiquidity,
+  ActionType.EarnStake,
+]);
+
 /** Timeout wrapper for command execution */
 function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
   return new Promise<T>((resolve, reject) => {
@@ -156,6 +174,8 @@ export class FlashTerminal {
   private lastCommand = '';
   /** Last command execution time in ms (for context line) */
   private lastCommandMs = 0;
+  /** True when all RPC endpoints are unreachable — blocks trade commands */
+  private degradedMode = false;
 
   constructor(config: FlashConfig) {
     this.config = config;
@@ -411,6 +431,11 @@ export class FlashTerminal {
         if (this.context) {
           this.context.flashClient = this.flashClient;
         }
+        // Successful failover — exit degraded mode if active
+        if (this.degradedMode) {
+          this.degradedMode = false;
+          console.log(chalk.green('\n  RPC connectivity restored. Trading commands re-enabled.'));
+        }
         console.log(chalk.cyan(`\n  ℹ RPC failover triggered → ${ep.label}`));
       });
     }
@@ -419,9 +444,19 @@ export class FlashTerminal {
     // Defer non-critical RPC-heavy tasks to avoid 429 rate limiting on startup.
     // Each task is spaced out to prevent simultaneous RPC bursts.
     if (!this.config.simulationMode) {
-      // Health monitor — start after 5s
+      // Health monitor — start after 5s, with degraded mode detection
       setTimeout(() => {
         this.rpcManager.startMonitoring();
+        // Periodic degraded mode sync (piggyback on monitor interval)
+        const degradedCheck = setInterval(() => {
+          const wasDown = this.degradedMode;
+          this.degradedMode = this.rpcManager.allEndpointsDown;
+          if (this.degradedMode && !wasDown) {
+            console.log(chalk.red('\n  All RPC endpoints unavailable. Terminal running in read-only mode.'));
+            console.log(chalk.dim('  Trading commands disabled until connectivity is restored.\n'));
+          }
+        }, 30_000);
+        degradedCheck.unref();
       }, 5_000).unref();
 
       // Metrics HTTP server — enable via METRICS_PORT env var
@@ -2323,6 +2358,17 @@ export class FlashTerminal {
         }
         return;
       }
+    }
+
+    // Degraded mode gate — block trade commands when all RPCs are down
+    if (this.degradedMode && TRADE_ACTIONS.has(intent.action)) {
+      console.log('');
+      console.log(chalk.red('  All RPC endpoints unavailable. Terminal running in read-only mode.'));
+      console.log(chalk.dim('  Trading commands are disabled until RPC connectivity is restored.'));
+      console.log(chalk.dim('  Read-only commands (prices, markets, portfolio, help) still work.'));
+      console.log('');
+      this.restoreWallet(walletRestoreData);
+      return;
     }
 
     // Execute tool — show progress ticker for slow commands
