@@ -3,7 +3,10 @@
 # Called during build: npm run build
 
 GIT_HASH=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
-GIT_BRANCH=$(git branch --show-current 2>/dev/null || echo "unknown")
+GIT_BRANCH=$(git branch --show-current 2>/dev/null || echo "")
+if [ -z "$GIT_BRANCH" ]; then
+  GIT_BRANCH="${GITHUB_HEAD_REF:-${GITHUB_REF_NAME:-unknown}}"
+fi
 BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 VERSION=$(node -p "require('./package.json').version" 2>/dev/null || echo "0.0.0")
 PLATFORM=$(uname -s 2>/dev/null || echo "unknown")
