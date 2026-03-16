@@ -600,13 +600,26 @@ Contributions are welcome. See **[CONTRIBUTING.md](CONTRIBUTING.md)** for develo
 
 ## Maintenance
 
-Flash Terminal is in **stable maintenance mode** (v1.x). Future updates are limited to:
+Flash Terminal is in **stable maintenance mode** (v1.x).
 
-- Bug fixes and security patches
-- Dependency updates (via Dependabot)
-- Minor improvements
+| Branch | Purpose |
+|:-------|:--------|
+| `main` | Stable release branch — production-ready at all times |
+| `dev` | Optional future development branch for experimental work |
 
-No architectural rewrites or new protocol features are planned. The system is production-ready with minimal maintenance overhead.
+**Release policy:**
+
+- **Patch releases** (`1.0.x`) — bug fixes, security patches, dependency updates
+- **Minor releases** (`1.x.0`) — non-breaking improvements based on user feedback
+- **Major releases** (`2.0.0`) — reserved for architectural changes (none planned)
+
+**Automated monitoring:**
+
+- **Dependabot** — monthly npm + GitHub Actions dependency checks
+- **Devnet integration tests** — weekly CI run against Solana devnet to detect Flash SDK breaking changes
+- **Security audit** — `npm audit` runs on every CI build
+
+The system is production stable. No architectural rewrites or new protocol features are planned.
 
 ---
 
@@ -625,7 +638,7 @@ MIT — see **[LICENSE](LICENSE)** for details.
 ---
 
 <p align="center">
-  <strong>Flash Terminal v1.0.0</strong><br/>
+  <strong>Flash Terminal v1.0.1</strong><br/>
   A production-grade Solana perpetual futures trading CLI.<br/>
   Built with strict TypeScript. Shipped with zero critical issues.
 </p>
