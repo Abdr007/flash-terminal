@@ -168,6 +168,11 @@ export function formatMetricsSummary(): string {
     METRIC.KILL_SWITCH_BLOCKS,
     METRIC.EXPOSURE_BLOCKS,
     METRIC.RPC_FAILOVER,
+    METRIC.CACHE_HIT,
+    METRIC.CACHE_MISS,
+    METRIC.ERROR_PARSE,
+    METRIC.ERROR_RPC,
+    METRIC.ERROR_SDK,
   ];
 
   for (const name of counterOrder) {
@@ -179,7 +184,7 @@ export function formatMetricsSummary(): string {
   }
 
   // Histograms
-  const histOrder = [METRIC.RPC_LATENCY, METRIC.TX_CONFIRM_TIME];
+  const histOrder = [METRIC.RPC_LATENCY, METRIC.TX_CONFIRM_TIME, METRIC.COMMAND_LATENCY];
   for (const name of histOrder) {
     const hist = snap.histograms[name];
     if (hist && hist.count > 0) {

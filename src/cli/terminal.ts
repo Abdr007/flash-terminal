@@ -1,23 +1,23 @@
+/* eslint-disable max-lines -- core REPL orchestrator; further extraction would break class cohesion */
 import { createInterface, Interface } from 'readline';
-import { readFileSync, writeFileSync, existsSync } from 'fs';
+import { readFileSync, writeFileSync } from 'fs';
 import { homedir } from 'os';
-import { join, resolve } from 'path';
+import { join } from 'path';
 import chalk from 'chalk';
 import { AIInterpreter, OfflineInterpreter, localParse } from '../ai/interpreter.js';
 import { ToolEngine } from '../tools/engine.js';
-import { ToolContext, ToolResult, FlashConfig, IFlashClient, ActionType, ParsedIntent, DryRunPreview, TradeSide, Position } from '../types/index.js';
-import type { FlashClientInternals, InterpreterWithContext, PoolCustodyConfig, PoolTokenConfig, PoolMarketConfig, CustodyAccountWithPricing } from '../types/flash-sdk-interfaces.js';
+import { ToolContext, ToolResult, FlashConfig, IFlashClient, ActionType, ParsedIntent, TradeSide } from '../types/index.js';
+import type { FlashClientInternals, InterpreterWithContext } from '../types/flash-sdk-interfaces.js';
 import { SimulatedFlashClient } from '../client/simulation.js';
 import { FStatsClient } from '../data/fstats.js';
 import { PriceService } from '../data/prices.js';
 import { WalletManager, createConnection } from '../wallet/index.js';
 import { WalletStore } from '../wallet/wallet-store.js';
-import { getLastWallet, updateLastWallet } from '../wallet/session.js';
 import { shortAddress } from '../utils/format.js';
 import { getErrorMessage } from '../utils/retry.js';
-import { initLogger, getLogger } from '../utils/logger.js';
+import { initLogger, getLogger, Logger, generateRequestId } from '../utils/logger.js';
 import { setAiApiKey, getInspector, getRegimeDetector } from '../agent/agent-tools.js';
-import { formatUsd, formatPrice, formatPercent, colorPnl, humanizeSdkError } from '../utils/format.js';
+import { formatUsd } from '../utils/format.js';
 import { MarketRegime } from '../regime/regime-types.js';
 import { initSigningGuard } from '../security/signing-guard.js';
 import { RpcManager, buildRpcEndpoints, initRpcManager } from '../network/rpc-manager.js';
@@ -35,10 +35,36 @@ import { runDoctor } from '../tools/doctor.js';
 import { theme } from './theme.js';
 import { completer, getSuggestions } from './completer.js';
 import { buildFastDispatch } from './command-registry.js';
+import {
+  handleDryRun as handleDryRunExtracted,
+  resolveIntent as resolveIntentExtracted,
+  type DryRunDeps,
+} from './dryrun-handler.js';
+import { runMarketMonitor } from './market-monitor.js';
+import {
+  protocolFees as protocolFeesView,
+  protocolVerify as protocolVerifyView,
+  sourceVerify as sourceVerifyView,
+  positionDebug as positionDebugView,
+  type ProtocolViewDeps,
+} from './protocol-views.js';
 import { getCommandGuidance } from '../utils/command-guidance.js';
 import { resolveMarket } from '../utils/market-resolver.js';
-import { computeSimulationLiquidationPrice, isDivergenceOk } from '../utils/protocol-liq.js';
 import { IS_AGENT, agentError, agentOutput, enableStructuredOutput, restoreOutputMode } from '../no-dna.js';
+import {
+  setupLiveMode as setupLiveModeFlow,
+  showSavedWalletsMenu as showSavedWalletsMenuFlow,
+  showWalletPicker as showWalletPickerFlow,
+  showFirstTimeWalletSetup as showFirstTimeWalletSetupFlow,
+  handleWalletCreateFlow as handleWalletCreateFlowFn,
+  handleWalletImportFlow as handleWalletImportFlowFn,
+  handleWalletConnectFlow as handleWalletConnectFlowFn,
+  handleWalletDisconnected as handleWalletDisconnectedFn,
+  handleWalletReconnected as handleWalletReconnectedFn,
+  tryConnectWallet as tryConnectWalletFn,
+  WalletFlowDeps,
+  WalletFlowState,
+} from './wallet-flows.js';
 
 
 /** Alias for backward compat — delegates to centralized resolver */
@@ -505,6 +531,11 @@ export class FlashTerminal {
       }
     }, 10_000).unref();
 
+    // RPC connection warmup — pre-establish HTTP connections to backup endpoints (12s)
+    setTimeout(() => {
+      this.rpcManager.warmupConnections().catch(() => {});
+    }, 12_000).unref();
+
     // Load plugins and register their tools
     if (this.config.noPlugins) {
       console.log(chalk.dim('  Plugins disabled (--no-plugins).'));
@@ -615,6 +646,7 @@ export class FlashTerminal {
 
       this.processing = true;
       this.processingWarnShown = false;
+      Logger.setRequestId(generateRequestId());
       this.statusBar?.suspend();
       const cmdStart = Date.now();
       let cmdFailed = false;
@@ -634,6 +666,11 @@ export class FlashTerminal {
           const { getSessionMetrics } = await import('../core/session-metrics.js');
           getSessionMetrics().recordCommand(this.lastCommandMs, !cmdFailed);
         } catch { /* non-critical */ }
+        try {
+          const { getMetrics, METRIC } = await import('../observability/metrics.js');
+          getMetrics().record(METRIC.COMMAND_LATENCY, this.lastCommandMs);
+        } catch { /* non-critical */ }
+        Logger.clearRequestId();
         this.renderExecutionTimer();
         this.statusBar?.resume();
         this.saveHistory();
@@ -698,307 +735,61 @@ export class FlashTerminal {
    * Returns wallet info on success, null if user chose exit.
    */
   private async setupLiveMode(): Promise<{ address: string; name: string } | null> {
-    const store = new WalletStore();
-    const wallets = store.listWallets();
-    let defaultWallet = store.getDefault();
-    const sessionWallet = getLastWallet();
-
-    // NO_DNA: never prompt — auto-connect default/only wallet or fail
-    if (IS_AGENT) {
-      if (!defaultWallet && wallets.length === 1) {
-        store.setDefault(wallets[0]);
-        defaultWallet = wallets[0];
-      }
-      const target = defaultWallet ?? sessionWallet;
-      if (!target || !wallets.includes(target)) {
-        agentError('no_wallet', {
-          detail: 'Live mode requires a configured wallet. Set a default wallet first.',
-          available_wallets: wallets,
-        });
-        return null;
-      }
-      try {
-        const walletPath = store.getWalletPath(target);
-        const info = this.tryConnectWallet(walletPath);
-        if (info && this.walletManager.isConnected) {
-          updateLastWallet(target);
-          return { ...info, name: target };
-        }
-      } catch {
-        agentError('wallet_connect_failed', { wallet: target });
-      }
-      return null;
-    }
-
-    // No wallets saved — first-time setup
-    if (wallets.length === 0) {
-      return this.showFirstTimeWalletSetup(store);
-    }
-
-    // Auto-set default if there's exactly one wallet saved
-    if (!defaultWallet && wallets.length === 1) {
-      store.setDefault(wallets[0]);
-      defaultWallet = wallets[0];
-    }
-
-    // Check session for previous wallet
-    const targetWallet = defaultWallet ?? sessionWallet;
-
-    // Wallets exist — show saved wallets menu
-    if (targetWallet && wallets.includes(targetWallet)) {
-      return this.showSavedWalletsMenu(store, wallets, targetWallet);
-    }
-
-    // Wallets exist but no target — go straight to picker
-    return this.showWalletPicker(store, wallets);
+    return setupLiveModeFlow(this.walletFlowDeps());
   }
 
-  /**
-   * Show the saved wallets menu when wallets already exist.
-   * Options: use previous, select another, import new, create new.
-   */
+  /** Wallet flow deps helper — builds the deps object from class properties. */
+  private walletFlowDeps(): WalletFlowDeps {
+    return {
+      ask: (q: string) => this.ask(q),
+      readHidden: (p: string) => this.readHidden(p),
+      confirm: (p: string) => this.confirm(p),
+      walletManager: this.walletManager,
+      config: this.config,
+      flashClient: this.flashClient,
+      context: this.context,
+      rpcManager: this.rpcManager,
+      engine: this.engine,
+      noPlugins: !!this.config.noPlugins,
+    };
+  }
+
+  /** Wallet flow state helper — builds mutable state refs. */
+  private walletFlowState(): WalletFlowState {
+    return {
+      flashClient: this.flashClient,
+      context: this.context,
+      engine: this.engine,
+      walletRebuilding: this.walletRebuilding,
+    };
+  }
+
+  /** Apply wallet flow state mutations back to class properties. */
+  private applyWalletFlowState(state: WalletFlowState): void {
+    this.flashClient = state.flashClient;
+    this.context = state.context;
+    this.engine = state.engine;
+    this.walletRebuilding = state.walletRebuilding;
+  }
+
   private async showSavedWalletsMenu(
     store: WalletStore,
     wallets: string[],
     targetWallet: string,
   ): Promise<{ address: string; name: string } | null> {
-    console.log('');
-    console.log(chalk.bold('  Saved Wallets'));
-    console.log(chalk.dim('  ────────────'));
-    console.log('');
-    console.log(`    ${chalk.cyan('1)')} Use previous wallet ${chalk.dim(`(${targetWallet})`)}`);
-    console.log(`    ${chalk.cyan('2)')} Select another saved wallet`);
-    console.log(`    ${chalk.cyan('3)')} Import new wallet`);
-    console.log(`    ${chalk.cyan('4)')} Create new wallet`);
-    console.log('');
-
-    while (true) {
-      const choice = (await this.ask(`  ${chalk.yellow('>')} `)).trim();
-
-      switch (choice) {
-        case '1': {
-          // Reconnect previous wallet
-          try {
-            const walletPath = store.getWalletPath(targetWallet);
-            const info = this.tryConnectWallet(walletPath);
-            if (info && this.walletManager.isConnected) {
-              console.log(chalk.green(`\n  Wallet connected: ${targetWallet}`));
-              updateLastWallet(targetWallet);
-              return { ...info, name: targetWallet };
-            }
-          } catch {
-            console.log(chalk.dim(`  Wallet "${targetWallet}" could not be loaded.`));
-          }
-          // Fall through to picker on failure
-          return this.showWalletPicker(store, wallets);
-        }
-
-        case '2': {
-          // Show wallet picker (excludes the target wallet from being auto-selected)
-          return this.showWalletPicker(store, wallets);
-        }
-
-        case '3': {
-          // Import new wallet
-          const importedName = await this.handleWalletImportFlow(store);
-          if (importedName) return { address: this.walletManager.address!, name: importedName };
-          continue;
-        }
-
-        case '4': {
-          // Create new wallet
-          const created = await this.handleWalletCreateFlow(store);
-          if (created) return created;
-          continue;
-        }
-
-        default:
-          console.log(chalk.dim('  Enter 1, 2, 3, or 4.'));
-          continue;
-      }
-    }
+    return showSavedWalletsMenuFlow(this.walletFlowDeps(), store, wallets, targetWallet);
   }
 
-  /** Pick from multiple saved wallets by number. */
   private async showWalletPicker(store: WalletStore, wallets: string[]): Promise<{ address: string; name: string } | null> {
-    console.log('');
-    console.log(chalk.bold('  Select wallet:'));
-    console.log('');
-    for (let i = 0; i < wallets.length; i++) {
-      try {
-        const addr = store.getAddress(wallets[i]);
-        console.log(`    ${chalk.cyan(String(i + 1) + ')')} ${wallets[i]} ${chalk.dim(`(${shortAddress(addr)})`)}`);
-      } catch {
-        console.log(`    ${chalk.cyan(String(i + 1) + ')')} ${wallets[i]}`);
-      }
-    }
-    console.log('');
-    console.log(`    ${chalk.cyan('i)')} Import new wallet`);
-    console.log(`    ${chalk.cyan('c)')} Create new wallet`);
-    console.log(`    ${chalk.dim('q)')} Exit`);
-    console.log('');
-
-    while (true) {
-      const choice = (await this.ask(`  ${chalk.yellow('>')} `)).trim().toLowerCase();
-
-      if (choice === 'q') return null;
-
-      if (choice === 'i') {
-        const importedName = await this.handleWalletImportFlow(store);
-        if (importedName) return { address: this.walletManager.address!, name: importedName };
-        continue;
-      }
-
-      if (choice === 'c') {
-        const created = await this.handleWalletCreateFlow(store);
-        if (created) return created;
-        continue;
-      }
-
-      const idx = parseInt(choice, 10) - 1;
-      if (idx >= 0 && idx < wallets.length) {
-        try {
-          const walletPath = store.getWalletPath(wallets[idx]);
-          const info = this.tryConnectWallet(walletPath);
-          if (info) {
-            store.setDefault(wallets[idx]);
-            updateLastWallet(wallets[idx]);
-            console.log(chalk.green(`\n  Wallet connected: ${wallets[idx]}`));
-            return { ...info, name: wallets[idx] };
-          }
-        } catch (error: unknown) {
-          console.log(chalk.red(`  ${getErrorMessage(error)}`));
-        }
-      } else {
-        console.log(chalk.dim(`  Enter 1-${wallets.length}, i, c, or q.`));
-      }
-    }
+    return showWalletPickerFlow(this.walletFlowDeps(), store, wallets);
   }
 
-  /** First-time wallet setup — no saved wallets. */
   private async showFirstTimeWalletSetup(store: WalletStore): Promise<{ address: string; name: string } | null> {
-    console.log('');
-    console.log(chalk.bold('  Wallet Setup'));
-    console.log(chalk.dim('  ────────────'));
-    console.log('');
-    console.log(chalk.dim('  A wallet is required for live trading.'));
-    console.log('');
-    console.log(`    ${chalk.cyan('1)')} Create new wallet`);
-    console.log(`    ${chalk.cyan('2)')} Import wallet file`);
-    console.log(`    ${chalk.cyan('3)')} Connect existing Solana keypair`);
-    console.log('');
-
-    while (true) {
-      const choice = (await this.ask(`  ${chalk.yellow('>')} `)).trim();
-
-      switch (choice) {
-        case '1': {
-          const created = await this.handleWalletCreateFlow(store);
-          if (created) return created;
-          continue;
-        }
-
-        case '2': {
-          const importedName = await this.handleWalletImportFlow(store);
-          if (importedName) return { address: this.walletManager.address!, name: importedName };
-          continue;
-        }
-
-        case '3': {
-          const connected = await this.handleWalletConnectFlow();
-          if (connected) return { address: this.walletManager.address!, name: 'wallet' };
-          continue;
-        }
-
-        default:
-          console.log(chalk.dim('  Enter 1, 2, or 3.'));
-          continue;
-      }
-    }
+    return showFirstTimeWalletSetupFlow(this.walletFlowDeps(), store);
   }
 
-  /**
-   * Create a new Solana wallet, save it, and connect.
-   */
   private async handleWalletCreateFlow(store: WalletStore): Promise<{ address: string; name: string } | null> {
-    console.log('');
-
-    const name = (await this.ask(`  ${chalk.yellow('Wallet name:')} `)).trim();
-    if (!name) {
-      console.log(chalk.red('  Wallet name cannot be empty.'));
-      return null;
-    }
-
-    if (!/^[a-zA-Z0-9_-]{1,64}$/.test(name)) {
-      console.log(chalk.red('  Name must be 1-64 alphanumeric/hyphen/underscore characters.'));
-      return null;
-    }
-
-    const defaultPath = join(homedir(), '.config', 'solana', `${name}.json`);
-    console.log('');
-    console.log(chalk.dim(`  Where should the keypair be saved?`));
-    console.log(chalk.dim(`  Default: ${defaultPath}`));
-    const rawSavePath = (await this.ask(`  ${chalk.yellow('Save path:')} `)).trim();
-    const savePath = rawSavePath || defaultPath;
-
-    const expandedPath = savePath.startsWith('~')
-      ? join(homedir(), savePath.slice(1))
-      : resolve(savePath);
-
-    try {
-      const { Keypair } = await import('@solana/web3.js');
-      const { writeFileSync, mkdirSync } = await import('fs');
-      const { dirname } = await import('path');
-
-      // Ensure parent directory exists
-      const dir = dirname(expandedPath);
-      if (!existsSync(dir)) {
-        mkdirSync(dir, { recursive: true, mode: 0o700 });
-      }
-
-      if (existsSync(expandedPath)) {
-        console.log(chalk.red(`  File already exists: ${expandedPath}`));
-        return null;
-      }
-
-      const keypair = Keypair.generate();
-      const secretKeyArray = Array.from(keypair.secretKey);
-      const address = keypair.publicKey.toBase58();
-
-      // Write keypair to the user-chosen location
-      writeFileSync(expandedPath, JSON.stringify(secretKeyArray), { mode: 0o600 });
-
-      // Zero sensitive data from memory
-      secretKeyArray.fill(0);
-
-      // Register the wallet path (no key material stored by Flash)
-      const result = store.registerWallet(name, expandedPath);
-      store.setDefault(name);
-
-      // Connect the wallet
-      this.walletManager.loadFromFile(result.path);
-      updateLastWallet(name);
-
-      console.log('');
-      console.log(chalk.green(`  Wallet "${name}" created successfully`));
-      console.log('');
-      console.log(`  ${chalk.bold('Name:')}    ${name}`);
-      console.log(`  ${chalk.bold('Address:')} ${chalk.cyan(address)}`);
-      console.log(`  ${chalk.bold('Saved to:')} ${chalk.dim(expandedPath)}`);
-      console.log('');
-      console.log(chalk.yellow.bold('  Security'));
-      console.log(chalk.dim('    Back up this file securely'));
-      console.log(chalk.dim('    Loss of this file means permanent loss of funds'));
-      console.log(chalk.dim('    Flash Terminal does not store a copy of this key'));
-      console.log('');
-      console.log(chalk.dim('  Fund this wallet with SOL (for fees) and USDC (for collateral).'));
-      console.log('');
-
-      return { address, name };
-    } catch (error: unknown) {
-      console.log(chalk.red(`  Create failed: ${getErrorMessage(error)}`));
-      return null;
-    }
+    return handleWalletCreateFlowFn(this.walletFlowDeps(), store);
   }
 
   // ─── Mode Banners ──────────────────────────────────────────────────
@@ -1302,13 +1093,7 @@ export class FlashTerminal {
 
   /** Try to connect a wallet from a file path. Returns info on success, null on failure. */
   private tryConnectWallet(path: string): { address: string } | null {
-    try {
-      const result = this.walletManager.loadFromFile(path);
-      return { address: result.address };
-    } catch (error: unknown) {
-      console.log(chalk.red(`  Failed to load wallet: ${getErrorMessage(error)}`));
-      return null;
-    }
+    return tryConnectWalletFn(this.walletManager, path);
   }
 
   /** Blocking question prompt. */
@@ -1376,162 +1161,24 @@ export class FlashTerminal {
     });
   }
 
-  /**
-   * Interactive wallet import: prompts for name and wallet file path.
-   * Registers the path in ~/.flash/wallets.json — never copies the private key.
-   */
   private async handleWalletImportFlow(store: WalletStore): Promise<string | null> {
-    console.log('');
-
-    const name = (await this.ask(`  ${chalk.yellow('Wallet name:')} `)).trim();
-    if (!name) {
-      console.log(chalk.red('  Wallet name cannot be empty.'));
-      return null;
-    }
-
-    if (!/^[a-zA-Z0-9_-]{1,64}$/.test(name)) {
-      console.log(chalk.red('  Name must be 1-64 alphanumeric/hyphen/underscore characters.'));
-      return null;
-    }
-
-    console.log('');
-    console.log(chalk.dim('  Enter path to your Solana wallet JSON file'));
-    console.log(chalk.dim('  Example: ~/.config/solana/id.json'));
-    const rawPath = (await this.ask(`  ${chalk.yellow('Path:')} `)).trim();
-
-    if (!rawPath) {
-      console.log(chalk.red('  No path provided.'));
-      return null;
-    }
-
-    try {
-      const result = store.registerWallet(name, rawPath);
-      store.setDefault(name);
-
-      // Connect the wallet directly from the original file
-      this.walletManager.loadFromFile(result.path);
-
-      console.log('');
-      console.log(chalk.green(`  Wallet "${name}" imported successfully`));
-      console.log('');
-      console.log(`  ${chalk.bold('Name:')}    ${name}`);
-      console.log(`  ${chalk.bold('Path:')}    ${chalk.dim(result.path)}`);
-      console.log(`  ${chalk.bold('Address:')} ${chalk.cyan(result.address)}`);
-      console.log('');
-      console.log(chalk.dim('  No key material stored by Flash Terminal.'));
-      console.log(chalk.dim('  Your private key remains only in its original file.'));
-      console.log('');
-
-      return name;
-    } catch (error: unknown) {
-      console.log(chalk.red(`  Import failed: ${getErrorMessage(error)}`));
-      return null;
-    }
+    return handleWalletImportFlowFn(this.walletFlowDeps(), store);
   }
 
-  /**
-   * Interactive wallet connect: prompts for keypair file path,
-   * validates, and connects.
-   */
   private async handleWalletConnectFlow(): Promise<boolean> {
-    console.log('');
-
-    console.log(chalk.dim('  Enter path to your Solana wallet JSON file'));
-    console.log(chalk.dim('  Example: ~/.config/solana/id.json'));
-    const rawPath = (await this.ask(`  ${chalk.yellow('Path:')} `)).trim();
-    if (!rawPath) {
-      console.log(chalk.red('  No path provided.'));
-      return false;
-    }
-
-    // Expand ~ to home directory
-    const expandedPath = rawPath.startsWith('~')
-      ? join(homedir(), rawPath.slice(1))
-      : resolve(rawPath);
-
-    if (!existsSync(expandedPath)) {
-      console.log(chalk.red(`  File not found: ${expandedPath}`));
-      return false;
-    }
-
-    const info = this.tryConnectWallet(expandedPath);
-    if (!info) return false;
-
-    console.log(chalk.green(`  Connected: ${info.address}`));
-
-    // Show balance
-    try {
-      const bal = await this.walletManager.getBalance();
-      console.log(`  Balance: ${chalk.green(bal.toFixed(4))} SOL`);
-    } catch {
-      // Balance fetch is best-effort at setup
-    }
-
-    console.log('');
-    return true;
+    return handleWalletConnectFlowFn(this.walletFlowDeps());
   }
 
   // ─── Wallet Disconnect (Mode-Locked) ──────────────────────────────
 
-  /**
-   * Handle wallet disconnect in live mode.
-   * Mode stays locked — only disables trading capability.
-   */
   private handleWalletDisconnected(): void {
-    // Do NOT change mode — mode is locked for the session
-    // Trading commands will fail naturally since wallet is disconnected
+    handleWalletDisconnectedFn();
   }
 
-  /**
-   * Handle wallet reconnected in live mode.
-   * Reinitialize the live client with the new wallet.
-   */
   private async handleWalletReconnected(): Promise<void> {
-    // Only relevant in live mode — rebuild client with new wallet
-    if (this.config.simulationMode) return;
-
-    // Mutex: prevent trade execution during wallet rebuild
-    this.walletRebuilding = true;
-
-    const connection = this.rpcManager.connection;
-
-    try {
-      const { FlashClient } = await import('../client/flash-client.js');
-      this.flashClient = new FlashClient(connection, this.walletManager, this.config);
-      this.context.flashClient = this.flashClient;
-      this.context.walletAddress = this.walletManager.address ?? 'unknown';
-      // walletName is preserved from initial setup
-    } catch (error: unknown) {
-      console.log(chalk.red(`  Failed to reinitialize live client: ${getErrorMessage(error)}`));
-      console.log(chalk.dim('  Trading commands may fail until a wallet is reconnected.'));
-      return;
-    } finally {
-      // Always release mutex even on failure
-      this.walletRebuilding = false;
-    }
-
-    // Update reconciler with new client
-    const reconciler = getReconciler();
-    if (reconciler) {
-      reconciler.setClient(this.flashClient);
-      reconciler.reconcile().catch(() => {});
-    }
-
-    // Rebuild tool engine with updated context
-    this.engine = new ToolEngine(this.context);
-
-    // Re-register plugin tools lost during engine rebuild
-    if (!this.config.noPlugins) {
-      try {
-        const { loadPlugins } = await import('../plugins/plugin-loader.js');
-        const pluginTools = await loadPlugins(this.context);
-        for (const tool of pluginTools) {
-          this.engine.registerTool(tool);
-        }
-      } catch {
-        // Non-critical — plugins may not be available
-      }
-    }
+    const state = this.walletFlowState();
+    await handleWalletReconnectedFn(this.walletFlowDeps(), state);
+    this.applyWalletFlowState(state);
   }
 
   // ─── Prompt ────────────────────────────────────────────────────────
@@ -2665,504 +2312,14 @@ export class FlashTerminal {
    *   Open Interest:  fstats API (aggregated Flash protocol state)
    */
   private async handleMarketMonitor(filterMarket?: string): Promise<void> {
-    // NO_DNA: TUI monitor is not compatible with agent mode — return snapshot instead
-    if (IS_AGENT) {
-      const { PriceService } = await import('../data/prices.js');
-      const { POOL_MARKETS } = await import('../config/index.js');
-      const priceSvc = new PriceService();
-      const allSymbols = [...new Set(Object.values(POOL_MARKETS).flat().map(s => s.toUpperCase()))];
-      try {
-        const prices = await priceSvc.getPrices(allSymbols);
-        const snapshot = allSymbols.map(sym => {
-          const p = prices.get(sym);
-          return { symbol: sym, price: p?.price ?? null, change_24h: p?.priceChange24h ?? null };
-        });
-        agentOutput({ action: 'market_monitor', markets: snapshot });
-      } catch (err: unknown) {
-        agentError('market_monitor_failed', { detail: getErrorMessage(err) });
-      }
-      return;
-    }
-
-    const { PriceService } = await import('../data/prices.js');
-    const { TermRenderer } = await import('./renderer.js');
-    const priceSvc = new PriceService();
-    const { POOL_MARKETS } = await import('../config/index.js');
-
-    // All unique market symbols from Flash SDK pool config
-    let allSymbols = [...new Set(Object.values(POOL_MARKETS).flat().map(s => s.toUpperCase()))];
-    if (filterMarket) {
-      allSymbols = allSymbols.filter(s => s === filterMarket.toUpperCase());
-    }
-
-    let running = true;
-    const REFRESH_MS = 5_000;
-    const renderer = new TermRenderer();
-
-    // ─── STEP 1: Isolate input BEFORE any rendering ──────────────
-    this.rl.pause();
-    const wasRaw = process.stdin.isRaw;
-    if (process.stdin.isTTY) {
-      process.stdin.setRawMode(true);
-    }
-    process.stdin.resume();
-
-    // Drain any buffered stdin (e.g. the Enter key from the command)
-    // to prevent stale bytes from triggering the exit handler
-    await new Promise<void>(resolve => {
-      const drain = () => { /* discard */ };
-      process.stdin.on('data', drain);
-      setTimeout(() => {
-        process.stdin.removeListener('data', drain);
-        resolve();
-      }, 50);
-    });
-
-    // ─── In-memory state for event detection ───────────────────────
-    const prevPrices = new Map<string, number>();
-    const prevOi = new Map<string, number>();
-    const prevLongPct = new Map<string, number>();
-
-    // Event thresholds — only fire on meaningful changes
-    const PRICE_MOVE_PCT = 1.0;     // 1% price move between cycles
-    const OI_CHANGE_USD = 10_000;   // $10k OI change between cycles
-    const RATIO_SHIFT_PCT = 5;      // 5pp long/short ratio shift
-
-    // ─── Rolling history buffer for velocity tracking ──────────────
-    const HISTORY_DEPTH = 12;
-
-    interface MarketSnapshot {
-      timestamp: number;
-      price: number;
-      totalOi: number;
-      longPct: number;
-    }
-
-    const marketHistory = new Map<string, MarketSnapshot[]>();
-
-    const pushSnapshot = (sym: string, snap: MarketSnapshot) => {
-      let buf = marketHistory.get(sym);
-      if (!buf) {
-        buf = [];
-        marketHistory.set(sym, buf);
-      }
-      buf.push(snap);
-      if (buf.length > HISTORY_DEPTH) {
-        buf.splice(0, buf.length - HISTORY_DEPTH);
-      }
-    };
-
-    const velocityLabel = (sym: string): string => {
-      const buf = marketHistory.get(sym);
-      if (!buf || buf.length < 2) return `${REFRESH_MS / 1000}s`;
-      const elapsed = Math.round((buf[buf.length - 1].timestamp - buf[buf.length - 2].timestamp) / 1000);
-      return `${elapsed > 0 ? elapsed : REFRESH_MS / 1000}s`;
-    };
-
-    interface MarketRow {
-      symbol: string;
-      price: number;
-      change: number;
-      totalOi: number;
-      longPct: number;
-      shortPct: number;
-      priceDirection: 'up' | 'down' | 'flat';
-    }
-
-    interface MarketEvent {
-      message: string;
-      color: 'green' | 'red' | 'yellow';
-      timestamp: number;
-    }
-
-    const MAX_EVENTS = 6;
-    let recentEvents: MarketEvent[] = [];
-
-    // ─── Telemetry state ────────────────────────────────────────────
-    interface Telemetry {
-      rpcLatencyMs: number;
-      oracleLatencyMs: number;
-      slot: number;
-      slotLag: number;
-      renderTimeMs: number;
-    }
-    const telemetry: Telemetry = { rpcLatencyMs: -1, oracleLatencyMs: -1, slot: -1, slotLag: -1, renderTimeMs: 0 };
-
-    // Slot freeze detection — tracks consecutive cycles where slot doesn't advance
-    let previousSlot = -1;
-    let slotFreezeCount = 0;
-
-    const fetchData = async (): Promise<MarketRow[]> => {
-      const now = Date.now();
-
-      // Measure oracle latency (prices) and fetch OI in parallel
-      const oracleStart = performance.now();
-      const [priceMap, oi] = await Promise.all([
-        priceSvc.getPrices(allSymbols).catch(() => new Map()),
-        this.fstats.getOpenInterest().catch(() => ({ markets: [] })),
-      ]);
-      telemetry.oracleLatencyMs = Math.round(performance.now() - oracleStart);
-
-      // Measure RPC latency + get slot (lightweight — reuses cached values)
-      if (this.rpcManager) {
-        // If slot is unknown, trigger a health check to populate slot data
-        if (this.rpcManager.activeSlot < 0) {
-          await this.rpcManager.checkHealth(this.rpcManager.activeEndpoint).catch(() => {});
-        }
-        telemetry.rpcLatencyMs = this.rpcManager.activeLatencyMs;
-        telemetry.slot = this.rpcManager.activeSlot;
-        telemetry.slotLag = this.rpcManager.activeSlotLag;
-
-        // Slot freeze detection
-        if (telemetry.slot > 0) {
-          if (telemetry.slot === previousSlot) {
-            slotFreezeCount++;
-          } else {
-            slotFreezeCount = 0;
-          }
-          previousSlot = telemetry.slot;
-        }
-      }
-
-      const rows: MarketRow[] = [];
-
-      for (const sym of allSymbols) {
-        const tp = priceMap.get(sym);
-        if (!tp) continue;
-        // Aggregate OI across all pool entries for this symbol
-        let longOi = 0;
-        let shortOi = 0;
-        for (const oiEntry of oi.markets) {
-          if (oiEntry.market.toUpperCase().includes(sym)) {
-            longOi += oiEntry.longOi ?? 0;
-            shortOi += oiEntry.shortOi ?? 0;
-          }
-        }
-        const totalOi = longOi + shortOi;
-
-        if (!filterMarket && totalOi <= 0) continue;
-
-        const longPct = totalOi > 0 ? Math.round((longOi / totalOi) * 100) : 50;
-        const shortPct = totalOi > 0 ? 100 - longPct : 50;
-
-        const prev = prevPrices.get(sym);
-        let priceDirection: 'up' | 'down' | 'flat' = 'flat';
-        if (prev !== undefined) {
-          if (tp.price > prev) priceDirection = 'up';
-          else if (tp.price < prev) priceDirection = 'down';
-        }
-
-        // Event detection
-        const vLabel = velocityLabel(sym);
-
-        if (prev !== undefined && prev > 0) {
-          const pricePctChange = ((tp.price - prev) / prev) * 100;
-          if (Math.abs(pricePctChange) >= PRICE_MOVE_PCT) {
-            const dir = pricePctChange > 0 ? '+' : '';
-            recentEvents.push({
-              message: `${sym} price moved ${dir}${pricePctChange.toFixed(2)}% (${vLabel})`,
-              color: pricePctChange > 0 ? 'green' : 'red',
-              timestamp: now,
-            });
-          }
-        }
-
-        const prevOiVal = prevOi.get(sym);
-        if (prevOiVal !== undefined && prevOiVal > 0) {
-          const oiDelta = totalOi - prevOiVal;
-          if (Math.abs(oiDelta) >= OI_CHANGE_USD) {
-            const dir = oiDelta > 0 ? '+' : '-';
-            recentEvents.push({
-              message: `${sym} OI ${dir}${formatUsd(Math.abs(oiDelta))} (${vLabel})`,
-              color: oiDelta > 0 ? 'green' : 'yellow',
-              timestamp: now,
-            });
-          }
-        }
-
-        const prevLong = prevLongPct.get(sym);
-        if (prevLong !== undefined) {
-          const shift = longPct - prevLong;
-          if (Math.abs(shift) >= RATIO_SHIFT_PCT) {
-            const desc = shift > 0 ? `longs +${shift}pp` : `shorts +${Math.abs(shift)}pp`;
-            recentEvents.push({
-              message: `${sym} ratio shifted: ${desc} (${vLabel})`,
-              color: 'yellow',
-              timestamp: now,
-            });
-          }
-        }
-
-        prevPrices.set(sym, tp.price);
-        prevOi.set(sym, totalOi);
-        prevLongPct.set(sym, longPct);
-        pushSnapshot(sym, { timestamp: now, price: tp.price, totalOi, longPct });
-
-        rows.push({ symbol: sym, price: tp.price, change: tp.priceChange24h, totalOi, longPct, shortPct, priceDirection });
-      }
-
-      // Evict stale events (>60s old) and cap size
-      const eventNow = Date.now();
-      recentEvents = recentEvents.filter(e => eventNow - e.timestamp < 60_000);
-      if (recentEvents.length > MAX_EVENTS) {
-        recentEvents = recentEvents.slice(-MAX_EVENTS);
-      }
-
-      rows.sort((a, b) => b.totalOi - a.totalOi);
-      return rows;
-    };
-
-    const _format1mMomentum = (sym: string): string | null => {
-      const buf = marketHistory.get(sym);
-      if (!buf || buf.length < 2) return null;
-
-      const latest = buf[buf.length - 1];
-      const oldest = buf[0];
-      const elapsedSec = (latest.timestamp - oldest.timestamp) / 1000;
-      if (elapsedSec < 10) return null;
-
-      const priceDelta = oldest.price > 0
-        ? ((latest.price - oldest.price) / oldest.price) * 100
-        : 0;
-      const oiDelta = latest.totalOi - oldest.totalOi;
-      const ratioDelta = latest.longPct - oldest.longPct;
-
-      const hasPriceMove = Math.abs(priceDelta) >= 0.1;
-      const hasOiMove = Math.abs(oiDelta) >= 1000;
-      const hasRatioMove = Math.abs(ratioDelta) >= 1;
-
-      if (!hasPriceMove && !hasOiMove && !hasRatioMove) return null;
-
-      const windowLabel = elapsedSec >= 55 ? '1m' : `${Math.round(elapsedSec)}s`;
-      const parts: string[] = [];
-
-      if (hasPriceMove) {
-        const dir = priceDelta > 0 ? '+' : '';
-        const pStr = `${dir}${priceDelta.toFixed(2)}%`;
-        parts.push(priceDelta > 0 ? chalk.green(pStr) : chalk.red(pStr));
-      }
-      if (hasOiMove) {
-        const dir = oiDelta > 0 ? '+' : '-';
-        parts.push(chalk.cyan(`OI ${dir}${formatUsd(Math.abs(oiDelta))}`));
-      }
-      if (hasRatioMove) {
-        const dir = ratioDelta > 0 ? `L+${ratioDelta}pp` : `S+${Math.abs(ratioDelta)}pp`;
-        parts.push(chalk.yellow(dir));
-      }
-
-      return `  ${chalk.bold(sym.padEnd(6))} ${theme.dim(windowLabel.padEnd(4))} ${parts.join(theme.dim(' | '))}`;
-    };
-
-    /** Build frame — fits within terminal height, no scrolling */
-    const buildFrame = (rows: MarketRow[]): string[] => {
-      const termHeight = process.stdout.rows || 24;
-      const now = new Date().toLocaleTimeString();
-
-      // ── Telemetry status bar with health coloring ──
-      const rpcMs = telemetry.rpcLatencyMs;
-      const rpcStr = rpcMs < 0 ? theme.dim('RPC N/A')
-        : rpcMs < 150 ? chalk.green(`RPC ${rpcMs}ms`)
-        : rpcMs < 400 ? chalk.yellow(`RPC ${rpcMs}ms`)
-        : chalk.red(`RPC ${rpcMs}ms`);
-
-      const oMs = telemetry.oracleLatencyMs;
-      const oracleStr = oMs < 0 ? theme.dim('Oracle N/A')
-        : oMs <= 3000 ? chalk.green(`Oracle ${oMs}ms`)
-        : oMs <= 5000 ? chalk.yellow(`Oracle ${oMs}ms ⚠`)
-        : chalk.red(`Oracle ${oMs}ms ⚠`);
-
-      const slotStr = telemetry.slot < 0 ? theme.dim('Slot N/A')
-        : slotFreezeCount >= 2 ? chalk.red(`Slot ${telemetry.slot} ⚠`)
-        : chalk.green(`Slot ${telemetry.slot}`);
-
-      const lag = telemetry.slotLag;
-      const lagStr = lag < 0 ? theme.dim('Lag N/A')
-        : lag === 0 ? chalk.green('Lag 0')
-        : lag <= 5 ? chalk.yellow(`Lag ${lag}`)
-        : chalk.red(`Lag ${lag}`);
-
-      const renderStr = theme.dim(`Render ${telemetry.renderTimeMs}ms`);
-      const _refreshStr = theme.dim(`Refresh ${REFRESH_MS / 1000}s`);
-
-      // Divergence status from protocol-liq module (sync — no await needed)
-      const divStr = isDivergenceOk() ? chalk.green('Divergence OK') : chalk.yellow('Divergence ⚠');
-
-      const telemetryLine = `  ${rpcStr}  ${theme.dim('|')}  ${oracleStr}  ${theme.dim('|')}  ${slotStr}  ${theme.dim('|')}  ${lagStr}  ${theme.dim('|')}  ${renderStr}  ${theme.dim('|')}  ${divStr}`;
-
-      // Chrome: title(1) + telemetry(1) + time(1) + separator(1) + header(1) + separator(1) + footer separator(1) + source(1) = 8 fixed lines
-      const CHROME_LINES = 8;
-      const maxMarketRows = Math.max(5, termHeight - CHROME_LINES);
-      const visibleRows = rows.slice(0, maxMarketRows);
-      const truncated = rows.length > maxMarketRows;
-
-      const hdr = [
-        theme.tableHeader('  Asset'.padEnd(14)),
-        theme.tableHeader('Price'.padStart(14)),
-        theme.tableHeader('24h Change'.padStart(12)),
-        theme.tableHeader('Open Interest'.padStart(16)),
-        theme.tableHeader('Long / Short'.padStart(14)),
-      ].join('');
-
-      const lines: string[] = [
-        `  ${theme.accentBold('FLASH TERMINAL')} ${theme.dim('—')} ${theme.accentBold('MARKET MONITOR')}`,
-        telemetryLine,
-        theme.dim(`  ${now}  |  Press ${chalk.bold('q')} to exit`),
-        `  ${theme.separator(72)}`,
-        hdr,
-        `  ${theme.separator(72)}`,
-      ];
-
-      // Data rows
-      for (const r of visibleRows) {
-        const sym = chalk.bold(('  ' + r.symbol).padEnd(14));
-        const priceStr = formatPrice(r.price).padStart(14);
-        const coloredPrice = r.priceDirection === 'up'
-          ? chalk.green(priceStr)
-          : r.priceDirection === 'down'
-            ? chalk.red(priceStr)
-            : priceStr;
-        const changeRaw = !Number.isFinite(r.change) ? 'N/A'.padStart(12)
-          : r.change === 0 ? '+0.00%'.padStart(12)
-          : formatPercent(r.change).padStart(12);
-        const change = !Number.isFinite(r.change) ? theme.dim(changeRaw)
-          : r.change > 0 ? theme.positive(changeRaw) : r.change < 0 ? theme.negative(changeRaw) : theme.dim(changeRaw);
-        const oiStr = formatUsd(r.totalOi).padStart(16);
-        const ratio = `${r.longPct} / ${r.shortPct}`.padStart(14);
-        const ratioColored = r.longPct > 60 ? theme.positive(ratio) : r.shortPct > 60 ? theme.negative(ratio) : theme.dim(ratio);
-        lines.push(`${sym}${coloredPrice}${change}${oiStr}${ratioColored}`);
-      }
-
-      if (visibleRows.length === 0) {
-        lines.push(theme.dim('  No active markets found.'));
-      }
-      if (truncated) {
-        lines.push(theme.dim(`  ... +${rows.length - maxMarketRows} more (resize terminal to see all)`));
-      }
-
-      // Footer
-      lines.push(`  ${theme.separator(72)}`);
-      lines.push(theme.dim(`  Source: Pyth Hermes (oracle) | fstats (open interest)`));
-
-      return lines;
-    };
-
-    // ─── STEP 2: Enter alternate screen and show loading ──────────
-    renderer.enterAltScreen();
-    renderer.clear();
-    const loadingFrame = [
-      '',
-      `  ${theme.accentBold('FLASH TERMINAL')} ${theme.dim('—')} ${theme.accentBold('MARKET MONITOR')}`,
-      '',
-      theme.dim('  Loading market data...'),
-      '',
-    ];
-    renderer.render(loadingFrame);
-
-    // ─── STEP 3: Fetch first dataset (block until data arrives) ───
-    let initialRows: MarketRow[];
-    try {
-      initialRows = await fetchData();
-    } catch {
-      renderer.leaveAltScreen();
-      console.log(chalk.red('  Failed to fetch market data.'));
-      if (process.stdin.isTTY) {
-        process.stdin.setRawMode(wasRaw ?? false);
-      }
-      this.rl.resume();
-      return;
-    }
-
-    // ─── STEP 4: Render initial frame (with data) ─────────────────
-    renderer.clear();
-    const renderStart0 = performance.now();
-    const initialFrame = buildFrame(initialRows);
-    renderer.render(initialFrame);
-    telemetry.renderTimeMs = Math.round(performance.now() - renderStart0);
-
-    // ─── STEP 5: Start refresh loop ──────────────────────────────
-    let refreshInProgress = false;
-    const interval = setInterval(async () => {
-      if (!running || refreshInProgress) return;
-      refreshInProgress = true;
-      try {
-        const rows = await fetchData();
-        if (!running) return;
-        const renderStart = performance.now();
-        const frame = buildFrame(rows);
-        // Skip render if nothing changed (diff check)
-        if (renderer.hasChanged(frame)) {
-          renderer.render(frame);
-        }
-        telemetry.renderTimeMs = Math.round(performance.now() - renderStart);
-      } catch {
-        // Skip failed refresh — keep last good render
-      } finally {
-        refreshInProgress = false;
-      }
-    }, REFRESH_MS);
-
-    // ─── STEP 6: Exit on 'q' keypress ────────────────────────────
-    await new Promise<void>((resolve) => {
-      let exited = false;
-
-      const cleanup = () => {
-        if (exited) return;
-        exited = true;
-
-        process.stdin.removeListener('data', onKey);
-        process.stdin.removeListener('error', onStdinError);
-        process.stdin.removeListener('end', onStdinEnd);
-        running = false;
-        clearInterval(interval);
-
-        // Leave alternate screen — restores original terminal content
-        renderer.leaveAltScreen();
-        renderer.reset();
-
-        // Pause stdin FIRST to stop any further data events, then
-        // switch out of raw mode so the 'q' keypress is not echoed
-        // back into readline's buffer.
-        process.stdin.pause();
-        if (process.stdin.isTTY) {
-          process.stdin.setRawMode(wasRaw ?? false);
-        }
-
-        // Drain any remaining stdin bytes before restoring readline.
-        // Use a longer drain window to prevent the exit key from
-        // leaking into the CLI prompt.
-        const drainHandler = () => { /* discard */ };
-        process.stdin.resume();
-        process.stdin.on('data', drainHandler);
-        setTimeout(() => {
-          process.stdin.removeListener('data', drainHandler);
-          process.stdin.pause();
-
-          // Resume readline and clear any buffered partial line
-          this.rl.resume();
-          // Write an empty line reset to discard any leaked characters
-          if (this.rl.terminal) {
-            (this.rl as unknown as { line: string }).line = '';
-            (this.rl as unknown as { cursor: number }).cursor = 0;
-            this.rl.prompt();
-          }
-          resolve();
-        }, 100);
-      };
-
-      const onKey = (buf: Buffer) => {
-        const key = buf.toString();
-        if (key !== 'q' && key !== 'Q' && key !== '\x03') return;
-        cleanup();
-      };
-
-      const onStdinError = () => cleanup();
-      const onStdinEnd = () => cleanup();
-
-      process.stdin.on('data', onKey);
-      process.stdin.on('error', onStdinError);
-      process.stdin.on('end', onStdinEnd);
-    });
+    await runMarketMonitor({
+      rl: this.rl,
+      rpcManager: this.rpcManager,
+      fstats: this.fstats,
+      config: this.config,
+    }, filterMarket);
   }
+
 
   /**
    * Position debug — protocol-level debugging view of an open position.
@@ -3174,121 +2331,22 @@ export class FlashTerminal {
    *   Fees/margin:        Flash SDK CustodyAccount (on-chain)
    *   Leverage limits:    Flash SDK PoolConfig MarketConfig
    */
+  /** Build dependency bag for protocol view functions. */
+  private getProtocolViewDeps(): ProtocolViewDeps {
+    return {
+      config: this.config,
+      flashClient: this.flashClient,
+      rpcManager: this.rpcManager,
+      walletManager: this.walletManager,
+    };
+  }
+
   /**
    * Protocol fee verification — shows raw on-chain fee parameters from CustodyAccount.
    * Data source: CustodyAccount.fees.openPosition / closePosition via Flash SDK.
    */
   private async handleProtocolFees(market: string): Promise<void> {
-    const upper = market.toUpperCase();
-    const RATE_POWER = 1_000_000_000;
-    const BPS_POWER = 10_000;
-
-    console.log('');
-    console.log(`  ${theme.accentBold(`FLASH PROTOCOL FEES — ${upper}`)}`);
-    console.log(`  ${theme.separator(50)}`);
-    console.log('');
-
-    // Attempt on-chain fetch
-    if (!this.config.simulationMode) {
-      try {
-        const { PoolConfig, CustodyAccount } = await import('flash-sdk');
-        const { getPoolForMarket } = await import('../config/index.js');
-        const poolName = getPoolForMarket(upper);
-        if (poolName) {
-          const pc = PoolConfig.fromIdsByName(poolName, this.config.network);
-          const custodies = pc.custodies as PoolCustodyConfig[];
-          const custody = custodies.find(c => c.symbol.toUpperCase() === upper);
-          const perpClient = (this.flashClient as unknown as Partial<FlashClientInternals>).perpClient;
-
-          if (custody && perpClient?.program?.account?.custody) {
-            const custodyData = await perpClient.program.account.custody.fetch(custody.custodyAccount);
-            if (custodyData) {
-              const custodyAcct = CustodyAccount.from(custody.custodyAccount, custodyData);
-              const rawOpen = parseFloat(custodyAcct.fees.openPosition.toString());
-              const rawClose = parseFloat(custodyAcct.fees.closePosition.toString());
-              const custodyWithPricing = custodyAcct as unknown as CustodyAccountWithPricing;
-              const rawMaintenanceMargin = parseFloat(custodyWithPricing.pricing?.maintenanceMargin?.toString() ?? '0');
-              const rawMaxLev = custodyWithPricing.pricing?.maxLeverage;
-              const rawMaxLeverage = typeof rawMaxLev === 'object' && rawMaxLev?.toNumber
-                ? rawMaxLev.toNumber()
-                : typeof rawMaxLev === 'number' ? rawMaxLev : 0;
-
-              console.log(theme.pair('Source', chalk.green('CustodyAccount (on-chain)')));
-              console.log(theme.pair('Custody', chalk.dim(custody.custodyAccount.toString())));
-              console.log(theme.pair('Pool', chalk.dim(poolName)));
-              console.log('');
-
-              console.log(`  ${theme.section('Raw Values')}`);
-              console.log(theme.pair('openPosition', rawOpen.toString()));
-              console.log(theme.pair('closePosition', rawClose.toString()));
-              console.log(theme.pair('maintenanceMargin', rawMaintenanceMargin.toString()));
-              console.log(theme.pair('maxLeverage', rawMaxLeverage.toString()));
-              console.log(theme.pair('RATE_POWER', RATE_POWER.toString()));
-              console.log(theme.pair('BPS_POWER', BPS_POWER.toString()));
-              console.log('');
-
-              const openRate = rawOpen / RATE_POWER;
-              const closeRate = rawClose / RATE_POWER;
-              const maxLev = rawMaxLeverage > 0 ? rawMaxLeverage / BPS_POWER : 0;
-              const derivedMarginRate = maxLev > 0 ? 1 / maxLev : 0;
-
-              console.log(`  ${theme.section('Converted Rates')}`);
-              console.log(theme.pair('openFeeRate', `${openRate} (${(openRate * 100).toFixed(4)}%)`));
-              console.log(theme.pair('closeFeeRate', `${closeRate} (${(closeRate * 100).toFixed(4)}%)`));
-              if (maxLev > 0) {
-                console.log(theme.pair('maxLeverage', `${maxLev}x`));
-                console.log(theme.pair('maintMarginRate', `1/${maxLev} = ${derivedMarginRate} (${(derivedMarginRate * 100).toFixed(4)}%)`));
-              }
-              console.log('');
-
-              // Verify against getProtocolFeeRates
-              const { getProtocolFeeRates } = await import('../utils/protocol-fees.js');
-              const feeRates = await getProtocolFeeRates(upper, perpClient);
-              console.log(`  ${theme.section('getProtocolFeeRates() Output')}`);
-              console.log(theme.pair('openFeeRate', `${feeRates.openFeeRate} (${(feeRates.openFeeRate * 100).toFixed(4)}%)`));
-              console.log(theme.pair('closeFeeRate', `${feeRates.closeFeeRate} (${(feeRates.closeFeeRate * 100).toFixed(4)}%)`));
-              console.log(theme.pair('maxLeverage', `${feeRates.maxLeverage}x`));
-              console.log(theme.pair('maintMarginRate', `${feeRates.maintenanceMarginRate} (${(feeRates.maintenanceMarginRate * 100).toFixed(4)}%)`));
-              console.log(theme.pair('source', feeRates.source));
-              console.log('');
-
-              // Cross-check
-              const openMatch = Math.abs(openRate - feeRates.openFeeRate) < 1e-12;
-              const closeMatch = Math.abs(closeRate - feeRates.closeFeeRate) < 1e-12;
-              const marginMatch = Math.abs(derivedMarginRate - feeRates.maintenanceMarginRate) < 1e-9;
-              const levMatch = maxLev > 0 && Math.abs(maxLev - feeRates.maxLeverage) < 1e-9;
-              if (openMatch && closeMatch && marginMatch && levMatch) {
-                console.log(chalk.green('  ✓ CustodyAccount and getProtocolFeeRates() match'));
-              } else {
-                console.log(chalk.red('  ✗ MISMATCH between CustodyAccount and getProtocolFeeRates()'));
-                if (!openMatch) console.log(chalk.red(`    open: ${openRate} vs ${feeRates.openFeeRate}`));
-                if (!closeMatch) console.log(chalk.red(`    close: ${closeRate} vs ${feeRates.closeFeeRate}`));
-                if (!marginMatch) console.log(chalk.red(`    margin: ${derivedMarginRate} vs ${feeRates.maintenanceMarginRate}`));
-                if (!levMatch) console.log(chalk.red(`    leverage: ${maxLev} vs ${feeRates.maxLeverage}`));
-              }
-              console.log('');
-              return;
-            }
-          }
-        }
-      } catch (e: unknown) {
-        console.log(chalk.yellow(`  Failed to fetch on-chain data: ${getErrorMessage(e)}`));
-        console.log('');
-      }
-    }
-
-    // Fallback: show defaults
-    const { getProtocolFeeRates } = await import('../utils/protocol-fees.js');
-    const feeRates = await getProtocolFeeRates(upper, null);
-    console.log(theme.pair('Source', chalk.yellow(feeRates.source)));
-    console.log('');
-    console.log(`  ${theme.section('Fee Rates (default fallback)')}`);
-    console.log(theme.pair('openFeeRate', `${feeRates.openFeeRate} (${(feeRates.openFeeRate * 100).toFixed(4)}%)`));
-    console.log(theme.pair('closeFeeRate', `${feeRates.closeFeeRate} (${(feeRates.closeFeeRate * 100).toFixed(4)}%)`));
-    console.log(theme.pair('maintMarginRate', `${feeRates.maintenanceMarginRate} (${(feeRates.maintenanceMarginRate * 100).toFixed(2)}%)`));
-    console.log('');
-    console.log(chalk.yellow('  ⚠ Showing SDK defaults — connect in live mode for on-chain values'));
-    console.log('');
+    return protocolFeesView(this.getProtocolViewDeps(), market);
   }
 
   /**
@@ -3296,812 +2354,15 @@ export class FlashTerminal {
    * Runs all checks in parallel with per-task timeout protection.
    */
   private async handleProtocolVerify(): Promise<void> {
-    const startTime = Date.now();
-    const TASK_TIMEOUT_MS = 1500;
-
-    console.log('');
-    console.log(`  ${theme.accentBold('FLASH TERMINAL — PROTOCOL VERIFY')}`);
-    console.log(`  ${theme.separator(50)}`);
-    console.log('');
-
-    interface CheckResult {
-      label: string;
-      ok: boolean;
-      detail: string;
-      error?: string;
-    }
-
-    const timedTask = <T>(task: Promise<T>, label: string): Promise<T> =>
-      Promise.race([
-        task,
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error(`${label} timed out`)), TASK_TIMEOUT_MS),
-        ),
-      ]);
-
-    // ── 1. RPC Health ──
-    const checkRpcHealth = async (): Promise<CheckResult> => {
-      try {
-        const latency = this.rpcManager.activeLatencyMs;
-        const ep = this.rpcManager.activeEndpoint;
-        const slot = await timedTask(
-          this.rpcManager.connection.getSlot('processed'),
-          'RPC slot fetch',
-        );
-        if (!Number.isFinite(slot) || slot <= 0) {
-          return { label: 'RPC', ok: false, detail: '', error: 'Slot not advancing' };
-        }
-        const latStr = latency > 0 ? `${latency}ms` : 'N/A';
-        if (latency > 500) {
-          return { label: 'RPC', ok: false, detail: `${ep.label} — ${latStr}`, error: `Latency ${latStr} exceeds 500ms threshold` };
-        }
-        return { label: 'RPC', ok: true, detail: `reachable (${ep.label} — ${latStr}, slot ${slot})` };
-      } catch (err: unknown) {
-        return { label: 'RPC', ok: false, detail: '', error: getErrorMessage(err) };
-      }
-    };
-
-    // ── 2. Oracle Health ──
-    const checkOracleHealth = async (): Promise<CheckResult> => {
-      try {
-        const { PriceService } = await import('../data/prices.js');
-        const priceSvc = new PriceService();
-        const oracleStart = Date.now();
-        const price = await timedTask(priceSvc.getPrice('SOL'), 'Oracle fetch');
-        const oracleMs = Date.now() - oracleStart;
-        if (!price || !Number.isFinite(price.price) || price.price <= 0) {
-          return { label: 'Oracle', ok: false, detail: '', error: 'Failed to fetch SOL price from Pyth Hermes' };
-        }
-        // Check timestamp freshness (< 5 seconds)
-        const age = price.timestamp ? (Date.now() / 1000 - price.timestamp) : 0;
-        if (age > 5) {
-          return { label: 'Oracle', ok: false, detail: '', error: `Oracle data stale (${age.toFixed(0)}s old)` };
-        }
-        return { label: 'Oracle', ok: true, detail: `healthy (Pyth Hermes — ${oracleMs}ms)` };
-      } catch (err: unknown) {
-        return { label: 'Oracle', ok: false, detail: '', error: getErrorMessage(err) };
-      }
-    };
-
-    // ── 3. Custody Account Validation ──
-    const validateCustodyAccounts = async (): Promise<CheckResult> => {
-      const markets = ['SOL', 'BTC', 'ETH'];
-      const passed: string[] = [];
-      const failed: string[] = [];
-
-      const perpClient = this.config.simulationMode ? null : (this.flashClient as unknown as Partial<FlashClientInternals>).perpClient ?? null;
-
-      for (const mkt of markets) {
-        try {
-          const { getProtocolFeeRates } = await import('../utils/protocol-fees.js');
-          const rates = await timedTask(getProtocolFeeRates(mkt, perpClient), `Custody ${mkt}`);
-          if (rates.source === 'on-chain') {
-            passed.push(mkt);
-          } else {
-            // sdk-default means we couldn't get on-chain data
-            passed.push(`${mkt} (default)`);
-          }
-        } catch (err: unknown) {
-          failed.push(`${mkt}: ${getErrorMessage(err)}`);
-        }
-      }
-
-      if (failed.length > 0) {
-        return { label: 'Custody accounts', ok: false, detail: '', error: failed.join('; ') };
-      }
-      return { label: 'Custody accounts', ok: true, detail: `valid (${passed.join(', ')})` };
-    };
-
-    // ── 4. Fee Engine Verification ──
-    const verifyFeeEngine = async (): Promise<CheckResult> => {
-      if (this.config.simulationMode) {
-        return { label: 'Fee engine', ok: true, detail: 'skipped (simulation mode — no perpClient)' };
-      }
-
-      const perpClient = (this.flashClient as unknown as Partial<FlashClientInternals>).perpClient ?? null;
-      if (!perpClient?.program?.account?.custody) {
-        return { label: 'Fee engine', ok: true, detail: 'skipped (no perpClient)' };
-      }
-
-      try {
-        const { PoolConfig, CustodyAccount } = await import('flash-sdk');
-        const { getPoolForMarket } = await import('../config/index.js');
-        const { getProtocolFeeRates } = await import('../utils/protocol-fees.js');
-        const RATE_POWER = 1_000_000_000;
-
-        const mismatches: string[] = [];
-        for (const mkt of ['SOL', 'BTC', 'ETH']) {
-          const poolName = getPoolForMarket(mkt);
-          if (!poolName) continue;
-          const pc = PoolConfig.fromIdsByName(poolName, this.config.network);
-          const custodies = pc.custodies as PoolCustodyConfig[];
-          const custody = custodies.find(c => c.symbol.toUpperCase() === mkt);
-          if (!custody) continue;
-
-          const rawData = await timedTask(
-            perpClient.program.account.custody.fetch(custody.custodyAccount),
-            `Fee engine ${mkt}`,
-          );
-          const custodyAcct = CustodyAccount.from(custody.custodyAccount, rawData);
-          const custodyOpen = parseFloat(custodyAcct.fees.openPosition.toString()) / RATE_POWER;
-          const custodyClose = parseFloat(custodyAcct.fees.closePosition.toString()) / RATE_POWER;
-
-          const engineRates = await getProtocolFeeRates(mkt, perpClient);
-
-          if (Math.abs(custodyOpen - engineRates.openFeeRate) > 0.00001) {
-            mismatches.push(`${mkt} open: custody=${custodyOpen}, engine=${engineRates.openFeeRate}`);
-          }
-          if (Math.abs(custodyClose - engineRates.closeFeeRate) > 0.00001) {
-            mismatches.push(`${mkt} close: custody=${custodyClose}, engine=${engineRates.closeFeeRate}`);
-          }
-        }
-
-        if (mismatches.length > 0) {
-          return { label: 'Fee engine', ok: false, detail: '', error: mismatches.join('; ') };
-        }
-        return { label: 'Fee engine', ok: true, detail: 'matches on-chain values' };
-      } catch (err: unknown) {
-        return { label: 'Fee engine', ok: false, detail: '', error: getErrorMessage(err) };
-      }
-    };
-
-    // ── 5. Liquidation Engine Verification ──
-    const verifyLiquidationEngine = async (): Promise<CheckResult> => {
-      try {
-        const { getProtocolFeeRates } = await import('../utils/protocol-fees.js');
-        const perpClient = this.config.simulationMode ? null : (this.flashClient as unknown as Partial<FlashClientInternals>).perpClient ?? null;
-        const rates = await getProtocolFeeRates('SOL', perpClient);
-
-        // Compute CLI liquidation for a reference position
-        const entryPrice = 100; // normalized reference
-        const sizeUsd = 1000;
-        const collateralUsd = 100; // 10x leverage
-        const cliLiqLong = computeSimulationLiquidationPrice(
-          entryPrice, sizeUsd, collateralUsd, TradeSide.Long,
-          rates.maintenanceMarginRate, rates.closeFeeRate,
-        );
-        const cliLiqShort = computeSimulationLiquidationPrice(
-          entryPrice, sizeUsd, collateralUsd, TradeSide.Short,
-          rates.maintenanceMarginRate, rates.closeFeeRate,
-        );
-
-        // Sanity checks: long liq < entry, short liq > entry
-        if (cliLiqLong <= 0 || cliLiqLong >= entryPrice) {
-          return { label: 'Liquidation engine', ok: false, detail: '', error: `Long liq price ${cliLiqLong} invalid for entry ${entryPrice}` };
-        }
-        if (cliLiqShort <= entryPrice) {
-          return { label: 'Liquidation engine', ok: false, detail: '', error: `Short liq price ${cliLiqShort} invalid for entry ${entryPrice}` };
-        }
-
-        // Verify symmetry: |longDist - shortDist| should be ~0
-        const longDist = entryPrice - cliLiqLong;
-        const shortDist = cliLiqShort - entryPrice;
-        if (Math.abs(longDist - shortDist) > 0.001) {
-          return { label: 'Liquidation engine', ok: false, detail: '', error: `Asymmetric liq distances: long=${longDist.toFixed(4)}, short=${shortDist.toFixed(4)}` };
-        }
-
-        // If live mode with SDK, compare against SDK helper
-        const divStatus = isDivergenceOk() ? 'aligned' : 'divergence detected';
-        return { label: 'Liquidation engine', ok: isDivergenceOk(), detail: `${divStatus} (long liq=$${cliLiqLong.toFixed(2)}, short liq=$${cliLiqShort.toFixed(2)})` };
-      } catch (err: unknown) {
-        return { label: 'Liquidation engine', ok: false, detail: '', error: getErrorMessage(err) };
-      }
-    };
-
-    // ── 6. Protocol Parameter Validation ──
-    const validateProtocolParameters = async (): Promise<CheckResult> => {
-      try {
-        const { getProtocolFeeRates } = await import('../utils/protocol-fees.js');
-        const perpClient = this.config.simulationMode ? null : (this.flashClient as unknown as Partial<FlashClientInternals>).perpClient ?? null;
-        const violations: string[] = [];
-
-        for (const mkt of ['SOL', 'BTC', 'ETH']) {
-          const rates = await getProtocolFeeRates(mkt, perpClient);
-          if (rates.maxLeverage <= 0) violations.push(`${mkt}: maxLeverage=${rates.maxLeverage}`);
-          if (rates.maintenanceMarginRate >= 1) violations.push(`${mkt}: margin≥100%`);
-          if (rates.openFeeRate < 0) violations.push(`${mkt}: negative openFee`);
-          if (rates.closeFeeRate < 0) violations.push(`${mkt}: negative closeFee`);
-        }
-
-        if (violations.length > 0) {
-          return { label: 'Protocol parameters', ok: false, detail: '', error: violations.join('; ') };
-        }
-        return { label: 'Protocol parameters', ok: true, detail: 'valid' };
-      } catch (err: unknown) {
-        return { label: 'Protocol parameters', ok: false, detail: '', error: getErrorMessage(err) };
-      }
-    };
-
-    // ── Run all checks in parallel ──
-    const results = await Promise.all([
-      checkRpcHealth(),
-      checkOracleHealth(),
-      validateCustodyAccounts(),
-      verifyFeeEngine(),
-      verifyLiquidationEngine(),
-      validateProtocolParameters(),
-    ]);
-
-    // ── Display results ──
-    let allOk = true;
-    for (const r of results) {
-      if (r.ok) {
-        console.log(chalk.green(`  ✓ ${r.label} ${r.detail}`));
-      } else {
-        allOk = false;
-        console.log(chalk.red(`  ✗ ${r.label} failed`));
-        if (r.error) {
-          console.log(chalk.dim(`    ${r.error}`));
-        }
-      }
-    }
-
-    console.log('');
-    const elapsed = Date.now() - startTime;
-    if (allOk) {
-      console.log(chalk.green(`  System Status: HEALTHY`));
-    } else {
-      console.log(chalk.red(`  System Status: DEGRADED`));
-    }
-    console.log(theme.dim(`  Completed in ${elapsed}ms`));
-    console.log('');
+    return protocolVerifyView(this.getProtocolViewDeps());
   }
 
   private async handleSourceVerify(market: string): Promise<void> {
-    const upper = market.toUpperCase();
-
-    console.log('');
-    console.log(`  ${theme.accentBold('DATA PROVENANCE VERIFICATION')}  ${theme.dim(`— ${upper}`)}`);
-    console.log(`  ${theme.separator(50)}`);
-
-    const checks: string[] = [];
-    let allOk = true;
-
-    // ── Section 1: Price Source ──
-    console.log(theme.titleBlock('Price Source'));
-    try {
-      const { PriceService } = await import('../data/prices.js');
-      const priceSvc = new PriceService();
-
-      const priceData = await priceSvc.getPrice(upper);
-      if (priceData && Number.isFinite(priceData.price) && priceData.price > 0) {
-        // Fetch raw Pyth data for confidence interval
-        let confidence = 'N/A';
-        let publishSlot = 'N/A';
-        const { getPythFeedId } = await import('../data/prices.js');
-        const feedId = getPythFeedId(upper) ?? 'N/A';
-
-        try {
-          if (feedId === 'N/A') throw new Error('No feed ID');
-          const rawUrl = `https://hermes.pyth.network/v2/updates/price/latest?ids[]=${encodeURIComponent(feedId)}&parsed=true`;
-          const controller = new AbortController();
-          const timeout = setTimeout(() => controller.abort(), 5000);
-          try {
-            const res = await fetch(rawUrl, { signal: controller.signal, headers: { Accept: 'application/json' } });
-            if (res.ok) {
-              const raw = await res.json() as { parsed?: Array<{ price: { price: string; expo: number; publish_time: number; conf: string } }> };
-              const entry = raw.parsed?.[0];
-              if (entry) {
-                const price = parseInt(entry.price.price, 10) * Math.pow(10, entry.price.expo);
-                const conf = parseInt(entry.price.conf ?? '0', 10) * Math.pow(10, entry.price.expo);
-                if (Number.isFinite(price) && price > 0 && Number.isFinite(conf)) {
-                  confidence = `${((conf / price) * 100).toFixed(4)}%`;
-                }
-                publishSlot = entry.price.publish_time ? String(entry.price.publish_time) : 'N/A';
-              }
-            }
-          } finally {
-            clearTimeout(timeout);
-          }
-        } catch {
-          // Raw fetch failed — non-critical
-        }
-
-        console.log(theme.pair('Oracle', 'Pyth Hermes'));
-        console.log(theme.pair('Feed', `${upper}/USD`));
-        console.log(theme.pair('Price', `$${priceData.price.toFixed(4)}`));
-        console.log(theme.pair('Publish Time', publishSlot));
-        console.log(theme.pair('Confidence', confidence));
-        console.log(theme.pair('Endpoint', 'hermes.pyth.network'));
-        checks.push('Oracle price verified');
-      } else {
-        console.log(chalk.red(`  Failed to fetch price for ${upper}`));
-        allOk = false;
-      }
-    } catch (err: unknown) {
-      console.log(chalk.red(`  Price fetch error: ${getErrorMessage(err)}`));
-      allOk = false;
-    }
-
-    // ── Section 2: Protocol Fee Source ──
-    console.log(theme.titleBlock('Protocol Fees'));
-    try {
-      const { getProtocolFeeRates } = await import('../utils/protocol-fees.js');
-      const perpClient = this.config.simulationMode ? null : (this.flashClient as unknown as Partial<FlashClientInternals>).perpClient ?? null;
-      const rates = await getProtocolFeeRates(upper, perpClient);
-
-      // Get custody account address
-      let custodyAddress = 'N/A';
-      try {
-        const { PoolConfig } = await import('flash-sdk');
-        const { getPoolForMarket } = await import('../config/index.js');
-        const poolName = getPoolForMarket(upper);
-        if (poolName) {
-          const pc = PoolConfig.fromIdsByName(poolName, 'mainnet-beta');
-          const custodies = pc.custodies as PoolCustodyConfig[];
-          const custody = custodies.find(c => c.symbol.toUpperCase() === upper);
-          if (custody) {
-            custodyAddress = custody.custodyAccount.toString();
-          }
-        }
-      } catch {
-        // Non-critical — address display only
-      }
-
-      console.log(theme.pair('CustodyAccount', custodyAddress));
-      console.log(theme.pair('Open Fee', `${(rates.openFeeRate * 100).toFixed(4)}%`));
-      console.log(theme.pair('Close Fee', `${(rates.closeFeeRate * 100).toFixed(4)}%`));
-      console.log(theme.pair('Max Leverage', `${rates.maxLeverage}x`));
-      console.log(theme.pair('Source', rates.source === 'on-chain'
-        ? theme.positive('On-chain protocol data')
-        : theme.warning('SDK defaults (simulation mode)')));
-      checks.push('Protocol fees ' + (rates.source === 'on-chain' ? 'on-chain' : 'sdk-default'));
-    } catch (err: unknown) {
-      console.log(chalk.red(`  Fee fetch error: ${getErrorMessage(err)}`));
-      allOk = false;
-    }
-
-    // ── Section 3: Position Data Source ──
-    console.log(theme.titleBlock('Position Data'));
-    const { FLASH_PROGRAM_ID } = await import('../config/index.js');
-    if (this.config.simulationMode) {
-      console.log(theme.pair('Source', 'SimulatedFlashClient'));
-      console.log(theme.pair('Method', 'In-memory SimulationState'));
-      console.log(theme.pair('Account Type', 'N/A (simulation)'));
-      console.log(theme.pair('Program', theme.dim(FLASH_PROGRAM_ID)));
-      checks.push('Positions from simulation state');
-    } else {
-      console.log(theme.pair('Source', 'Flash SDK'));
-      console.log(theme.pair('Method', 'perpClient.getPositions()'));
-      console.log(theme.pair('Account Type', 'UserPosition PDA'));
-      console.log(theme.pair('Program', theme.accent(FLASH_PROGRAM_ID)));
-      checks.push('Positions from protocol accounts');
-    }
-
-    // ── Section 4: Liquidation Engine ──
-    console.log(theme.titleBlock('Liquidation Engine'));
-    if (this.config.simulationMode) {
-      console.log(theme.pair('Calculation', 'CLI formula'));
-      console.log(theme.pair('Method', 'computeSimulationLiquidationPrice()'));
-      console.log(theme.pair('Parameters', 'SDK-default fee rates'));
-      checks.push('Simulation liquidation engine');
-    } else {
-      console.log(theme.pair('Calculation', 'SDK helper'));
-      console.log(theme.pair('Method', 'getLiquidationPriceContractHelper()'));
-      console.log(theme.pair('Parameters', 'CustodyAccount pricing data'));
-      console.log(theme.pair('Divergence Check', 'Enabled (0.5% threshold)'));
-      checks.push('SDK liquidation engine');
-    }
-
-    // ── Section 5: Analytics Data ──
-    console.log(theme.titleBlock('Analytics Data'));
-    const { FSTATS_BASE_URL } = await import('../config/index.js');
-    console.log(theme.pair('Open Interest', 'fstats API'));
-    console.log(theme.pair('Endpoint', '/positions/open-interest'));
-    console.log(theme.pair('Volume Data', '/volume/daily'));
-    console.log(theme.pair('Base URL', FSTATS_BASE_URL));
-
-    // Verify fstats is reachable
-    try {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 5000);
-      try {
-        const res = await fetch(`${FSTATS_BASE_URL}/overview/stats?period=7d`, {
-          signal: controller.signal,
-          headers: { Accept: 'application/json' },
-        });
-        if (res.ok) {
-          console.log(theme.pair('Status', theme.positive('Reachable')));
-          checks.push('Analytics from external API');
-        } else {
-          console.log(theme.pair('Status', theme.warning(`HTTP ${res.status}`)));
-          allOk = false;
-        }
-      } finally {
-        clearTimeout(timeout);
-      }
-    } catch {
-      console.log(theme.pair('Status', theme.negative('Unreachable')));
-      allOk = false;
-    }
-
-    // ── Section 6: Verification Summary ──
-    console.log(theme.titleBlock('Verification'));
-    for (const check of checks) {
-      console.log(chalk.green(`  ✓ ${check}`));
-    }
-    if (!allOk) {
-      console.log(chalk.yellow(`  ! Some checks could not be completed`));
-    }
-
-    console.log('');
-    console.log(theme.dim(`  Mode: ${this.config.simulationMode ? 'Simulation' : 'Live'}`));
-    console.log('');
+    return sourceVerifyView(this.getProtocolViewDeps(), market);
   }
 
   private async handlePositionDebug(market: string): Promise<void> {
-    const upper = market.toUpperCase();
-
-    // Fetch protocol fee rates for liquidation calculations
-    const { getProtocolFeeRates } = await import('../utils/protocol-fees.js');
-    const debugFeeRates = await getProtocolFeeRates(upper, null);
-
-    // ─── 1. Fetch position ──────────────────────────────────────────
-    let positions: Position[];
-    try {
-      positions = await this.flashClient.getPositions();
-    } catch (e: unknown) {
-      console.log(chalk.red(`  Failed to fetch positions: ${getErrorMessage(e)}`));
-      return;
-    }
-
-    const pos = positions.find(p => p.market.toUpperCase() === upper);
-    if (!pos) {
-      console.log('');
-      console.log(chalk.yellow(`  No open position found for ${upper}`));
-      console.log(chalk.dim(`  Open one with: open 5x long ${upper} $100`));
-      console.log('');
-      return;
-    }
-
-    // ─── 2. Load protocol parameters (live mode only) ──────────────
-    let openFeePct = 0;
-    let closeFeePct = 0;
-    let maintenanceMarginPct = 0;
-    let maxLeverage = 0;
-    let protocolParamsAvailable = false;
-    const RATE_POWER = 1_000_000_000; // Flash SDK RATE_DECIMALS = 9
-
-    // SDK objects retained for collateral scenario calculations
-    // These use Record<string, unknown> because they hold opaque SDK objects
-    // passed back to SDK methods (getLiquidationPriceContractHelper, PositionAccount.from).
-    let sdkCustodyAcct: CustodyAccountWithPricing | null = null;
-    let sdkEntryOraclePrice: unknown = null;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- opaque SDK position object passed back to SDK methods
-    let sdkRawPosition: any = null;
-    let sdkSide: unknown = null;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK PerpetualsClient passed to getLiquidationPriceContractHelper
-    let sdkPerpClient: any = null;
-
-    if (!this.config.simulationMode) {
-      try {
-        const {
-          PoolConfig: SDKPoolConfig,
-          CustodyAccount: SDKCustodyAccount,
-          OraclePrice: SDKOraclePrice,
-          Side: SDKSide,
-          BN_ZERO: SDK_BN_ZERO,
-        } = await import('flash-sdk');
-        const BN = (await import('bn.js')).default;
-        const { getPoolForMarket } = await import('../config/index.js');
-        const poolName = getPoolForMarket(upper);
-        if (poolName) {
-          const pc = SDKPoolConfig.fromIdsByName(poolName, this.config.network);
-          const custodies = pc.custodies as PoolCustodyConfig[];
-          const tokens = pc.tokens as PoolTokenConfig[];
-          const targetToken = tokens.find(t => t.symbol.toUpperCase() === upper);
-          const perpClient = (this.flashClient as unknown as Partial<FlashClientInternals>).perpClient;
-
-          if (targetToken && perpClient) {
-            sdkPerpClient = perpClient;
-            const custodyInfo = custodies.find(c => c.symbol === targetToken.symbol);
-            if (custodyInfo) {
-              // Fetch on-chain custody account for fee and margin data
-              const custodyData = await perpClient.program?.account?.custody?.fetch(custodyInfo.custodyAccount);
-              if (custodyData) {
-                const custodyAcct = SDKCustodyAccount.from(custodyInfo.custodyAccount, custodyData);
-                sdkCustodyAcct = custodyAcct;
-                openFeePct = parseFloat(custodyAcct.fees.openPosition.toString()) / RATE_POWER * 100;
-                closeFeePct = parseFloat(custodyAcct.fees.closePosition.toString()) / RATE_POWER * 100;
-                // Maintenance margin from pricing params.
-                // pricing.maxLeverage is a u32 in BPS units (e.g. 10000000 = 1000x leverage).
-                // SDK formula: liabilities = sizeUsd * BPS_POWER / maxLeverage
-                // Human max leverage = maxLeverage / BPS_POWER
-                // Maintenance margin % = BPS_POWER / maxLeverage * 100
-                const BPS_POWER = 10_000;
-                const rawMaxLev = (custodyAcct as unknown as CustodyAccountWithPricing).pricing?.maxLeverage;
-                const rawNum = typeof rawMaxLev === 'object' && rawMaxLev?.toNumber
-                  ? rawMaxLev.toNumber()
-                  : typeof rawMaxLev === 'number' ? rawMaxLev : 0;
-                if (Number.isFinite(rawNum) && rawNum > 0) {
-                  const humanMaxLev = rawNum / BPS_POWER;
-                  if (humanMaxLev > 0 && humanMaxLev <= 2000) {
-                    maxLeverage = humanMaxLev;
-                    maintenanceMarginPct = (BPS_POWER / rawNum) * 100;
-                  }
-                }
-                protocolParamsAvailable = true;
-              }
-            }
-
-            // Fetch raw position for SDK liquidation math in collateral scenarios
-            const markets = pc.markets as PoolMarketConfig[];
-            const positionSide = pos.side === TradeSide.Long ? SDKSide.Long : SDKSide.Short;
-            sdkSide = positionSide;
-            const marketConfig = markets.find(
-              m => m.targetMint.equals(targetToken.mintKey) && m.side === positionSide,
-            );
-
-            if (marketConfig && perpClient.program?.account?.position) {
-              try {
-                const wallet = (this.flashClient as unknown as Partial<FlashClientInternals>).wallet?.publicKey;
-                if (wallet) {
-                  const allPositions = await perpClient.program.account.position.all([
-                    { memcmp: { offset: 8, bytes: wallet.toBase58() } },
-                  ]);
-                  // Find the raw position matching this market/side
-                  for (const rawPos of allPositions) {
-                    const raw = rawPos.account;
-                    if (raw.market?.equals?.(marketConfig.marketAccount)) {
-                      sdkRawPosition = { ...raw, pubkey: rawPos.publicKey };
-                      // Build entry oracle price from raw position
-                      if (raw.entryPrice && typeof raw.entryPrice === 'object' && 'price' in raw.entryPrice && 'exponent' in raw.entryPrice) {
-                        sdkEntryOraclePrice = SDKOraclePrice.from({
-                          price: raw.entryPrice.price,
-                          exponent: new BN(String(raw.entryPrice.exponent)),
-                          confidence: SDK_BN_ZERO,
-                          timestamp: SDK_BN_ZERO,
-                        });
-                      }
-                      break;
-                    }
-                  }
-                }
-              } catch {
-                // Non-critical: raw position fetch failed, collateral scenarios will fall back
-              }
-            }
-          }
-        }
-      } catch {
-        // Protocol params unavailable — proceed with position data only
-      }
-    }
-
-    // Fallback max leverage from config
-    if (maxLeverage === 0) {
-      const { getMaxLeverage: getMaxLev } = await import('../config/index.js');
-      maxLeverage = getMaxLev(upper, false);
-      if (maintenanceMarginPct === 0 && maxLeverage > 0) {
-        maintenanceMarginPct = (1 / maxLeverage) * 100;
-      }
-    }
-
-    // SDK-exact collateral scenarios available when all raw data is loaded
-    const canUseSDK = !!(sdkPerpClient && sdkCustodyAcct && sdkEntryOraclePrice && sdkRawPosition && sdkSide !== null);
-
-    // ─── 3. Derived values ──────────────────────────────────────────
-    const distToLiq = pos.liquidationPrice > 0 && pos.currentPrice > 0
-      ? Math.abs(pos.currentPrice - pos.liquidationPrice) / pos.currentPrice * 100
-      : 0;
-
-    const pnlPct = pos.collateralUsd > 0 ? (pos.unrealizedPnl / pos.collateralUsd) * 100 : 0;
-    const sideLabel = pos.side === TradeSide.Long ? 'Long' : 'Short';
-
-    // ─── 4. Render position debug ───────────────────────────────────
-    const lines: string[] = [''];
-    const sec = theme.section;
-    const pair = theme.pair;
-    const dim = theme.dim;
-    const sep = theme.separator;
-
-    lines.push(`  ${theme.accentBold(`Position Debug — ${upper} ${sideLabel}`)}`);
-    lines.push(`  ${sep(44)}`);
-    lines.push('');
-
-    // Position structure
-    lines.push(`  ${sec('Position')}`);
-    lines.push(pair('Size', formatUsd(pos.sizeUsd)));
-    lines.push(pair('Collateral', formatUsd(pos.collateralUsd)));
-    lines.push(pair('Entry Price', formatPrice(pos.entryPrice)));
-    lines.push(pair('Current Price', formatPrice(pos.currentPrice)));
-    lines.push(pair('Leverage', `${pos.leverage.toFixed(2)}x`));
-    lines.push('');
-
-    // PnL
-    lines.push(`  ${sec('PnL')}`);
-    lines.push(pair('Unrealized PnL', colorPnl(pos.unrealizedPnl)));
-    lines.push(pair('PnL %', `${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}%`));
-    lines.push('');
-
-    // Margin & liquidation
-    lines.push(`  ${sec('Margin & Liquidation')}`);
-    if (maintenanceMarginPct > 0) {
-      lines.push(pair('Maint. Margin', `${maintenanceMarginPct.toFixed(2)}%`));
-    }
-    if (maxLeverage > 0) {
-      lines.push(pair('Max Leverage', `${maxLeverage}x`));
-    }
-    if (pos.liquidationPrice > 0) {
-      lines.push(pair('Liquidation Price', chalk.yellow(formatPrice(pos.liquidationPrice))));
-      lines.push(pair('Distance to Liq', `${distToLiq.toFixed(1)}%`));
-    } else {
-      lines.push(pair('Liquidation Price', dim('Unavailable')));
-    }
-    lines.push('');
-
-    // Fees (from protocol)
-    lines.push(`  ${sec('Fees')}`);
-    if (protocolParamsAvailable) {
-      lines.push(pair('Open Fee Rate', `${openFeePct.toFixed(4)}%`));
-      lines.push(pair('Close Fee Rate', `${closeFeePct.toFixed(4)}%`));
-    }
-    lines.push(pair('Unsettled Fees', formatUsd(pos.totalFees)));
-    lines.push('');
-
-    // ─── 5. Price impact scenarios ──────────────────────────────────
-    lines.push(`  ${sec('What If Scenarios')}`);
-    lines.push(`  ${sep(44)}`);
-    lines.push('');
-
-    const scenarios = [-15, -10, -5, 5, 10, 15];
-    for (const pctMove of scenarios) {
-      const simPrice = pos.currentPrice * (1 + pctMove / 100);
-      const priceDelta = simPrice - pos.entryPrice;
-      const mult = pos.side === TradeSide.Long ? 1 : -1;
-      const simPnl = pos.entryPrice > 0 ? (priceDelta / pos.entryPrice) * pos.sizeUsd * mult : 0;
-
-      // Check if this scenario would be liquidated
-      const isLiquidated = pos.liquidationPrice > 0 && (
-        (pos.side === TradeSide.Long && simPrice <= pos.liquidationPrice) ||
-        (pos.side === TradeSide.Short && simPrice >= pos.liquidationPrice)
-      );
-
-      if (isLiquidated) {
-        const _liqDistAtScenario = Math.abs(simPrice - pos.liquidationPrice) / simPrice * 100;
-        lines.push(`  Price ${pctMove > 0 ? '+' : ''}${pctMove}%     → ${chalk.red('LIQUIDATED')}`);
-      } else {
-        const scenarioLiqDist = pos.liquidationPrice > 0
-          ? Math.abs(simPrice - pos.liquidationPrice) / simPrice * 100
-          : 0;
-        // Pad the raw PnL string BEFORE colorizing to avoid ANSI codes breaking alignment
-        const rawPnl = simPnl >= 0 ? `$${simPnl.toFixed(2)}` : `-$${Math.abs(simPnl).toFixed(2)}`;
-        const paddedPnl = rawPnl.padEnd(12);
-        const pnlStr = simPnl >= 0 ? chalk.green(paddedPnl) : chalk.red(paddedPnl);
-        const liqStr = scenarioLiqDist > 0 ? `Liq Distance: ${scenarioLiqDist.toFixed(1)}%` : '';
-        lines.push(`  Price ${(pctMove > 0 ? '+' : '') + pctMove + '%'}${' '.repeat(Math.max(1, 6 - String(pctMove).length))} → PnL: ${pnlStr}  ${liqStr}`);
-      }
-    }
-    lines.push('');
-
-    // ─── 6. Collateral adjustment simulation ────────────────────────
-    if (pos.liquidationPrice > 0) {
-      lines.push(`  ${sec('Add Collateral Scenarios')}`);
-      lines.push(`  ${sep(44)}`);
-      lines.push('');
-
-      const addAmounts = [50, 100, 200, 500];
-      const USD_DECIMALS = 6;
-
-      for (const addAmt of addAmounts) {
-        const newCollateral = pos.collateralUsd + addAmt;
-        const newLeverage = pos.sizeUsd / newCollateral;
-
-        if (canUseSDK && sdkRawPosition && sdkPerpClient) {
-          // SDK-exact: clone raw position with increased collateral, compute exact liq price
-          try {
-            const BN = (await import('bn.js')).default;
-            const { PositionAccount: SDKPositionAccount } = await import('flash-sdk');
-            const addBN = new BN(Math.round(addAmt * Math.pow(10, USD_DECIMALS)));
-            const newCollateralBN = sdkRawPosition.collateralUsd.add(addBN);
-            // Create modified position with increased collateral
-            const modifiedRaw = { ...sdkRawPosition, collateralUsd: newCollateralBN };
-            const modPosAcct = SDKPositionAccount.from(
-              sdkRawPosition.pubkey,
-              modifiedRaw as unknown as ConstructorParameters<typeof SDKPositionAccount>[1],
-            );
-            const unsettledFees = sdkRawPosition.unsettledFeesUsd ?? new BN(0);
-            const liqOraclePrice = sdkPerpClient.getLiquidationPriceContractHelper(
-              sdkEntryOraclePrice, unsettledFees, sdkSide, sdkCustodyAcct, modPosAcct,
-            );
-            const liqUi = parseFloat(liqOraclePrice.toUiPrice(8));
-            if (Number.isFinite(liqUi) && liqUi > 0) {
-              lines.push(`  Add ${formatUsd(addAmt).padEnd(8)} → Liq Price: ${chalk.yellow(formatPrice(liqUi))}  (${newLeverage.toFixed(1)}x leverage)`);
-              continue;
-            }
-          } catch {
-            // Fall through to approximation
-          }
-        }
-
-        // Fallback: use protocol-aligned formula (matches getLiquidationPriceContractHelper)
-        if (newLeverage < 1) {
-          // Fully collateralized — collateral exceeds position size, no liquidation risk
-          lines.push(`  Add ${formatUsd(addAmt).padEnd(8)} → ${chalk.green('Liquidation: None')}  ${dim(`(fully collateralized, ${newLeverage.toFixed(2)}x effective leverage)`)}`);
-        } else if (pos.sizeUsd > 0 && pos.entryPrice > 0) {
-          const fallbackLiqPrice = computeSimulationLiquidationPrice(
-            pos.entryPrice, pos.sizeUsd, newCollateral, pos.side, debugFeeRates.maintenanceMarginRate, debugFeeRates.closeFeeRate,
-          );
-          if (Number.isFinite(fallbackLiqPrice) && fallbackLiqPrice > 0) {
-            lines.push(`  Add ${formatUsd(addAmt).padEnd(8)} → Liq Price: ${chalk.yellow(formatPrice(fallbackLiqPrice))}  (${newLeverage.toFixed(1)}x leverage)`);
-          }
-        }
-      }
-      lines.push('');
-    }
-
-    // ─── 7. Reduce position size scenarios ──────────────────────────
-    if (pos.liquidationPrice > 0 && pos.leverage > 1 && pos.collateralUsd > 0) {
-      // Generate leverage targets below current, down to 1x
-      // For fractional leverage (e.g. 1.33x), start from floor and include 1x
-      const targetLeverages: number[] = [];
-      // If leverage > 2, show integer steps down
-      for (let lev = Math.floor(pos.leverage) - 1; lev >= 1 && targetLeverages.length < 4; lev--) {
-        targetLeverages.push(lev);
-      }
-      // If current leverage is fractional and > 1 but < 2, show 1x explicitly
-      if (targetLeverages.length === 0 && pos.leverage > 1) {
-        targetLeverages.push(1);
-      }
-
-      if (targetLeverages.length > 0) {
-        lines.push(`  ${sec('Reduce Position Size')}`);
-        lines.push(`  ${sep(44)}`);
-        lines.push('');
-
-        const USD_DECIMALS_SIZE = 6;
-
-        for (const targetLev of targetLeverages) {
-          const newSizeUsd = pos.collateralUsd * targetLev;
-
-          if (canUseSDK && sdkRawPosition && sdkPerpClient) {
-            // SDK-exact: clone raw position with reduced sizeUsd, compute exact liq price
-            try {
-              const BN = (await import('bn.js')).default;
-              const { PositionAccount: SDKPositionAccount } = await import('flash-sdk');
-              const newSizeBN = new BN(Math.round(newSizeUsd * Math.pow(10, USD_DECIMALS_SIZE)));
-              const modifiedRaw = { ...sdkRawPosition, sizeUsd: newSizeBN };
-              const modPosAcct = SDKPositionAccount.from(
-                sdkRawPosition.pubkey,
-                modifiedRaw as unknown as ConstructorParameters<typeof SDKPositionAccount>[1],
-              );
-              const unsettledFees = sdkRawPosition.unsettledFeesUsd ?? new BN(0);
-              const liqOraclePrice = sdkPerpClient.getLiquidationPriceContractHelper(
-                sdkEntryOraclePrice, unsettledFees, sdkSide, sdkCustodyAcct, modPosAcct,
-              );
-              const liqUi = parseFloat(liqOraclePrice.toUiPrice(8));
-              if (Number.isFinite(liqUi) && liqUi > 0) {
-                lines.push(`  Reduce to ${targetLev}x → Size: ${formatUsd(newSizeUsd).padEnd(10)} → Liq Price: ${chalk.yellow(formatPrice(liqUi))}`);
-                continue;
-              }
-            } catch {
-              // Fall through to approximation
-            }
-          }
-
-          // Fallback: use protocol-aligned liquidation formula
-          if (targetLev >= 1 && pos.entryPrice > 0) {
-            const fallbackLiq = computeSimulationLiquidationPrice(
-              pos.entryPrice, newSizeUsd, pos.collateralUsd, pos.side, debugFeeRates.maintenanceMarginRate, debugFeeRates.closeFeeRate,
-            );
-            if (Number.isFinite(fallbackLiq) && fallbackLiq > 0) {
-              lines.push(`  Reduce to ${targetLev}x → Size: ${formatUsd(newSizeUsd).padEnd(10)} → Liq Price: ${chalk.yellow(formatPrice(fallbackLiq))}`);
-            }
-          }
-        }
-        lines.push('');
-      }
-    }
-
-    // ─── 8. Data source labels ──────────────────────────────────────
-    lines.push(`  ${sep(44)}`);
-    lines.push(dim(`  Price Source:       Pyth Hermes`));
-    const sdkLabel = canUseSDK ? ' (on-chain CustodyAccount + getLiquidationPriceContractHelper)' : protocolParamsAvailable ? ' (on-chain CustodyAccount)' : '';
-    lines.push(dim(`  Liquidation Math:  Flash SDK${sdkLabel}`));
-    lines.push(dim(`  Position Data:     ${this.config.simulationMode ? 'Simulation' : 'Flash SDK perpClient.getUserPositions()'}`));
-    lines.push('');
-
-    console.log(lines.join('\n'));
+    return positionDebugView(this.getProtocolViewDeps(), market);
   }
 
   /**
@@ -4110,45 +2371,7 @@ export class FlashTerminal {
    * Used by watch mode and dry-run to parse commands without executing them.
    */
   private async resolveIntent(input: string): Promise<ParsedIntent> {
-    const lower = input.toLowerCase();
-    const fastIntent = FAST_DISPATCH[lower];
-
-    if (fastIntent) return fastIntent;
-
-    // Analytics commands with market argument — ensure alias resolution
-    if (lower.startsWith('analyze ') || lower.startsWith('analyse ')) {
-      const prefix = lower.startsWith('analyze ') ? 'analyze ' : 'analyse ';
-      const market = resolveMarketAlias(input.slice(prefix.length).trim());
-      return { action: ActionType.Analyze, market } as ParsedIntent;
-    }
-    if (lower.startsWith('liquidations ') || lower.startsWith('liquidation ')) {
-      const prefix = lower.startsWith('liquidations ') ? 'liquidations ' : 'liquidation ';
-      const market = resolveMarketAlias(input.slice(prefix.length).trim());
-      return { action: ActionType.LiquidationMap, market } as ParsedIntent;
-    }
-    if (lower.startsWith('funding ')) {
-      const market = resolveMarketAlias(input.slice('funding '.length).trim());
-      return { action: ActionType.FundingDashboard, market } as ParsedIntent;
-    }
-    if (lower.startsWith('depth ')) {
-      const market = resolveMarketAlias(input.slice('depth '.length).trim());
-      return { action: ActionType.LiquidityDepth, market } as ParsedIntent;
-    }
-
-    if (lower.startsWith('inspect pool ')) {
-      const pool = input.slice('inspect pool '.length).trim();
-      return { action: ActionType.InspectPool, pool } as ParsedIntent;
-    }
-
-    if (lower.startsWith('inspect market ') || (lower.startsWith('inspect ') && !lower.startsWith('inspect pool ') && !lower.startsWith('inspect protocol') && lower !== 'inspect')) {
-      const prefix = lower.startsWith('inspect market ') ? 'inspect market ' : 'inspect ';
-      const rawMarket = input.slice(prefix.length).trim();
-      const market = resolveMarketAlias(rawMarket);
-      return { action: ActionType.InspectMarket, market } as ParsedIntent;
-    }
-
-    // Fall through to interpreter
-    return this.interpreter.parseIntent(input);
+    return resolveIntentExtracted(this.dryRunDeps(), input);
   }
 
   /**
@@ -4157,222 +2380,16 @@ export class FlashTerminal {
    * SAFETY: No transaction is ever signed or sent.
    */
   private async handleDryRun(innerCommand: string): Promise<void> {
-    // Pre-normalize natural language patterns into structured format:
-    //   "sol long 5x $100"           → "open 5x long SOL $100"
-    //   "sol short 3x 200"           → "open 3x short SOL $200"
-    //   "open sol long 10x for $50"  → "open 10x long SOL $50"
-    //   "btc short 5x 100 dollars"   → "open 5x short BTC $100"
-    const normalizedCommand = this.normalizeDryRunCommand(innerCommand);
-
-    // Parse the inner command using the interpreter
-    process.stdout.write(chalk.dim('  Parsing inner command...\r'));
-    let innerIntent: ParsedIntent;
-    try {
-      innerIntent = await withTimeout(
-        this.interpreter.parseIntent(normalizedCommand),
-        COMMAND_TIMEOUT_MS,
-        'dryrun-parse',
-      );
-      process.stdout.write('                           \r');
-    } catch (error: unknown) {
-      console.log(chalk.red(`  Failed to parse inner command: ${getErrorMessage(error)}`));
-      return;
-    }
-
-    // Only trade actions are supported for dry-run
-    if (innerIntent.action !== ActionType.OpenPosition) {
-      console.log('');
-      console.log(chalk.yellow('  Dry run currently supports open position commands only.'));
-      console.log('');
-      console.log(chalk.dim('  Usage:'));
-      console.log(chalk.dim('    dryrun open 2x long SOL $10'));
-      console.log(chalk.dim('    dryrun open 5x short BTC $100'));
-      console.log(chalk.dim('    dryrun sol long 5x $100'));
-      console.log(chalk.dim('    dryrun btc short 3x 200 dollars'));
-      console.log('');
-      return;
-    }
-
-    if (innerIntent.action !== ActionType.OpenPosition) return;
-    const { market, side, collateral, leverage, collateral_token } = innerIntent;
-
-    // Check if virtual market is currently open before building preview
-    const { getMarketStatus, formatMarketClosedMessage } = await import('../data/market-hours.js');
-    const mktStatus = getMarketStatus(market);
-    if (!mktStatus.isOpen) {
-      console.log(chalk.yellow(formatMarketClosedMessage(market)));
-      return;
-    }
-
-    process.stdout.write(chalk.dim('  Building transaction preview...\r'));
-
-    try {
-      if (!this.flashClient.previewOpenPosition) {
-        console.log(chalk.red('  Dry run not available for this client.'));
-        return;
-      }
-
-      const preview = await withTimeout(
-        this.flashClient.previewOpenPosition(market, side, collateral, leverage, collateral_token),
-        COMMAND_TIMEOUT_MS,
-        'dryrun-preview',
-      );
-      process.stdout.write('                                   \r');
-      this.renderDryRunPreview(preview);
-    } catch (error: unknown) {
-      process.stdout.write('                                   \r');
-      const errMsg = getErrorMessage(error);
-      const humanized = humanizeSdkError(errMsg, collateral, leverage);
-      console.log(chalk.red(`  Dry run failed: ${humanized}`));
-    }
+    return handleDryRunExtracted(this.dryRunDeps(), innerCommand);
   }
 
-  /**
-   * Normalize natural language dryrun input into structured command.
-   * Accepts patterns like:
-   *   "sol long 5x $100"  "btc short 3x 200 dollars"  "open sol long 10x for $50"
-   * Normalizes to: "open <leverage>x <side> <asset> $<amount>"
-   */
-  private normalizeDryRunCommand(raw: string): string {
-    const lower = raw.toLowerCase().trim();
-
-    // Strip leading "open" if present — we'll re-add it
-    const stripped = lower.replace(/^open\s+/, '');
-
-    // Extract components using flexible regex
-    // Side: long or short
-    const sideMatch = stripped.match(/\b(long|short)\b/);
-    // Leverage: NNx or NNX
-    const levMatch = stripped.match(/\b(\d+(?:\.\d+)?)\s*x\b/i);
-    // Amount: $NN, NN dollars, NN bucks, for NN, or bare number at end
-    const amountMatch = stripped.match(/\$\s*(\d+(?:\.\d+)?)/) ||
-      stripped.match(/(\d+(?:\.\d+)?)\s*(?:dollars?|bucks?|usd)\b/) ||
-      stripped.match(/(?:for|with)\s+\$?\s*(\d+(?:\.\d+)?)/) ||
-      stripped.match(/\b(\d+(?:\.\d+)?)\s*$/);
-    // Asset: first word that isn't a known keyword
-    const keywords = new Set(['open', 'long', 'short', 'for', 'with', 'lev', 'leverage', 'dollars', 'dollar', 'bucks', 'buck', 'usd', 'x']);
-    const words = stripped.split(/\s+/);
-    let asset = '';
-    for (const w of words) {
-      const clean = w.replace(/[^a-z0-9]/gi, '');
-      if (!clean) continue;
-      if (keywords.has(clean)) continue;
-      if (/^\d/.test(clean)) continue; // skip numbers
-      if (/^\$/.test(w)) continue; // skip dollar amounts
-      asset = clean;
-      break;
-    }
-
-    // If we have all components, build structured command
-    if (sideMatch && asset) {
-      const side = sideMatch[1];
-      const lev = levMatch ? levMatch[1] : '1';
-      const amount = amountMatch ? amountMatch[1] : '';
-
-      if (amount) {
-        return `open ${lev}x ${side} ${asset.toUpperCase()} $${amount}`;
-      }
-    }
-
-    // Fallback: prepend "open" if missing action keyword
-    const actionKeywords = ['open', 'close', 'add', 'remove', 'long', 'short'];
-    const hasAction = actionKeywords.some(k => lower.startsWith(k));
-    return hasAction ? raw : `open ${raw}`;
-  }
-
-  /** Render a dry-run transaction preview. */
-  private renderDryRunPreview(preview: DryRunPreview): void {
-    const sideColor = preview.side === TradeSide.Long ? chalk.green : chalk.red;
-    const sideStr = preview.side === TradeSide.Long ? 'LONG' : 'SHORT';
-
-    console.log('');
-    console.log(chalk.bold.cyan('  TRANSACTION PREVIEW (DRY RUN)'));
-    console.log(chalk.dim('  ────────────────────────────────────────'));
-    console.log('');
-
-    // Trade parameters
-    console.log(chalk.bold('  Trade Parameters'));
-    console.log(`    Market:         ${chalk.bold(preview.market)}`);
-    console.log(`    Side:           ${sideColor(sideStr)}`);
-    console.log(`    Collateral:     ${chalk.bold('$' + preview.collateral.toFixed(2))}`);
-    console.log(`    Leverage:       ${chalk.bold(preview.leverage + 'x')}`);
-    console.log(`    Position Size:  ${chalk.bold('$' + preview.positionSize.toFixed(2))}`);
-    console.log('');
-    console.log(`    Entry Price:    $${preview.entryPrice.toFixed(preview.entryPrice < 1 ? 6 : 2)}`);
-    console.log(`    Liq. Price:     ${chalk.red('$' + preview.liquidationPrice.toFixed(preview.liquidationPrice < 1 ? 6 : 2))}`);
-    console.log(`    Est. Fee:       $${preview.estimatedFee.toFixed(4)}`);
-
-    // Solana transaction info (live mode only)
-    if (preview.programId) {
-      console.log('');
-      console.log(chalk.dim('  ────────────────────────────────────────'));
-      console.log(chalk.bold('  Solana Transaction'));
-      console.log(`    Program:        ${chalk.dim(preview.programId)}`);
-      console.log(`    Accounts:       ${preview.accountCount}`);
-      console.log(`    Instructions:   ${preview.instructionCount}`);
-      console.log(`    Tx Size:        ${preview.transactionSize} bytes`);
-      console.log(`    CU Budget:      ${preview.estimatedComputeUnits?.toLocaleString()}`);
-    }
-
-    // Simulation results
-    if (preview.simulationSuccess !== undefined) {
-      console.log('');
-      console.log(chalk.dim('  ────────────────────────────────────────'));
-      console.log(chalk.bold('  Simulation Result'));
-
-      if (preview.simulationSuccess) {
-        console.log(`    Status:         ${chalk.green('SUCCESS')}`);
-        if (preview.simulationUnitsConsumed) {
-          console.log(`    CU Consumed:    ${preview.simulationUnitsConsumed.toLocaleString()}`);
-        }
-      } else {
-        console.log(`    Status:         ${chalk.red('FAILED')}`);
-        if (preview.simulationError) {
-          // Map raw Solana errors to human-readable explanations
-          const rawErr = preview.simulationError;
-          const isInvalidArg = rawErr.includes('InvalidArgument') || rawErr.includes('invalid program argument');
-          if (isInvalidArg) {
-            console.log(`    Error:          ${chalk.red('Protocol rejected parameters')}`);
-            console.log('');
-            console.log(chalk.dim('  Possible causes:'));
-            console.log(chalk.dim('    • Leverage exceeds market limit'));
-            console.log(chalk.dim('    • Insufficient pool liquidity'));
-            console.log(chalk.dim('    • Position size exceeds protocol limits'));
-            console.log(chalk.dim('    • Duplicate position on same market/side'));
-          } else {
-            console.log(`    Error:          ${chalk.red(humanizeSdkError(rawErr))}`);
-          }
-        }
-      }
-
-      // Show program logs (truncated)
-      if (preview.simulationLogs && preview.simulationLogs.length > 0) {
-        console.log('');
-        console.log(chalk.bold('  Program Logs'));
-        const maxLogs = 15;
-        const logs = preview.simulationLogs.slice(0, maxLogs);
-        for (const log of logs) {
-          // Highlight program invocations and errors
-          if (log.includes('invoke')) {
-            console.log(`    ${chalk.cyan(log)}`);
-          } else if (log.includes('error') || log.includes('Error') || log.includes('failed')) {
-            console.log(`    ${chalk.red(log)}`);
-          } else if (log.includes('success')) {
-            console.log(`    ${chalk.green(log)}`);
-          } else {
-            console.log(`    ${chalk.dim(log)}`);
-          }
-        }
-        if (preview.simulationLogs.length > maxLogs) {
-          console.log(chalk.dim(`    ... ${preview.simulationLogs.length - maxLogs} more log lines`));
-        }
-      }
-    }
-
-    console.log('');
-    console.log(chalk.dim('  ────────────────────────────────────────'));
-    console.log(chalk.yellow.bold('  No transaction was signed or sent.'));
-    console.log('');
+  /** Build DryRunDeps from current instance state. */
+  private dryRunDeps(): DryRunDeps {
+    return {
+      interpreter: this.interpreter,
+      flashClient: this.flashClient,
+      config: this.config,
+    };
   }
 
   // [L-11] Confirmation timeout — cancel trade if user doesn't respond within 2 minutes

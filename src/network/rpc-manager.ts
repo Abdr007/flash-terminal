@@ -444,6 +444,45 @@ export class RpcManager {
   }
 
   /**
+   * Pre-warm connections to all backup endpoints during idle time.
+   * Establishes HTTP connections by issuing a lightweight getSlot('processed') call.
+   * Fire-and-forget — logs results but never throws.
+   */
+  async warmupConnections(): Promise<void> {
+    const logger = getLogger();
+    if (this.endpoints.length <= 1) {
+      logger.debug('RPC', 'Warmup skipped — single endpoint configured');
+      return;
+    }
+
+    logger.info('RPC', `Warming up ${this.endpoints.length - 1} backup connection(s)...`);
+
+    for (const ep of this.endpoints) {
+      if (ep.url === this.activeEndpoint.url) continue;
+      try {
+        const conn = new Connection(ep.url, {
+          commitment: 'processed',
+          disableRetryOnRateLimit: true,
+          fetch: (url, options) =>
+            fetch(url, { ...options, signal: AbortSignal.timeout(HEALTH_CHECK_TIMEOUT_MS) }),
+        });
+        const start = Date.now();
+        const slot = await conn.getSlot('processed');
+        const latencyMs = Date.now() - start;
+        this.latencyHistory.set(ep.url, latencyMs);
+        if (slot !== undefined) {
+          this.slotHistory.set(ep.url, slot);
+        }
+        logger.debug('RPC', `Warmed ${ep.label}: slot=${slot}, latency=${latencyMs}ms`);
+      } catch (e: unknown) {
+        logger.debug('RPC', `Warmup failed for ${ep.label}: ${e instanceof Error ? e.message : 'unknown error'}`);
+      }
+    }
+
+    logger.info('RPC', 'Connection warmup complete');
+  }
+
+  /**
    * Stop background health monitoring.
    */
   stopMonitoring(): void {

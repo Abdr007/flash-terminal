@@ -27,6 +27,9 @@ import { getRpcManagerInstance } from '../network/rpc-manager.js';
 /** Slot polling interval — 2s balances leader awareness vs RPC rate limits */
 const SLOT_POLL_MS = 2_000;
 
+/** Faster slot polling during active trading — 1s for tighter leader awareness */
+const SLOT_POLL_ACTIVE_MS = 1_000;
+
 /** Leader schedule cache TTL — 5 min (schedule rarely changes mid-epoch) */
 const SCHEDULE_CACHE_TTL_MS = 300_000;
 
@@ -113,6 +116,9 @@ export class LeaderRouter {
   private cachedSchedule: CachedSchedule | null = null;
   private scheduleInflight: Promise<CachedSchedule | null> | null = null;
   private scheduleTimer: ReturnType<typeof setInterval> | null = null;
+
+  // Active trading mode
+  private activeTrading = false;
 
   // Metrics
   private leaderRoutedCount = 0;
@@ -480,6 +486,31 @@ export class LeaderRouter {
 
   updateConnection(connection: Connection): void {
     this.connection = connection;
+  }
+
+  /**
+   * Toggle active trading mode for adaptive slot polling.
+   * When active, polling interval is reduced to 1s for tighter leader awareness.
+   * When inactive, polling interval is restored to 2s to reduce RPC load.
+   * Safe to call from acquireTradeLock / releaseTradeLock.
+   */
+  setActiveTrading(active: boolean): void {
+    if (active === this.activeTrading) return;
+    this.activeTrading = active;
+
+    // Restart slot watcher with the new interval
+    if (this.slotTimer) {
+      clearInterval(this.slotTimer);
+      this.slotTimer = null;
+    }
+
+    const intervalMs = active ? SLOT_POLL_ACTIVE_MS : SLOT_POLL_MS;
+    this.slotTimer = setInterval(() => {
+      this.fetchSlot();
+    }, intervalMs);
+    this.slotTimer.unref();
+
+    getLogger().debug('LEADER-ROUTER', `Slot polling ${active ? 'accelerated' : 'restored'} to ${intervalMs}ms`);
   }
 
   // ─── Shutdown ──────────────────────────────────────────────────────────

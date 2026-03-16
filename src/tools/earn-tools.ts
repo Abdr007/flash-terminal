@@ -221,6 +221,10 @@ export const earnAddLiquidityTool: ToolDefinition = {
     }
     if (m?.apy7d) {
       previewLines.push(theme.pair('Est. APY', chalk.green(`~${m.apy7d.toFixed(1)}%`)));
+      const yearlyReturn = amount * m.apy7d / 100;
+      if (Number.isFinite(yearlyReturn) && yearlyReturn > 0) {
+        previewLines.push(theme.pair('Est. Yearly Return', chalk.green(`~${formatUsd(yearlyReturn)} (at current APY)`)));
+      }
     }
     previewLines.push('');
 

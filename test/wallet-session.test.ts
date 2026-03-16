@@ -168,28 +168,28 @@ describe('Idle Timer Safety', () => {
 
 describe('Wallet Reconnection Flow', () => {
   it('handleWalletReconnected updates context flashClient', () => {
-    const src = readFileSync(resolve(ROOT, 'src/cli/terminal.ts'), 'utf8');
-    assert.ok(src.includes('this.context.flashClient = this.flashClient'),
+    const src = readFileSync(resolve(ROOT, 'src/cli/wallet-flows.ts'), 'utf8');
+    assert.ok(src.includes('context.flashClient'),
       'should update context.flashClient');
   });
 
   it('handleWalletReconnected updates context walletAddress', () => {
-    const src = readFileSync(resolve(ROOT, 'src/cli/terminal.ts'), 'utf8');
-    assert.ok(src.includes("this.context.walletAddress = this.walletManager.address ?? 'unknown'"),
+    const src = readFileSync(resolve(ROOT, 'src/cli/wallet-flows.ts'), 'utf8');
+    assert.ok(src.includes("context.walletAddress = deps.walletManager.address"),
       'should update context.walletAddress');
   });
 
   it('handleWalletReconnected rebuilds ToolEngine', () => {
-    const src = readFileSync(resolve(ROOT, 'src/cli/terminal.ts'), 'utf8');
-    assert.ok(src.includes('this.engine = new ToolEngine(this.context)'),
+    const src = readFileSync(resolve(ROOT, 'src/cli/wallet-flows.ts'), 'utf8');
+    assert.ok(src.includes('new ToolEngine('),
       'should rebuild engine with updated context');
   });
 
   it('walletRebuilding mutex prevents concurrent trades', () => {
-    const src = readFileSync(resolve(ROOT, 'src/cli/terminal.ts'), 'utf8');
-    assert.ok(src.includes('this.walletRebuilding = true'),
+    const src = readFileSync(resolve(ROOT, 'src/cli/wallet-flows.ts'), 'utf8');
+    assert.ok(src.includes('walletRebuilding = true'),
       'should set mutex during rebuild');
-    assert.ok(src.includes('this.walletRebuilding = false'),
+    assert.ok(src.includes('walletRebuilding = false'),
       'should release mutex after rebuild');
   });
 });
@@ -198,7 +198,7 @@ describe('Wallet Reconnection Flow', () => {
 
 describe('Session Persistence', () => {
   it('wallet tools update context.walletAddress after connection', () => {
-    const src = readFileSync(resolve(ROOT, 'src/tools/flash-tools.ts'), 'utf8');
+    const src = readFileSync(resolve(ROOT, 'src/tools/wallet-tools.ts'), 'utf8');
     // walletImport, walletUse, walletConnect all update context
     const updates = (src.match(/context\.walletAddress\s*=/g) || []).length;
     assert.ok(updates >= 3,
@@ -206,14 +206,14 @@ describe('Session Persistence', () => {
   });
 
   it('wallet tools update context.walletName after connection', () => {
-    const src = readFileSync(resolve(ROOT, 'src/tools/flash-tools.ts'), 'utf8');
+    const src = readFileSync(resolve(ROOT, 'src/tools/wallet-tools.ts'), 'utf8');
     const updates = (src.match(/context\.walletName\s*=/g) || []).length;
     assert.ok(updates >= 3,
       `should update walletName at least 3 times, found ${updates}`);
   });
 
   it('walletConnected flag is set for wallet tools', () => {
-    const src = readFileSync(resolve(ROOT, 'src/tools/flash-tools.ts'), 'utf8');
+    const src = readFileSync(resolve(ROOT, 'src/tools/wallet-tools.ts'), 'utf8');
     assert.ok(src.includes('walletConnected: true'),
       'wallet tools should set walletConnected flag');
   });

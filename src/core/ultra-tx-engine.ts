@@ -26,6 +26,7 @@ import {
   type AddressLookupTableAccount,
 } from '@solana/web3.js';
 import { getLogger } from '../utils/logger.js';
+import { getMetrics } from '../observability/metrics.js';
 
 // Ed25519 program ID — oracle signature verification instructions must be ordered before CU budget
 const ED25519_PROGRAM_ID = 'Ed25519SigVerify111111111111111111111111111';
@@ -456,13 +457,17 @@ export class UltraTxEngine {
     let signature = '';
     let broadcastCount = 0;
 
+    const metrics = getMetrics();
+
     if (leaderRouted && connections.length > 1) {
       // Send to leader-preferred endpoint first
       try {
+        const t0 = Date.now();
         signature = await connections[0].sendRawTransaction(txBytes, {
           skipPreflight: true,
           maxRetries: 0,
         });
+        metrics.record('tx_broadcast_latency_ms', Date.now() - t0);
         broadcastCount = 1;
       } catch {
         // Leader endpoint failed — will try all remaining
@@ -471,12 +476,16 @@ export class UltraTxEngine {
       // Fan out to remaining endpoints in parallel (non-blocking)
       const remaining = connections.slice(1);
       const remainingResults = await Promise.allSettled(
-        remaining.map(conn =>
-          conn.sendRawTransaction(txBytes, {
+        remaining.map(conn => {
+          const t0 = Date.now();
+          return conn.sendRawTransaction(txBytes, {
             skipPreflight: true,
             maxRetries: 0,
-          })
-        )
+          }).then(sig => {
+            metrics.record('tx_broadcast_latency_ms', Date.now() - t0);
+            return sig;
+          });
+        })
       );
 
       for (const result of remainingResults) {
@@ -488,12 +497,16 @@ export class UltraTxEngine {
     } else {
       // Standard parallel broadcast (no leader data)
       const results = await Promise.allSettled(
-        connections.map(conn =>
-          conn.sendRawTransaction(txBytes, {
+        connections.map(conn => {
+          const t0 = Date.now();
+          return conn.sendRawTransaction(txBytes, {
             skipPreflight: true,
             maxRetries: 0,
-          })
-        )
+          }).then(sig => {
+            metrics.record('tx_broadcast_latency_ms', Date.now() - t0);
+            return sig;
+          });
+        })
       );
 
       for (const result of results) {

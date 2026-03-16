@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- Flash SDK client; transaction pipeline requires co-located methods */
 import {
   Connection,
   Keypair,
@@ -53,6 +54,7 @@ import { getUltraTxEngine, initUltraTxEngine } from '../core/ultra-tx-engine.js'
 import { initStateCache, getStateCache } from '../core/state-cache.js';
 import { initStateSnapshot } from '../core/state-snapshot.js';
 import { initTpuClient, getTpuClient } from '../network/tpu-client.js';
+import { getLeaderRouter } from '../core/leader-router.js';
 
 import { createBatch, appendToBatch, isBatchWithinLimit, batchSummary, type SdkResult } from '../transaction/instruction-aggregator.js';
 import { resolveALTs, verifyALTAccountOverlap, logMessageALTDiagnostics } from '../transaction/alt-resolver.js';
@@ -1140,10 +1142,15 @@ export class FlashClient implements IFlashClient {
       throw new Error(`A ${side} trade on ${market} is already in progress. Wait for it to complete.`);
     }
     this.activeTrades.add(key);
+    getLeaderRouter()?.setActiveTrading(true);
   }
 
   private releaseTradeLock(market: string, side: TradeSide): void {
     this.activeTrades.delete(`${market}:${side}`);
+    // Only restore polling when ALL trade locks are released
+    if (this.activeTrades.size === 0) {
+      getLeaderRouter()?.setActiveTrading(false);
+    }
   }
 
   // ─── Recent Trade Cache ──────────────────────────────────────────────────
@@ -2420,7 +2427,22 @@ export class FlashClient implements IFlashClient {
       const cuOverride = oracleIxs.length > 0 ? 450_000 : undefined;
 
 
-      const txSignature = await this.sendTx(allInstructions, result.additionalSigners, poolConfig, undefined, cuOverride);
+      let txSignature: string;
+      try {
+        txSignature = await this.sendTx(allInstructions, result.additionalSigners, poolConfig, undefined, cuOverride);
+      } catch (err: unknown) {
+        const errMsg = getErrorMessage(err);
+        // Oracle staleness — ConstraintRaw (0x7d3) means oracle data expired before TX landed
+        if (errMsg.includes('ConstraintRaw') || errMsg.includes('0x7d3')) {
+          logger.warn('ORACLE', `Limit order failed with stale oracle — retrying with fresh data`);
+          const freshOracleIxs = await this.fetchBackupOracleIxs(poolConfig);
+          const retryInstructions = [...freshOracleIxs, ...result.instructions];
+          const retryCu = freshOracleIxs.length > 0 ? 450_000 : undefined;
+          txSignature = await this.sendTx(retryInstructions, result.additionalSigners, poolConfig, undefined, retryCu);
+        } else {
+          throw err;
+        }
+      }
 
       logger.trade('LIMIT_ORDER', {
         market, side, collateral, leverage, limitPrice, tx: txSignature,

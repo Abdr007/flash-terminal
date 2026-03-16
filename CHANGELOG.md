@@ -6,6 +6,42 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.0.1] — 2026-03-16
+
+### Architecture Refinement
+
+- **CLI Modularization** — Extracted `terminal.ts` (4,418 → 2,434 lines) into 4 focused modules: `wallet-flows.ts`, `protocol-views.ts`, `market-monitor.ts`, `dryrun-handler.ts`
+- **Tool Modularization** — Split `flash-tools.ts` (3,415 → 1,176 lines) into `wallet-tools.ts`, `analytics-tools.ts`, `protocol-tools.ts`, `order-tools.ts`
+- **ESLint max-lines rule** — Warns at 1,200 lines per file to prevent future monoliths
+
+### Limit Order Oracle Reliability
+
+- **Oracle retry on staleness** — If `placeLimitOrder` fails with `ConstraintRaw` (0x7d3), automatically re-fetches fresh Pyth oracle data and retries once before failing
+
+### Latency Optimization
+
+- **Adaptive slot polling** — Leader router switches from 2s to 1s polling during active trade execution for tighter leader awareness
+- **RPC connection pre-warming** — Backup endpoints are pre-warmed on startup via lightweight `getSlot` calls for instant failover
+- **Broadcast latency profiling** — Per-endpoint `sendRawTransaction` latency is recorded via MetricsCollector
+
+### Observability
+
+- **6 new metrics** — `command_latency_ms`, `cache_hit_total`, `cache_miss_total`, `error_parse_total`, `error_rpc_total`, `error_sdk_total`
+- **Request ID correlation** — Each CLI command gets a unique request ID propagated through structured logs
+- **Trade structured logging** — `tradeStructured()` method with market/side/leverage/collateral/txSignature fields
+
+### CLI UX
+
+- **Deposit preview** — Earn deposit now shows estimated yearly return at current APY
+- **Error humanization** — Better messages for `InsufficientFunds`, `InsufficientBalance`, and `MarketClosed` errors
+
+### Test Suite
+
+- **1,610 tests passing** (65 files, 5 devnet-only skipped)
+- **Updated wallet-session tests** — Adapted to new modular file structure
+
+---
+
 ## [1.0.0] — 2026-03-15
 
 ### Initial Release

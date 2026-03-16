@@ -148,6 +148,12 @@ export const METRIC = {
   RPC_LATENCY: 'rpc_latency_ms',
   TX_CONFIRM_TIME: 'transaction_confirmation_time_ms',
   TX_REBROADCAST: 'transaction_rebroadcast_total',
+  COMMAND_LATENCY: 'command_latency_ms',
+  CACHE_HIT: 'cache_hit_total',
+  CACHE_MISS: 'cache_miss_total',
+  ERROR_PARSE: 'error_parse_total',
+  ERROR_RPC: 'error_rpc_total',
+  ERROR_SDK: 'error_sdk_total',
 } as const;
 
 // ─── Singleton ───────────────────────────────────────────────────────────────

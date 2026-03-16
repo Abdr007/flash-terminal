@@ -163,5 +163,20 @@ export function humanizeSdkError(msg: string, collateral?: number, leverage?: nu
     }
   }
 
+  // Pattern: InsufficientFunds / insufficient funds (generic, not caught above)
+  if (/InsufficientFunds|insufficient\s+funds/i.test(msg)) {
+    return "Insufficient funds. Check your USDC balance with 'wallet tokens'.";
+  }
+
+  // Pattern: 0x1 program error or InsufficientBalance — SOL needed for tx fees
+  if (/\b0x1\b|InsufficientBalance/i.test(msg)) {
+    return 'Insufficient SOL for transaction fees. Top up your wallet.';
+  }
+
+  // Pattern: MarketClosed
+  if (/MarketClosed/i.test(msg)) {
+    return "Market is currently closed. Check market hours with 'markets'.";
+  }
+
   return msg;
 }

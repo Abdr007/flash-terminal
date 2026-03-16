@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- NLP parser with regex patterns; splitting would fragment intent resolution */
 import Anthropic from '@anthropic-ai/sdk';
 import OpenAI from 'openai';
 import { ParsedIntent, ParsedIntentSchema, ActionType, TradeSide } from '../types/index.js';

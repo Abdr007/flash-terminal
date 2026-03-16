@@ -107,6 +107,19 @@ export class Logger {
     this.info('TRADE', `${action}`, details);
   }
 
+  tradeStructured(action: string, details: {
+    market?: string;
+    side?: string;
+    leverage?: number;
+    collateral?: number;
+    sizeUsd?: number;
+    txSignature?: string;
+    latencyMs?: number;
+    error?: string;
+  }): void {
+    this.info('TRADE', action, details as Record<string, unknown>);
+  }
+
   api(endpoint: string, details?: Record<string, unknown>): void {
     this.debug('API', endpoint, details);
   }
