@@ -14,8 +14,12 @@ assets/
 tsconfig.json
 eslint.config.js
 .prettierrc
+.prettierignore
 .husky/
 vitest.config.ts
+Dockerfile
+.dockerignore
+CONTRIBUTING.md
 
 # Development
 .env

@@ -5,7 +5,7 @@
   "type": "module",
   "main": "dist/index.js",
   "bin": {
-    "flash": "./dist/index.js"
+    "flash": "dist/index.js"
   },
   "scripts": {
     "build": "sh scripts/generate-build-info.sh && tsc && chmod +x dist/index.js",
