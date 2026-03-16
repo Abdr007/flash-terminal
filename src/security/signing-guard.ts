@@ -62,7 +62,7 @@ export interface SigningAuditEntry {
 
 // ─── Signing Guard ────────────────────────────────────────────────────────────
 
-const MAX_AUDIT_LOG_BYTES = 5 * 1024 * 1024; // 5MB max
+const MAX_AUDIT_LOG_BYTES = 10 * 1024 * 1024; // 10MB max
 
 export class SigningGuard {
   private config: SigningGuardConfig;
@@ -188,9 +188,13 @@ export class SigningGuard {
       if (existsSync(this.config.auditLogPath)) {
         const size = statSync(this.config.auditLogPath).size;
         if (size > MAX_AUDIT_LOG_BYTES) {
-          const rotated = this.config.auditLogPath + '.old';
-          try { renameSync(rotated, rotated + '.2'); } catch { /* ignore */ }
-          renameSync(this.config.auditLogPath, rotated);
+          // Rotate up to 10 files
+          for (let i = 9; i >= 1; i--) {
+            const from = i === 1 ? this.config.auditLogPath + '.old' : this.config.auditLogPath + `.old.${i}`;
+            const to = this.config.auditLogPath + `.old.${i + 1}`;
+            try { renameSync(from, to); } catch { /* ignore */ }
+          }
+          renameSync(this.config.auditLogPath, this.config.auditLogPath + '.old');
           writeFileSync(this.config.auditLogPath, '', { mode: 0o600 });
         }
       }

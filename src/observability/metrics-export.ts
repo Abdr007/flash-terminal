@@ -8,7 +8,9 @@
  * ADDITIVE ONLY — never affects trading execution.
  */
 
+import { createServer, type Server } from 'http';
 import { getMetrics, METRIC } from './metrics.js';
+import { getLogger } from '../utils/logger.js';
 
 // ─── Prometheus Format ───────────────────────────────────────────────────────
 
@@ -96,6 +98,54 @@ export function toDatadog(tags?: string[]): { series: DatadogMetric[] } {
 export function toJSON(pretty = true): string {
   const snap = getMetrics().snapshot();
   return pretty ? JSON.stringify(snap, null, 2) : JSON.stringify(snap);
+}
+
+// ─── CLI-Friendly Summary ────────────────────────────────────────────────────
+
+// ─── HTTP Metrics Server ──────────────────────────────────────────────────────
+
+let _metricsServer: Server | null = null;
+
+/**
+ * Start an HTTP server that exposes metrics in Prometheus format on /metrics.
+ * Enable via METRICS_PORT env var (e.g., METRICS_PORT=9090).
+ * Binds to 127.0.0.1 only — not externally accessible.
+ */
+export function startMetricsServer(port?: number): Server | null {
+  const metricsPort = port ?? parseInt(process.env.METRICS_PORT ?? '0', 10);
+  if (!metricsPort || metricsPort <= 0) return null;
+  if (_metricsServer) return _metricsServer;
+
+  const logger = getLogger();
+
+  _metricsServer = createServer((req, res) => {
+    if (req.url === '/metrics' || req.url === '/') {
+      res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
+      res.end(toPrometheus());
+    } else if (req.url === '/metrics/json') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(toJSON(false));
+    } else {
+      res.writeHead(404);
+      res.end('Not Found');
+    }
+  });
+
+  _metricsServer.listen(metricsPort, '127.0.0.1', () => {
+    logger.info('METRICS', `Metrics server listening on http://127.0.0.1:${metricsPort}/metrics`);
+  });
+
+  _metricsServer.unref(); // Don't prevent process exit
+
+  return _metricsServer;
+}
+
+/** Stop the metrics HTTP server. */
+export function stopMetricsServer(): void {
+  if (_metricsServer) {
+    _metricsServer.close();
+    _metricsServer = null;
+  }
 }
 
 // ─── CLI-Friendly Summary ────────────────────────────────────────────────────

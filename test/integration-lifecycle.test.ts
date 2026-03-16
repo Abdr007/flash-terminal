@@ -66,7 +66,8 @@ describe('Integration: Trade Lifecycle', () => {
     // Open
     const openResult = await client.openPosition('SOL', TradeSide.Long, 200, 5);
     expect(openResult.sizeUsd).toBe(1000);
-    expect(openResult.entryPrice).toBe(150);
+    // Entry price includes simulated slippage (8 bps)
+    expect(openResult.entryPrice).toBeCloseTo(150, 0);
 
     const afterOpenBalance = client.getBalance();
     const openFee = 1000 * 0.0008; // $0.80

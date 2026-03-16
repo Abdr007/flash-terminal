@@ -56,6 +56,7 @@ import { initTpuClient, getTpuClient } from '../network/tpu-client.js';
 import { createBatch, appendToBatch, isBatchWithinLimit, batchSummary, type SdkResult } from '../transaction/instruction-aggregator.js';
 import { resolveALTs, verifyALTAccountOverlap, logMessageALTDiagnostics } from '../transaction/alt-resolver.js';
 import { buildATAIdempotentIxs } from '../transaction/ata-resolver.js';
+import { getTypedMarkets, type SdkPositionData, type SdkPoolConfigExt } from '../types/sdk-types.js';
 
 // ─── SDK Console Suppression ─────────────────────────────────────────────────
 // The Flash SDK has debug console.log statements in its published build.
@@ -740,9 +741,7 @@ export class FlashClient implements IFlashClient {
     const sdkSide = toSdkSide(side);
     const positions = await this.perpClient.getUserPositions(this.wallet.publicKey, poolConfig);
     const token = this.findToken(poolConfig, market);
-    const markets = poolConfig.markets as unknown as Array<{
-      marketAccount: PublicKey; targetMint: PublicKey; collateralMint: PublicKey; side: typeof Side.Long | typeof Side.Short;
-    }>;
+    const markets = getTypedMarkets(poolConfig);
 
     const marketConfig = markets.find(
       (m) => m.targetMint.equals(token.mintKey) && m.side === sdkSide
@@ -1161,6 +1160,13 @@ export class FlashClient implements IFlashClient {
         this.recentTrades.delete(k);
       }
     }
+    // Bound cache size to prevent unbounded growth in long sessions
+    if (this.recentTrades.size > 1000) {
+      const oldest = Array.from(this.recentTrades.entries())
+        .sort(([, a], [, b]) => a - b)
+        .slice(0, this.recentTrades.size - 500);
+      for (const [k] of oldest) this.recentTrades.delete(k);
+    }
     const lastTime = this.recentTrades.get(key);
     if (lastTime && now - lastTime < FlashClient.TRADE_CACHE_TTL_MS) {
       const ago = Math.ceil((now - lastTime) / 1000);
@@ -1299,10 +1305,7 @@ export class FlashClient implements IFlashClient {
       // For non-virtual tokens (JUP, JTO, RAY, HYPE): long collateral = self, short collateral = USDC
       // For virtual tokens (PYTH, KMNO, MET): long collateral = JUP, short collateral = USDC
       // We MUST look this up from poolConfig.markets rather than assuming collateral = target.
-      const poolMarkets = poolConfig.markets as unknown as Array<{
-        targetMint: PublicKey; collateralMint: PublicKey;
-        side: typeof Side.Long | typeof Side.Short;
-      }>;
+      const poolMarkets = getTypedMarkets(poolConfig);
       const matchedMarket = poolMarkets.find(
         m => m.targetMint.equals(targetToken.mintKey) && m.side === sdkSide
       );
@@ -1482,10 +1485,7 @@ export class FlashClient implements IFlashClient {
       );
 
       // ── Determine the correct collateral token for this market+side ──
-      const poolMarkets = poolConfig.markets as unknown as Array<{
-        targetMint: PublicKey; collateralMint: PublicKey;
-        side: typeof Side.Long | typeof Side.Short;
-      }>;
+      const poolMarkets = getTypedMarkets(poolConfig);
       const matchedMarket = poolMarkets.find(
         m => m.targetMint.equals(targetToken.mintKey) && m.side === sdkSide
       );
@@ -1563,7 +1563,7 @@ export class FlashClient implements IFlashClient {
         // ── Partial close via decreaseSize ──
         const { position } = await this.findUserPosition(poolConfig, market, side);
         const positionData = await this.perpClient.program.account.position.fetch(position.pubkey);
-        const posData = positionData as unknown as { sizeAmount: BN };
+        const posData = positionData as SdkPositionData;
         if (!posData.sizeAmount || posData.sizeAmount.isZero()) {
           throw new Error(`No open ${side} position on ${market} to partially close`);
         }
@@ -1795,10 +1795,7 @@ export class FlashClient implements IFlashClient {
     );
 
     // ── Determine the correct collateral token for this market+side ──
-    const poolMarkets = poolConfig.markets as unknown as Array<{
-      targetMint: PublicKey; collateralMint: PublicKey;
-      side: typeof Side.Long | typeof Side.Short;
-    }>;
+    const poolMarkets = getTypedMarkets(poolConfig);
     const matchedMarket = poolMarkets.find(
       m => m.targetMint.equals(targetToken.mintKey) && m.side === sdkSide
     );
@@ -1966,10 +1963,7 @@ export class FlashClient implements IFlashClient {
     if (rawPositions.length === 0) return;
 
     const priceMap = await this.getPriceMap(poolConfig);
-    const markets = poolConfig.markets as unknown as Array<{
-      marketAccount: PublicKey; targetMint: PublicKey; collateralMint: PublicKey;
-      side: typeof Side.Long | typeof Side.Short;
-    }>;
+    const markets = getTypedMarkets(poolConfig);
     const tokens = poolConfig.tokens as Array<{ symbol: string; mintKey: PublicKey; decimals: number }>;
     const custodies = poolConfig.custodies as Array<{ custodyAccount: PublicKey; symbol: string }>;
 
@@ -2274,10 +2268,7 @@ export class FlashClient implements IFlashClient {
    */
   private resolveOrderTokens(poolConfig: PoolConfig, market: string, sdkSide: typeof Side.Long | typeof Side.Short) {
     const targetToken = this.findToken(poolConfig, market);
-    const poolMarkets = poolConfig.markets as unknown as Array<{
-      targetMint: PublicKey; collateralMint: PublicKey;
-      side: typeof Side.Long | typeof Side.Short;
-    }>;
+    const poolMarkets = getTypedMarkets(poolConfig);
     const matchedMarket = poolMarkets.find(
       m => m.targetMint.equals(targetToken.mintKey) && m.side === sdkSide
     );
@@ -2401,7 +2392,7 @@ export class FlashClient implements IFlashClient {
       // Get the existing position to determine size
       const { position } = await this.findUserPosition(poolConfig, market, side);
       const positionData = await this.perpClient.program.account.position.fetch(position.pubkey);
-      const posData = positionData as unknown as { sizeAmount: BN };
+      const posData = positionData as SdkPositionData;
       if (!posData.sizeAmount || posData.sizeAmount.isZero()) {
         throw new Error(`No open ${side} position on ${market} to set ${isStopLoss ? 'stop-loss' : 'take-profit'} on`);
       }
@@ -2562,10 +2553,7 @@ export class FlashClient implements IFlashClient {
       );
 
       // Resolve market collateral
-      const poolMarkets = poolConfig.markets as unknown as Array<{
-        targetMint: PublicKey; collateralMint: PublicKey;
-        side: typeof Side.Long | typeof Side.Short;
-      }>;
+      const poolMarkets = getTypedMarkets(poolConfig);
       const matchedMarket = poolMarkets.find(
         m => m.targetMint.equals(targetToken.mintKey) && m.side === sdkSide,
       );
@@ -2829,9 +2817,7 @@ export class FlashClient implements IFlashClient {
     const orders = await this.perpClient.getUserOrderAccounts(this.wallet.publicKey, poolConfig);
     const targetToken = this.findToken(poolConfig, market);
     const matchedOrder = orders.find(o => {
-      const poolMarkets = poolConfig.markets as unknown as Array<{
-        marketAccount: PublicKey; targetMint: PublicKey; side: typeof Side.Long | typeof Side.Short;
-      }>;
+      const poolMarkets = getTypedMarkets(poolConfig);
       const marketConfig = poolMarkets.find(m => m.targetMint.equals(targetToken.mintKey) && m.side === sdkSide);
       return marketConfig && o.market.equals(marketConfig.marketAccount);
     });
@@ -2871,10 +2857,7 @@ export class FlashClient implements IFlashClient {
           if (!oa.isActive) continue;
 
           // Resolve market symbol from the market account
-          const poolMarkets = pc.markets as unknown as Array<{
-            marketAccount: PublicKey; targetMint: PublicKey;
-            side: typeof Side.Long | typeof Side.Short;
-          }>;
+          const poolMarkets = getTypedMarkets(pc);
           const matchedMarket = poolMarkets.find(m => m.marketAccount.equals(oa.market));
           if (!matchedMarket) continue;
 
@@ -3040,7 +3023,7 @@ export class FlashClient implements IFlashClient {
     const token = this.findToken(poolConfig, tokenSymbol);
 
     const nativeAmount = uiDecimalsToNative(amountUsd.toString(), token.decimals);
-    const flpSymbol = (poolConfig as unknown as Record<string, unknown>).compoundingLpTokenSymbol || 'FLP';
+    const flpSymbol = (poolConfig as unknown as SdkPoolConfigExt).compoundingLpTokenSymbol || 'FLP';
 
     logger.info('CLIENT', `Add liquidity: ${amountUsd} ${tokenSymbol} → ${poolConfig.poolName} (${flpSymbol})`);
 
@@ -3068,7 +3051,7 @@ export class FlashClient implements IFlashClient {
     const logger = getLogger();
     const poolConfig = pool ? this.resolvePoolConfig(pool) : this.getPoolConfigForToken(tokenSymbol);
     const token = this.findToken(poolConfig, tokenSymbol);
-    const flpSymbol = (poolConfig as unknown as Record<string, unknown>).compoundingLpTokenSymbol || 'FLP';
+    const flpSymbol = (poolConfig as unknown as SdkPoolConfigExt).compoundingLpTokenSymbol || 'FLP';
 
     logger.info('CLIENT', `Remove liquidity: ${percent}% from ${poolConfig.poolName} (${flpSymbol})`);
 
@@ -3121,7 +3104,7 @@ export class FlashClient implements IFlashClient {
   async stakeFLP(amountUsd: number, pool?: string) {
     const logger = getLogger();
     const poolConfig = this.resolvePoolConfig(pool);
-    const sflpSymbol = (poolConfig as unknown as Record<string, unknown>).stakedLpTokenSymbol || 'sFLP';
+    const sflpSymbol = (poolConfig as unknown as SdkPoolConfigExt).stakedLpTokenSymbol || 'sFLP';
 
     // Use addLiquidityAndStake: deposits USDC → mints LP → stakes → sFLP in one tx.
     // This is the correct flow — depositStake alone requires raw LP tokens
@@ -3150,7 +3133,7 @@ export class FlashClient implements IFlashClient {
   async unstakeFLP(percent: number, pool?: string) {
     const logger = getLogger();
     const poolConfig = this.resolvePoolConfig(pool);
-    const pcExt = poolConfig as unknown as Record<string, unknown>;
+    const pcExt = poolConfig as unknown as SdkPoolConfigExt;
     const sflpSymbol = pcExt.stakedLpTokenSymbol || 'sFLP';
 
     // Read staked balance from FlpStakeAccount PDA (not a regular token account)
@@ -3257,7 +3240,7 @@ export class FlashClient implements IFlashClient {
   async claimRewards(pool?: string) {
     const logger = getLogger();
     const poolConfig = this.resolvePoolConfig(pool);
-    const pcExt = poolConfig as unknown as Record<string, unknown>;
+    const pcExt = poolConfig as unknown as SdkPoolConfigExt;
     const sflpSymbol = pcExt.stakedLpTokenSymbol || 'sFLP';
 
     // Check if user has staked LP via FlpStakeAccount PDA

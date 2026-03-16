@@ -120,13 +120,13 @@ export class RiskMonitor {
     this.lastHeartbeat = 0;
     this.timer = setInterval(() => {
       this.tick().catch((err) => {
-        getLogger().debug('RISK_MONITOR', `Tick error: ${getErrorMessage(err)}`);
+        getLogger().warn('RISK_MONITOR', `Tick error: ${getErrorMessage(err)}`);
       });
     }, PRICE_INTERVAL_MS);
     this.timer.unref();
     // Run first tick immediately
     this.tick().catch((err) => {
-      getLogger().debug('RISK_MONITOR', `Initial tick error: ${getErrorMessage(err)}`);
+      getLogger().warn('RISK_MONITOR', `Initial tick error: ${getErrorMessage(err)}`);
     });
     return chalk.green('  Risk monitor started.') + chalk.dim(' (prices every 5s, positions every 20s)');
   }
@@ -260,7 +260,7 @@ export class RiskMonitor {
         );
       }
     } catch (error: unknown) {
-      logger.debug('RISK_MONITOR', `Tick failed: ${getErrorMessage(error)}`);
+      logger.warn('RISK_MONITOR', `Tick failed: ${getErrorMessage(error)}`);
     }
   }
 
@@ -273,6 +273,23 @@ export class RiskMonitor {
     const leverage = safeNumber(pos.leverage, 1);
     const collateralUsd = safeNumber(pos.collateralUsd, 0);
     const sizeUsd = safeNumber(pos.sizeUsd, 0);
+
+    // Skip assessment if critical values are zero — cannot compute meaningful risk
+    if (currentPrice <= 0 || entryPrice <= 0 || sizeUsd <= 0) {
+      return {
+        market: pos.market,
+        side: pos.side,
+        leverage,
+        entryPrice,
+        currentPrice,
+        liquidationPrice: liqPrice,
+        collateralUsd,
+        sizeUsd,
+        distanceToLiquidation: 1, // assume safe when data is missing
+        riskLevel: RiskLevel.Safe,
+        suggestedCollateral: 0,
+      };
+    }
 
     // Distance to liquidation: normalized by entry price (not liq price)
     // This gives a consistent percentage regardless of price direction

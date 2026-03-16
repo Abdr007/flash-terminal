@@ -44,7 +44,7 @@ export class RpcManager {
   private monitorTimer: ReturnType<typeof setInterval> | null = null;
   private onConnectionChange: ConnectionChangeCallback | null = null;
   private lastFailoverTime = 0;
-  private failoverInProgress = false;
+  private failoverPromise: Promise<boolean> | null = null;
 
   /** Rolling failure window per endpoint (true = success, false = failure) */
   private failureHistory: Map<string, boolean[]> = new Map();
@@ -274,17 +274,27 @@ export class RpcManager {
    * Enforces a cooldown period to prevent oscillation between endpoints.
    * @param force — bypass cooldown (used for explicit network errors during trading)
    */
+  /**
+   * Attempt automatic failover to the next healthy endpoint.
+   * Uses a shared promise as mutex — concurrent callers await the same in-flight failover.
+   */
   async failover(force = false): Promise<boolean> {
-    const logger = getLogger();
-
-    // Prevent concurrent failover calls from racing each other.
-    // The monitor and sendTx can both call failover() concurrently —
-    // without this guard, two callers can both pass the cooldown check,
-    // both create new connections, and call replaceConnection twice.
-    if (this.failoverInProgress) {
-      logger.debug('RPC', 'Failover already in progress — skipping concurrent call');
-      return false;
+    // If a failover is already in-flight, all callers await the same promise
+    if (this.failoverPromise) {
+      getLogger().debug('RPC', 'Failover already in progress — waiting for completion');
+      return this.failoverPromise;
     }
+
+    this.failoverPromise = this._doFailover(force);
+    try {
+      return await this.failoverPromise;
+    } finally {
+      this.failoverPromise = null;
+    }
+  }
+
+  private async _doFailover(force: boolean): Promise<boolean> {
+    const logger = getLogger();
 
     // Cooldown: prevent oscillation between endpoints
     const now = Date.now();
@@ -294,37 +304,32 @@ export class RpcManager {
       return false;
     }
 
-    this.failoverInProgress = true;
-    try {
-      for (let i = 0; i < this.endpoints.length; i++) {
-        const idx = (this.activeIndex + 1 + i) % this.endpoints.length;
-        if (idx === this.activeIndex) continue;
+    for (let i = 0; i < this.endpoints.length; i++) {
+      const idx = (this.activeIndex + 1 + i) % this.endpoints.length;
+      if (idx === this.activeIndex) continue;
 
-        const ep = this.endpoints[idx];
-        const health = await this.checkHealth(ep);
+      const ep = this.endpoints[idx];
+      const health = await this.checkHealth(ep);
 
-        if (health.healthy) {
-          const prevLabel = this.endpoints[this.activeIndex].label;
-          logger.warn('RPC', `Failover: switching from ${prevLabel} to ${ep.label} (latency: ${health.latencyMs}ms)`);
-          this.activeIndex = idx;
-          this._connection = createConnection(ep.url);
-          this.failoverCount++;
-          this.lastFailoverTime = Date.now();
+      if (health.healthy) {
+        const prevLabel = this.endpoints[this.activeIndex].label;
+        logger.warn('RPC', `Failover: switching from ${prevLabel} to ${ep.label} (latency: ${health.latencyMs}ms)`);
+        this.activeIndex = idx;
+        this._connection = createConnection(ep.url);
+        this.failoverCount++;
+        this.lastFailoverTime = Date.now();
 
-          // Notify FlashClient of connection change
-          if (this.onConnectionChange) {
-            this.onConnectionChange(this._connection, ep);
-          }
-
-          return true;
+        // Notify FlashClient of connection change
+        if (this.onConnectionChange) {
+          this.onConnectionChange(this._connection, ep);
         }
-      }
 
-      logger.error('RPC', 'No healthy backup RPC found');
-      return false;
-    } finally {
-      this.failoverInProgress = false;
+        return true;
+      }
     }
+
+    logger.error('RPC', 'No healthy backup RPC found');
+    return false;
   }
 
   /**

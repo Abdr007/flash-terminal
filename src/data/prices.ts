@@ -54,7 +54,7 @@ const PYTH_FEED_IDS: Record<string, string> = {
 };
 
 const FETCH_TIMEOUT_MS = 8_000;
-const MAX_PRICE_CACHE_ENTRIES = 100;
+const MAX_PRICE_CACHE_ENTRIES = 500;
 const MAX_RESPONSE_BYTES = 1024 * 1024; // 1MB max
 
 // 24h price history: record Pyth price snapshots, compute 24h change from oracle data.
@@ -128,12 +128,12 @@ export class PriceService {
 
     if (uncached.length === 0) return priceMap;
 
-    // Evict expired entries if cache is full
+    // Bounded LRU eviction: remove oldest entries regardless of expiry
     if (this.cache.size >= MAX_PRICE_CACHE_ENTRIES) {
-      const expired = Array.from(this.cache.entries())
-        .filter(([, entry]) => entry.expiry <= now);
-      const toDelete = expired.slice(0, Math.max(10, expired.length - MAX_PRICE_CACHE_ENTRIES / 2));
-      for (const [k] of toDelete) this.cache.delete(k);
+      const entries = Array.from(this.cache.entries())
+        .sort(([, a], [, b]) => a.expiry - b.expiry);
+      const toEvict = entries.slice(0, Math.max(10, this.cache.size - Math.floor(MAX_PRICE_CACHE_ENTRIES / 2)));
+      for (const [k] of toEvict) this.cache.delete(k);
     }
 
     // Fetch from Pyth Hermes

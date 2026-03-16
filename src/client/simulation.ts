@@ -23,6 +23,7 @@ import { computeSimulationLiquidationPrice } from '../utils/protocol-liq.js';
 
 const MAX_TRADE_HISTORY = 500;
 const MAX_LIVE_PRICE_ENTRIES = 100;
+const SIMULATION_SLIPPAGE_BPS = 8; // 0.08% default slippage (matches typical Flash Trade fill)
 
 // Feed IDs are centralized in PriceService (src/data/prices.ts).
 // Simulation delegates all price fetching to PriceService (Pyth Hermes).
@@ -189,16 +190,21 @@ export class SimulatedFlashClient implements IFlashClient {
     }
 
     const price = this.getPrice(market);
+    // Simulated slippage: shift entry price against the trader (worse fill)
+    const slippageMult = side === TradeSide.Long
+      ? 1 + SIMULATION_SLIPPAGE_BPS / 10_000
+      : 1 - SIMULATION_SLIPPAGE_BPS / 10_000;
+    const fillPrice = price * slippageMult;
     const sizeUsd = collateralAmount * leverage;
 
     // Fetch fee rates from protocol (CustodyAccount via Flash SDK)
     const feeRates = await getProtocolFeeRates(market, null);
     const openFee = calcFeeUsd(sizeUsd, feeRates.openFeeRate);
 
-    const liquidationPrice = this.calcLiquidationPrice(price, leverage, side, feeRates.maintenanceMarginRate, feeRates.closeFeeRate);
+    const liquidationPrice = this.calcLiquidationPrice(fillPrice, leverage, side, feeRates.maintenanceMarginRate, feeRates.closeFeeRate);
 
     // Reject positions where liquidation price equals entry (instant liquidation)
-    if (liquidationPrice === price || liquidationPrice <= 0) {
+    if (liquidationPrice === fillPrice || liquidationPrice <= 0) {
       throw new Error(`Leverage ${leverage}x is too high — position would be immediately liquidated. Reduce leverage.`);
     }
 
@@ -221,11 +227,12 @@ export class SimulatedFlashClient implements IFlashClient {
       // Merge: weighted average entry price, sum collateral and size
       const totalSize = existing.sizeUsd + sizeUsd;
       finalEntryPrice = totalSize > 0
-        ? (existing.entryPrice * existing.sizeUsd + price * sizeUsd) / totalSize
-        : price;
+        ? (existing.entryPrice * existing.sizeUsd + fillPrice * sizeUsd) / totalSize
+        : fillPrice;
       existing.sizeUsd = totalSize;
       existing.collateralUsd += collateralAmount;
-      existing.leverage = existing.collateralUsd > 0 ? existing.sizeUsd / existing.collateralUsd : leverage;
+      const mergedLev = existing.collateralUsd > 0 ? existing.sizeUsd / existing.collateralUsd : leverage;
+      existing.leverage = Number.isFinite(mergedLev) && mergedLev > 0 ? mergedLev : leverage;
       existing.entryPrice = finalEntryPrice;
       existing.openFee += openFee;
       txSig = `SIM_ADD_${existing.id}`;
@@ -234,7 +241,7 @@ export class SimulatedFlashClient implements IFlashClient {
         id: randomUUID().slice(0, 8),
         market: market.toUpperCase(),
         side,
-        entryPrice: price,
+        entryPrice: fillPrice,
         sizeUsd,
         collateralUsd: collateralAmount,
         leverage,
@@ -244,7 +251,7 @@ export class SimulatedFlashClient implements IFlashClient {
         closeFeeRate: feeRates.closeFeeRate,
       };
       this.state.positions.push(position);
-      finalEntryPrice = price;
+      finalEntryPrice = fillPrice;
       txSig = `SIM_${position.id}`;
     }
 
@@ -332,7 +339,8 @@ export class SimulatedFlashClient implements IFlashClient {
       // Reduce position size proportionally
       position.sizeUsd -= closedSizeUsd;
       position.collateralUsd -= closedCollateral;
-      position.leverage = position.collateralUsd > 0 ? position.sizeUsd / position.collateralUsd : 0;
+      const closeLev = position.collateralUsd > 0 ? position.sizeUsd / position.collateralUsd : 0;
+      position.leverage = Number.isFinite(closeLev) ? closeLev : 0;
     }
 
     this.state.tradeHistory.push({

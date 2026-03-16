@@ -92,7 +92,8 @@ describe('SimulatedFlashClient', () => {
 
     expect(result.txSignature).toMatch(/^SIM_/);
     expect(result.sizeUsd).toBe(500); // collateral * leverage
-    expect(result.entryPrice).toBe(150.0);
+    // Entry price includes simulated slippage (8 bps worse for longs)
+    expect(result.entryPrice).toBeCloseTo(150.0, 0);
     expect(result.liquidationPrice).toBeGreaterThan(0);
   });
 

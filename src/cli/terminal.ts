@@ -424,6 +424,12 @@ export class FlashTerminal {
         this.rpcManager.startMonitoring();
       }, 5_000).unref();
 
+      // Metrics HTTP server — enable via METRICS_PORT env var
+      try {
+        const { startMetricsServer } = await import('../observability/metrics-export.js');
+        startMetricsServer();
+      } catch { /* non-critical */ }
+
       // Crash recovery — start after 3s
       setTimeout(async () => {
         try {

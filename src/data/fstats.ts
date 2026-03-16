@@ -105,6 +105,28 @@ async function safeFetchJson<T>(path: string): Promise<T | null> {
       headers: { Accept: 'application/json' },
     });
     if (!res.ok) {
+      if (res.status === 429) {
+        // Exponential backoff on rate limit
+        const retryAfter = parseInt(res.headers.get('retry-after') ?? '0', 10);
+        const delay = retryAfter > 0 ? retryAfter * 1000 : 2000;
+        logger.info('ANALYTICS', `fstats rate limited (429), backing off ${delay}ms for ${path}`);
+        await new Promise(resolve => setTimeout(resolve, Math.min(delay, 8000)));
+        // Single retry after backoff
+        try {
+          const retryRes = await fetch(url, {
+            signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+            headers: { Accept: 'application/json' },
+          });
+          if (retryRes.ok) {
+            const retryText = await retryRes.text();
+            if (retryText.length <= MAX_RESPONSE_BYTES) {
+              return JSON.parse(retryText) as T;
+            }
+          }
+        } catch {
+          // Retry failed — fall through to return null
+        }
+      }
       logger.info('ANALYTICS', `fstats ${res.status}: ${res.statusText} for ${path}`);
       return null;
     }
