@@ -65,16 +65,16 @@ export interface YieldProjection {
   days365: number;
 }
 
-/** Project yield returns for a deposit at current APY. */
+/** Project yield returns for a deposit at current APY. Uses simple interest to avoid overflow. */
 export function simulateYield(deposit: number, apy: number): YieldProjection {
-  // Compound interest: A = P * (1 + r/n)^(n*t)
-  // Using daily compounding (n=365) for FLP auto-compound
-  const dailyRate = apy / 100 / 365;
-  const calc = (days: number) => deposit * (Math.pow(1 + dailyRate, days) - 1);
+  // Cap APY at 1000% to prevent unreliable projections
+  const cappedApy = Math.min(apy, 1000);
+  // Simple interest: return = deposit * (apy/100) * (days/365)
+  const calc = (days: number) => deposit * (cappedApy / 100) * (days / 365);
 
   return {
     deposit,
-    apy,
+    apy: cappedApy,
     days7: Math.round(calc(7) * 100) / 100,
     days30: Math.round(calc(30) * 100) / 100,
     days90: Math.round(calc(90) * 100) / 100,

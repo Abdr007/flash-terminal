@@ -2104,7 +2104,8 @@ export class FlashClient implements IFlashClient {
     return this.cachedSolBalance;
   }
 
-  /** Get the user's token balance for a given mint as BN (native units). */
+  /** Get the user's token balance for a given mint as BN (native units).
+   *  Tries classic SPL Token first, then Token2022 (sFLP tokens may use Token2022). */
   private async getTokenBalance(mint: PublicKey): Promise<BN> {
     try {
       const { TOKEN_PROGRAM_ID } = await import('@solana/spl-token');
@@ -2112,12 +2113,26 @@ export class FlashClient implements IFlashClient {
         this.wallet.publicKey,
         { mint, programId: TOKEN_PROGRAM_ID },
       );
-      if (accounts.value.length === 0) return BN_ZERO;
-      // Parse the token amount from the first matching account
-      const data = accounts.value[0].account.data;
-      // SPL token account: amount is at offset 64, 8 bytes little-endian
-      const amount = data.readBigUInt64LE(64);
-      return new BN(amount.toString());
+      if (accounts.value.length > 0) {
+        const data = accounts.value[0].account.data;
+        // SPL token account: amount is at offset 64, 8 bytes little-endian
+        const amount = data.readBigUInt64LE(64);
+        return new BN(amount.toString());
+      }
+
+      // Fallback: try Token2022 program (sFLP tokens may use this program)
+      const token2022ProgramId = new PublicKey(TOKEN_2022_PROGRAM);
+      const accounts2022 = await this.connection.getTokenAccountsByOwner(
+        this.wallet.publicKey,
+        { mint, programId: token2022ProgramId },
+      );
+      if (accounts2022.value.length > 0) {
+        const data = accounts2022.value[0].account.data;
+        const amount = data.readBigUInt64LE(64);
+        return new BN(amount.toString());
+      }
+
+      return BN_ZERO;
     } catch {
       return BN_ZERO;
     }

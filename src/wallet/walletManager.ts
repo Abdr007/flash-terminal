@@ -280,11 +280,17 @@ export class WalletManager {
       '98sMhvDwXj1RQi5c5Mndm3vPe9cBqPrbLaufMXFNMh5g': 'HYPE',
     };
 
-    const [solBalance, tokenAccounts] = await withRetry(
+    const TOKEN_PROGRAM_ID = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA');
+    const TOKEN_2022_PROGRAM_ID = new PublicKey('TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb');
+
+    const [solBalance, tokenAccounts, token2022Accounts] = await withRetry(
       () => Promise.all([
         this.connection.getBalance(this.publicKey!),
         this.connection.getParsedTokenAccountsByOwner(this.publicKey!, {
-          programId: new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA'),
+          programId: TOKEN_PROGRAM_ID,
+        }),
+        this.connection.getParsedTokenAccountsByOwner(this.publicKey!, {
+          programId: TOKEN_2022_PROGRAM_ID,
         }),
       ]),
       'wallet-token-balances',
@@ -293,7 +299,9 @@ export class WalletManager {
 
     const tokens: Array<{ symbol: string; mint: string; amount: number }> = [];
 
-    for (const account of tokenAccounts.value) {
+    // Merge accounts from both SPL Token and Token2022 programs
+    const allAccounts = [...tokenAccounts.value, ...token2022Accounts.value];
+    for (const account of allAccounts) {
       const info = account.account.data.parsed?.info;
       if (!info) continue;
       const mint: string = info.mint;

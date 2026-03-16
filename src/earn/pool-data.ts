@@ -3,12 +3,11 @@
  *
  * Fetches live pool metrics from multiple sources:
  * - fstats.io /pools — FLP/sFLP prices, total volume, total fees
- * - FLP price snapshots — APY from actual FLP price growth over time
- * - fstats.io /fees/daily + /volume/daily — fallback APY when no snapshots exist
+ * - fstats.io /fees/daily + /volume/daily — volume-weighted fee APY
  * - Solana RPC — FLP/sFLP token supply for TVL calculation
+ * - FLP price snapshots — recorded for future features (not used for APY)
  *
- * APY = ((current_flp / old_flp) - 1) * (365 / days) * 100 (primary)
- * APY = (7D LP fees / TVL) * 52 * 100 (fallback)
+ * APY = (7D LP fees / TVL) * 52 * 100 (capped at 1000%)
  * TVL = (FLP supply * FLP price) + (sFLP supply * sFLP price)
  */
 
@@ -66,45 +65,7 @@ function recordFlpPrices(prices: Record<string, number>): void {
   saveSnapshots(snapshots);
 }
 
-/**
- * Compute APY from FLP price growth between two snapshots.
- * Uses the oldest snapshot within 7 days for best accuracy.
- * Minimum 1 hour of data required.
- */
-function computeApyFromSnapshots(poolId: string, currentPrice: number): number | null {
-  if (currentPrice <= 0) return null;
-
-  const snapshots = loadSnapshots();
-  if (snapshots.length < 2) return null;
-
-  const now = Date.now();
-  const maxAge = 7 * 24 * 3600_000; // 7 days
-  const minAge = 3600_000; // 1 hour minimum
-
-  // Find oldest snapshot within 7 days that has a price for this pool
-  let bestSnapshot: FlpSnapshot | null = null;
-  for (const snap of snapshots) {
-    const age = now - snap.timestamp;
-    if (age < minAge || age > maxAge) continue;
-    if (!snap.prices[poolId] || snap.prices[poolId] <= 0) continue;
-    if (!bestSnapshot || snap.timestamp < bestSnapshot.timestamp) {
-      bestSnapshot = snap;
-    }
-  }
-
-  if (!bestSnapshot) return null;
-
-  const oldPrice = bestSnapshot.prices[poolId];
-  const elapsedDays = (now - bestSnapshot.timestamp) / (24 * 3600_000);
-  if (elapsedDays < 0.04) return null; // Less than ~1 hour
-
-  const growth = (currentPrice / oldPrice) - 1;
-  if (growth <= 0) return 0; // Pool lost money in this period
-
-  // Annualize: APY = growth * (365 / days)
-  const apy = growth * (365 / elapsedDays) * 100;
-  return Math.round(apy * 100) / 100;
-}
+const MAX_APY = 1000; // Cap APY — anything higher is unreliable data
 
 const CACHE_TTL_MS = 30_000;
 
@@ -265,21 +226,13 @@ export async function getPoolMetrics(): Promise<Map<string, PoolMetrics>> {
     const sflpPrice = prices?.sflp ?? 0;
     const tvl = tvlByPool[pool.poolId] ?? 0;
 
-    // APY priority:
-    // 1. FLP price growth from snapshots (most accurate — captures all revenue)
-    // 2. Volume-weighted fee distribution (fallback for first run)
-    const snapshotApy = computeApyFromSnapshots(pool.poolId, flpPrice);
+    // APY from volume-weighted fee distribution (the only reliable source)
     const weeklyFees = weeklyFeesByPool[pool.poolId] ?? 0;
-    const volumeApy = tvl > 0 && weeklyFees > 0 ? (weeklyFees / tvl) * 52 * 100 : 0;
-
-    const apy7d = snapshotApy ?? volumeApy;
+    const rawApy = tvl > 0 && weeklyFees > 0 ? (weeklyFees / tvl) * 52 * 100 : 0;
+    const apy7d = Math.min(rawApy, MAX_APY);
     const apr7d = apy7d;
 
-    if (snapshotApy !== null) {
-      logger.debug('EARN', `${pool.poolId}: APY ${apy7d.toFixed(1)}% (from FLP price growth)`);
-    } else {
-      logger.debug('EARN', `${pool.poolId}: APY ${apy7d.toFixed(1)}% (from volume estimate — no snapshots yet)`);
-    }
+    logger.debug('EARN', `${pool.poolId}: APY ${apy7d.toFixed(1)}% (from fee distribution)`);
 
     metrics.set(pool.poolId, {
       poolId: pool.poolId,

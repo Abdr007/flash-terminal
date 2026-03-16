@@ -282,18 +282,8 @@ export const earnRemoveLiquidityTool: ToolDefinition = {
 
     try {
       const result = await client.removeLiquidity('USDC', percent, pool.poolId);
-      // Estimate withdrawn USD for journal (use FLP price × approximate tokens)
-      const m = await getPoolMetric(pool.poolId);
-      const estimatedUsd = m?.flpPrice ? m.flpPrice * percent : 0; // rough estimate
-      if (estimatedUsd > 0) {
-        recordEarnAction({
-          pool: pool.poolId,
-          action: 'withdraw',
-          amountUsd: estimatedUsd,
-          timestamp: Date.now(),
-          txSignature: result.txSignature,
-        });
-      }
+      // Don't record withdraw amount — actual USDC received isn't available from client response.
+      // Better no data than wrong data. PnL uses current_value + total_withdrawn - total_deposited.
       const lines = [
         '',
         `  ${theme.accentBold('WITHDRAWAL CONFIRMED')}`,
@@ -336,13 +326,7 @@ export const earnStakeTool: ToolDefinition = {
 
     try {
       const result = await client.stakeFLP(amount, pool.poolId);
-      recordEarnAction({
-        pool: pool.poolId,
-        action: 'stake',
-        amountUsd: amount,
-        timestamp: Date.now(),
-        txSignature: result.txSignature,
-      });
+      // Stake is an sFLP operation — not a USDC in/out flow, so don't record in PnL journal
       const lines = [
         '',
         `  ${theme.accentBold('STAKE CONFIRMED')}`,
@@ -385,18 +369,7 @@ export const earnUnstakeTool: ToolDefinition = {
 
     try {
       const result = await client.unstakeFLP(percent, pool.poolId);
-      // Estimate unstaked USD for journal
-      const m = await getPoolMetric(pool.poolId);
-      const estimatedUsd = m?.sflpPrice ? m.sflpPrice * percent : 0;
-      if (estimatedUsd > 0) {
-        recordEarnAction({
-          pool: pool.poolId,
-          action: 'unstake',
-          amountUsd: estimatedUsd,
-          timestamp: Date.now(),
-          txSignature: result.txSignature,
-        });
-      }
+      // Unstake is an sFLP operation — not a USDC in/out flow, so don't record in PnL journal
       const lines = [
         '',
         `  ${theme.accentBold('UNSTAKE CONFIRMED')}`,
@@ -675,8 +648,11 @@ export const earnSimulateTool: ToolDefinition = {
       theme.pair('Yearly', chalk.green(`~+${formatUsd(proj.days365)}`)),
       '',
       chalk.dim('  * Based on 7-day trading volume and on-chain fee rates.'),
-      '',
     ];
+    if (m.apy7d > 500) {
+      lines.push(chalk.dim('  * APY is volatile. Actual returns may differ significantly.'));
+    }
+    lines.push('');
 
     return { success: true, message: lines.join('\n') };
   },
@@ -796,9 +772,9 @@ export const earnPnlTool: ToolDefinition = {
     const poolTotals = new Map<string, { deposited: number; withdrawn: number }>();
     for (const entry of journal) {
       const t = poolTotals.get(entry.pool) ?? { deposited: 0, withdrawn: 0 };
-      if (entry.action === 'deposit' || entry.action === 'stake') {
+      if (entry.action === 'deposit') {
         t.deposited += entry.amountUsd;
-      } else if (entry.action === 'withdraw' || entry.action === 'unstake') {
+      } else if (entry.action === 'withdraw') {
         t.withdrawn += entry.amountUsd;
       }
       poolTotals.set(entry.pool, t);
@@ -810,8 +786,8 @@ export const earnPnlTool: ToolDefinition = {
       totalDeposited += t.deposited;
       totalWithdrawn += t.withdrawn;
     }
-    const netDeposited = totalDeposited - totalWithdrawn;
-    const pnl = totalValue - netDeposited;
+    // PnL = current_value + total_withdrawn - total_deposited
+    const pnl = totalValue + totalWithdrawn - totalDeposited;
     const hasJournal = journal.length > 0;
 
     if (IS_AGENT) {
@@ -829,7 +805,6 @@ export const earnPnlTool: ToolDefinition = {
     if (hasJournal) {
       lines.push(theme.pair('Total Deposited', formatUsd(totalDeposited)));
       if (totalWithdrawn > 0) lines.push(theme.pair('Total Withdrawn', formatUsd(totalWithdrawn)));
-      lines.push(theme.pair('Net Deposited', formatUsd(netDeposited)));
       const pnlStr = pnl >= 0 ? chalk.green(`+${formatUsd(pnl)}`) : chalk.red(formatUsd(pnl));
       lines.push(theme.pair('PnL', pnlStr));
     }

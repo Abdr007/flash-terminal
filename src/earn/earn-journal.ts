@@ -10,7 +10,7 @@ import { join } from 'path';
 
 export interface EarnJournalEntry {
   pool: string;
-  action: 'deposit' | 'withdraw' | 'stake' | 'unstake';
+  action: 'deposit' | 'withdraw';
   amountUsd: number;
   timestamp: number;
   txSignature: string;
@@ -64,9 +64,9 @@ export function getPoolDeposits(poolId: string): { totalDeposited: number; total
 
   for (const e of entries) {
     if (e.pool !== poolId) continue;
-    if (e.action === 'deposit' || e.action === 'stake') {
+    if (e.action === 'deposit') {
       totalDeposited += e.amountUsd;
-    } else if (e.action === 'withdraw' || e.action === 'unstake') {
+    } else if (e.action === 'withdraw') {
       totalWithdrawn += e.amountUsd;
     }
   }
