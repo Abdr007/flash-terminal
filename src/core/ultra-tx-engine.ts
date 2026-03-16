@@ -26,6 +26,20 @@ import {
   type AddressLookupTableAccount,
 } from '@solana/web3.js';
 import { getLogger } from '../utils/logger.js';
+
+// Ed25519 program ID — oracle signature verification instructions must be ordered before CU budget
+const ED25519_PROGRAM_ID = 'Ed25519SigVerify111111111111111111111111111';
+
+/** Reorder instructions: Ed25519 first (for oracle), then CU budget, then the rest. */
+function buildOrderedIxs(
+  cuLimitIx: TransactionInstruction,
+  cuPriceIx: TransactionInstruction,
+  instructions: readonly TransactionInstruction[],
+): TransactionInstruction[] {
+  const ed25519 = instructions.filter(ix => ix.programId.toBase58() === ED25519_PROGRAM_ID);
+  const rest = instructions.filter(ix => ix.programId.toBase58() !== ED25519_PROGRAM_ID);
+  return [...ed25519, cuLimitIx, cuPriceIx, ...rest];
+}
 import { getRpcManagerInstance } from '../network/rpc-manager.js';
 import { getErrorMessage } from '../utils/retry.js';
 import { getLeaderRouter, initLeaderRouter, shutdownLeaderRouter } from './leader-router.js';
@@ -790,7 +804,7 @@ export class UltraTxEngine {
         const cuLimitIx = ComputeBudgetProgram.setComputeUnitLimit({ units: effectiveCuLimit });
         const cuPriceIx = ComputeBudgetProgram.setComputeUnitPrice({ microLamports: priorityFee });
 
-        const allIxs = [cuLimitIx, cuPriceIx, ...instructions];
+        const allIxs = buildOrderedIxs(cuLimitIx, cuPriceIx, instructions);
 
         const compileStart = Date.now();
         const message = MessageV0.compile({
@@ -1033,7 +1047,7 @@ export class UltraTxEngine {
     const cuLimitIx = ComputeBudgetProgram.setComputeUnitLimit({ units: effectiveCuLimit });
     const cuPriceIx = ComputeBudgetProgram.setComputeUnitPrice({ microLamports: priorityFee });
 
-    const allIxs = [cuLimitIx, cuPriceIx, ...instructions];
+    const allIxs = buildOrderedIxs(cuLimitIx, cuPriceIx, instructions);
     const message = MessageV0.compile({
       payerKey: this.wallet.publicKey,
       instructions: allIxs,
@@ -1095,7 +1109,7 @@ export class UltraTxEngine {
     const cuLimitIx = ComputeBudgetProgram.setComputeUnitLimit({ units: effectiveCuLimit });
     const cuPriceIx = ComputeBudgetProgram.setComputeUnitPrice({ microLamports: priorityFee });
 
-    const allIxs = [cuLimitIx, cuPriceIx, ...instructions];
+    const allIxs = buildOrderedIxs(cuLimitIx, cuPriceIx, instructions);
     const message = MessageV0.compile({
       payerKey: this.wallet.publicKey,
       instructions: allIxs,

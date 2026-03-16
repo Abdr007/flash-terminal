@@ -24,6 +24,7 @@ import {
   BN_ZERO,
   OraclePrice,
   ContractOraclePrice,
+  createBackupOracleInstruction,
 } from 'flash-sdk';
 import {
   Position,
@@ -304,6 +305,7 @@ const SYSVAR_CLOCK = 'SysvarC1ock11111111111111111111111111111111';
 const SYSVAR_INSTRUCTIONS = 'Sysvar1nstructions1111111111111111111111111';
 const MEMO_PROGRAM = 'MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr';
 const EVENT_AUTHORITY = 'Ce6TQqeHC9p8KetsN6JsjHK7UTZk7nasjjnr7XxXp18C'; // Flash event CPI
+const ED25519_PROGRAM = 'Ed25519SigVerify111111111111111111111111111'; // Ed25519 signature verification (backup oracle)
 
 // Flash Trade program IDs are loaded dynamically from PoolConfig.
 // [M-4] Base set of allowed system programs — immutable.
@@ -319,6 +321,7 @@ const BASE_ALLOWED_PROGRAM_IDS = Object.freeze(new Set<string>([
   SYSVAR_INSTRUCTIONS,
   MEMO_PROGRAM,
   EVENT_AUTHORITY,
+  ED25519_PROGRAM,
 ]));
 
 // Active program whitelist — updated by FlashClient constructor and getPoolConfigForMarket().
@@ -906,7 +909,12 @@ export class FlashClient implements IFlashClient {
           : timeoutMs;
         // Build compute budget instructions (may change on CU overflow retry)
         const cuLimitIx = ComputeBudgetProgram.setComputeUnitLimit({ units: effectiveCuLimit });
-        const allIxs = [cuLimitIx, cuPriceIx, ...validatedInstructions];
+        // Ed25519 signature verification instructions (e.g. backup oracle) must appear
+        // BEFORE compute budget instructions — the on-chain program reads ixSysvar
+        // and expects Ed25519 at a low index.
+        const ed25519Ixs = validatedInstructions.filter(ix => ix.programId.toBase58() === ED25519_PROGRAM);
+        const nonEd25519Ixs = validatedInstructions.filter(ix => ix.programId.toBase58() !== ED25519_PROGRAM);
+        const allIxs = [...ed25519Ixs, cuLimitIx, cuPriceIx, ...nonEd25519Ixs];
         const message = MessageV0.compile({
           payerKey: this.wallet.publicKey,
           instructions: allIxs,
@@ -2246,18 +2254,24 @@ export class FlashClient implements IFlashClient {
   // ─── On-Chain Order Methods ──────────────────────────────────────────────
 
   /**
-   * Convert a UI price to ContractOraclePrice { price: BN, exponent: number }.
-   * Flash protocol uses exponent = -9, price = floor(uiPrice * 10^9).
+   * Convert a UI price to ContractOraclePrice using the SDK's OraclePrice class.
+   * Uses Pyth-standard exponent -8 to match on-chain oracle format.
    */
   private toContractOraclePrice(uiPrice: number): ContractOraclePrice {
-    const exponent = -9;
-    const price = new BN(Math.floor(uiPrice * 1e9));
-    return { price, exponent };
+    const ORACLE_EXPONENT = -8;
+    const scaledPrice = new BN(Math.round(uiPrice * Math.pow(10, Math.abs(ORACLE_EXPONENT))));
+    const oraclePrice = new OraclePrice({
+      price: scaledPrice,
+      exponent: new BN(ORACLE_EXPONENT),
+      confidence: BN_ZERO,
+      timestamp: BN_ZERO,
+    });
+    return oraclePrice.toContractOraclePrice();
   }
 
-  /** Zero price for optional TP/SL fields */
+  /** Zero price for optional TP/SL fields — uses Pyth-standard exponent -8 */
   private zeroContractPrice(): ContractOraclePrice {
-    return { price: BN_ZERO, exponent: -9 };
+    return { price: BN_ZERO, exponent: -8 };
   }
 
   /**
@@ -2279,6 +2293,37 @@ export class FlashClient implements IFlashClient {
       collateralSymbol = targetToken.symbol;
     }
     return { targetSymbol: targetToken.symbol, collateralSymbol, targetToken };
+  }
+
+  /**
+   * Fetch backup oracle price update instruction from Flash Trade API.
+   * This must be prepended before limit/edit order instructions to satisfy
+   * the on-chain oracle freshness constraint.
+   * Returns instructions array (empty on failure — caller decides fallback).
+   */
+  private async fetchBackupOracleIxs(poolConfig: PoolConfig): Promise<TransactionInstruction[]> {
+    const logger = getLogger();
+    try {
+      const poolAddress = poolConfig.poolAddress.toBase58();
+      const ixs = await createBackupOracleInstruction(poolAddress, true);
+      if (ixs.length > 0) {
+        logger.info('ORACLE', `Fetched ${ixs.length} backup oracle instruction(s) for pool ${poolAddress.slice(0, 8)}… (${ixs[0].data.length} bytes)`);
+        // Whitelist any program IDs used by the oracle instructions (e.g. Ed25519SigVerify)
+        for (const ix of ixs) {
+          const progId = ix.programId.toBase58();
+          if (!this.allowedPrograms.has(progId)) {
+            (this.allowedPrograms as Set<string>).add(progId);
+            logger.info('ORACLE', `Whitelisted oracle program: ${progId}`);
+          }
+        }
+      } else {
+        logger.warn('ORACLE', `Backup oracle returned 0 instructions for pool ${poolAddress.slice(0, 8)}…`);
+      }
+      return ixs;
+    } catch (err: unknown) {
+      logger.warn('ORACLE', `Backup oracle fetch failed: ${getErrorMessage(err)}`);
+      return [];
+    }
   }
 
   async placeLimitOrder(
@@ -2309,6 +2354,9 @@ export class FlashClient implements IFlashClient {
       const reserveSymbol = DEFAULT_COLLATERAL_TOKEN;
       const receiveSymbol = DEFAULT_COLLATERAL_TOKEN;
 
+      // Kick off backup oracle fetch early (runs in parallel with price/custody fetches)
+      const oracleIxsPromise = this.fetchBackupOracleIxs(poolConfig);
+
       // Get price map and custody for size calculation
       const priceMap = await this.getPriceMap(poolConfig);
       const inputToken = this.findToken(poolConfig, reserveSymbol);
@@ -2330,9 +2378,22 @@ export class FlashClient implements IFlashClient {
       }
 
       const collateralNative = uiDecimalsToNative(collateral.toString(), inputToken.decimals);
+
+      // For limit orders, calculate size at the LIMIT price, not the current oracle price.
+      // The protocol validates that sizeAmount * limitPrice matches the collateral * leverage.
+      // Using the current price would produce a size mismatch at the limit price.
+      const limitExponent = targetPrice.price.exponent;
+      const limitPriceScaled = new BN(Math.round(limitPrice * Math.pow(10, Math.abs(limitExponent.toNumber()))));
+      const limitOraclePrice = new OraclePrice({
+        price: limitPriceScaled,
+        exponent: limitExponent,
+        confidence: BN_ZERO,
+        timestamp: new BN(Math.floor(Date.now() / 1000)),
+      });
+
       const sizeAmount = this.perpClient.getSizeAmountFromLeverageAndCollateral(
         collateralNative, leverage.toString(), targetToken as unknown as Token, inputToken as unknown as Token, sdkSide,
-        targetPrice.price, targetPrice.emaPrice,
+        limitOraclePrice, limitOraclePrice,
         CustodyAccount.from(outputCustody.custodyAccount, custodyAccounts[1]),
         inputPrice.price, inputPrice.emaPrice,
         CustodyAccount.from(inputCustody.custodyAccount, custodyAccounts[0]),
@@ -2345,16 +2406,21 @@ export class FlashClient implements IFlashClient {
 
       logger.info('CLIENT', `Limit order: target=${targetSymbol} collateral=${collateralSymbol} reserve=${reserveSymbol} receive=${receiveSymbol} side=${sdkSide === Side.Long ? 'Long' : 'Short'} price=${limitPrice} collateralNative=${collateralNative.toString()} sizeAmount=${sizeAmount.toString()}`);
 
-      // Flash Trade team: always use useExtOracleAccount=false for trade-side interactions.
-      // Note: placeLimitOrder currently fails with InvalidArgument on mainnet —
-      // likely requires a Pyth Lazer price update that the SDK doesn't include yet.
       const result = await this.perpClient.placeLimitOrder(
         targetSymbol, collateralSymbol, reserveSymbol, receiveSymbol,
         sdkSide, limitPriceContract, collateralNative, sizeAmount,
         slPrice, tpPrice, poolConfig
       );
 
-      const txSignature = await this.sendTx(result.instructions, result.additionalSigners, poolConfig);
+      // Prepend backup oracle instruction — required for on-chain oracle freshness constraint.
+      // The oracle update must appear before the limit order instruction in the transaction.
+      // Oracle + Ed25519 verification is CU-heavy; use 450k (SDK recommended).
+      const oracleIxs = await oracleIxsPromise;
+      const allInstructions = [...oracleIxs, ...result.instructions];
+      const cuOverride = oracleIxs.length > 0 ? 450_000 : undefined;
+
+
+      const txSignature = await this.sendTx(allInstructions, result.additionalSigners, poolConfig, undefined, cuOverride);
 
       logger.trade('LIMIT_ORDER', {
         market, side, collateral, leverage, limitPrice, tx: txSignature,
@@ -2781,6 +2847,9 @@ export class FlashClient implements IFlashClient {
       const reserveToken = this.findToken(poolConfig, reserveSymbol);
       const receiveToken = this.findToken(poolConfig, receiveSymbol);
 
+      // Fetch oracle update in parallel with SDK instruction build
+      const oracleIxsPromise = this.fetchBackupOracleIxs(poolConfig);
+
       // Edit with zero size effectively cancels
       const result = await this.perpClient.editLimitOrder(
         targetToken.symbol, collateralToken.symbol, reserveToken.symbol, receiveToken.symbol,
@@ -2789,7 +2858,9 @@ export class FlashClient implements IFlashClient {
         poolConfig
       );
 
-      const txSignature = await this.sendTx(result.instructions, result.additionalSigners, poolConfig);
+      const oracleIxs = await oracleIxsPromise;
+      const cuOverride = oracleIxs.length > 0 ? 450_000 : undefined;
+      const txSignature = await this.sendTx([...oracleIxs, ...result.instructions], result.additionalSigners, poolConfig, undefined, cuOverride);
       logger.trade('CANCEL_LIMIT', { market, side, orderId, tx: txSignature });
       return { txSignature };
     } catch (err: unknown) {
@@ -2813,7 +2884,8 @@ export class FlashClient implements IFlashClient {
     const reserveSymbol = DEFAULT_COLLATERAL_TOKEN;
     const receiveSymbol = DEFAULT_COLLATERAL_TOKEN;
 
-    // Fetch current order to preserve size and TP/SL
+    // Fetch current order and oracle update in parallel
+    const oracleIxsPromise = this.fetchBackupOracleIxs(poolConfig);
     const orders = await this.perpClient.getUserOrderAccounts(this.wallet.publicKey, poolConfig);
     const targetToken = this.findToken(poolConfig, market);
     const matchedOrder = orders.find(o => {
@@ -2835,7 +2907,9 @@ export class FlashClient implements IFlashClient {
       poolConfig
     );
 
-    const txSignature = await this.sendTx(result.instructions, result.additionalSigners, poolConfig);
+    const oracleIxs = await oracleIxsPromise;
+    const cuOverride = oracleIxs.length > 0 ? 450_000 : undefined;
+    const txSignature = await this.sendTx([...oracleIxs, ...result.instructions], result.additionalSigners, poolConfig, undefined, cuOverride);
 
     logger.trade('EDIT_LIMIT', { market, side, orderId, newLimitPrice, tx: txSignature });
 

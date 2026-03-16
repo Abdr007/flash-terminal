@@ -116,17 +116,18 @@ describe('Compute Unit Config Overrides', () => {
 // ─── Instruction Order ──────────────────────────────────────────────────────
 
 describe('Instruction Order', () => {
-  it('flash-client builds CU limit → CU price → instructions', () => {
+  it('flash-client builds Ed25519 → CU limit → CU price → instructions', () => {
     const src = readFileSync(resolve(ROOT, 'src/client/flash-client.ts'), 'utf8');
-    // Find the allIxs construction in sendTx
-    assert.ok(src.includes('[cuLimitIx, cuPriceIx, ...validatedInstructions]'),
-      'sendTx should order: CU limit, CU price, program instructions');
+    // Ed25519 (backup oracle) instructions go first, then CU budget, then program instructions.
+    // This ordering is required because the on-chain program reads ixSysvar to find Ed25519.
+    assert.ok(src.includes('[...ed25519Ixs, cuLimitIx, cuPriceIx, ...nonEd25519Ixs]'),
+      'sendTx should order: Ed25519, CU limit, CU price, program instructions');
   });
 
-  it('ultra-tx-engine builds CU limit → CU price → instructions', () => {
+  it('ultra-tx-engine builds Ed25519 → CU limit → CU price → instructions via buildOrderedIxs', () => {
     const src = readFileSync(resolve(ROOT, 'src/core/ultra-tx-engine.ts'), 'utf8');
-    assert.ok(src.includes('[cuLimitIx, cuPriceIx, ...instructions]'),
-      'ultra-tx should order: CU limit, CU price, program instructions');
+    assert.ok(src.includes('buildOrderedIxs(cuLimitIx, cuPriceIx, instructions)'),
+      'ultra-tx should use buildOrderedIxs for proper Ed25519 ordering');
   });
 
   it('dry-run preview builds CU limit → CU price → instructions', () => {

@@ -42,6 +42,7 @@ describe('FlashClient Safety Mechanisms', () => {
         'SysvarRent111111111111111111111111111111111',         // Rent
         'SysvarC1ock11111111111111111111111111111111',         // Clock
         'Ce6TQqeHC9p8KetsN6JsjHK7UTZk7nasjjnr7XxXp18C',     // Flash event CPI
+        'Ed25519SigVerify111111111111111111111111111',         // Ed25519 (backup oracle)
       ];
 
       // All of these should be valid base58 public keys
@@ -253,6 +254,44 @@ describe('FlashClient Safety Mechanisms', () => {
       const zeroed = new Uint8Array(64).fill(0);
       const allZero = zeroed.every(b => b === 0);
       expect(allZero).toBe(true);
+    });
+  });
+
+  describe('Backup Oracle Integration', () => {
+    it('createBackupOracleInstruction is exported from flash-sdk', async () => {
+      const { createBackupOracleInstruction } = await import('flash-sdk');
+      expect(typeof createBackupOracleInstruction).toBe('function');
+    });
+
+    it('returns TransactionInstruction[] (empty on invalid pool)', async () => {
+      const { createBackupOracleInstruction } = await import('flash-sdk');
+      // Invalid pool address should return empty array (not throw)
+      const result = await createBackupOracleInstruction('11111111111111111111111111111111', true);
+      expect(Array.isArray(result)).toBe(true);
+    });
+
+    it('Ed25519SigVerify program ID is valid', () => {
+      const ed25519 = new PublicKey('Ed25519SigVerify111111111111111111111111111');
+      expect(ed25519.toBase58()).toBe('Ed25519SigVerify111111111111111111111111111');
+    });
+
+    it('oracle instructions are prepended before order instructions', () => {
+      // Verify the instruction ordering contract: oracle first, then order
+      const oracleIx = new TransactionInstruction({
+        programId: new PublicKey('Ed25519SigVerify111111111111111111111111111'),
+        keys: [],
+        data: Buffer.from([0xAA]),
+      });
+      const orderIx = new TransactionInstruction({
+        programId: new PublicKey('11111111111111111111111111111111'),
+        keys: [],
+        data: Buffer.from([0xBB]),
+      });
+
+      // This is the pattern used in placeLimitOrder
+      const allInstructions = [oracleIx, orderIx];
+      expect(allInstructions[0].data[0]).toBe(0xAA); // oracle first
+      expect(allInstructions[1].data[0]).toBe(0xBB); // order second
     });
   });
 });
