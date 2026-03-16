@@ -18,7 +18,7 @@ jobs:
       TRADING_ENABLED: "false"
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
@@ -35,8 +35,8 @@ jobs:
       - name: Lint
         run: npm run lint
 
-      - name: Run tests with coverage
-        run: npm run coverage
+      - name: Run tests
+        run: npm test
 
       - name: Verify test count
         run: |
@@ -48,14 +48,6 @@ jobs:
           fi
           echo "Test count: $PASS_COUNT (minimum: 800)"
 
-      - name: Upload coverage reports
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: coverage-report
-          path: coverage/
-          retention-days: 14
-
   release:
     needs: test
     runs-on: ubuntu-latest
@@ -66,7 +58,7 @@ jobs:
       TRADING_ENABLED: "false"
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
@@ -85,7 +77,7 @@ jobs:
         run: |
           TAG_NAME="${GITHUB_REF#refs/tags/}"
           TARBALL="flash-terminal-${TAG_NAME}.tar.gz"
-          tar -czf "$TARBALL" dist/ package.json README.md CHANGELOG.md coverage/
+          tar -czf "$TARBALL" dist/ package.json README.md CHANGELOG.md COMMANDS.md ARCHITECTURE.md SECURITY.md LICENSE
           sha256sum "$TARBALL" > "${TARBALL}.sha256"
           echo "TARBALL=$TARBALL" >> "$GITHUB_ENV"
           echo "TAG_NAME=$TAG_NAME" >> "$GITHUB_ENV"
