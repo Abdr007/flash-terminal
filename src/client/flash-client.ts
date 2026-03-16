@@ -2954,10 +2954,19 @@ export class FlashClient implements IFlashClient {
     logger.info('CLIENT', `Remove liquidity: ${percent}% from ${poolConfig.poolName} (${flpSymbol})`);
 
     // Get user's FLP token balance to calculate withdrawal amount
+    // Check both compounding FLP and raw staked LP (from withdrawStake recovery)
     const flpMint = poolConfig.compoundingTokenMint;
-    const flpBalance = await this.getTokenBalance(flpMint);
+    let flpBalance = await this.getTokenBalance(flpMint);
+    let useRawLp = false;
     if (flpBalance.isZero()) {
-      throw new Error(`No ${flpSymbol} tokens found in wallet. Add liquidity first.`);
+      // Check for raw LP tokens (left over from unstake → withdrawStake)
+      const rawLpMint = poolConfig.stakedLpTokenMint;
+      flpBalance = await this.getTokenBalance(rawLpMint);
+      if (flpBalance.isZero()) {
+        throw new Error(`No ${flpSymbol} tokens found in wallet. Add liquidity first.`);
+      }
+      useRawLp = true;
+      logger.info('CLIENT', `Found raw LP tokens (${rawLpMint.toBase58().slice(0, 8)}...) from previous unstake`);
     }
 
     const withdrawAmount = flpBalance.mul(new BN(percent)).div(new BN(100));
@@ -2965,15 +2974,20 @@ export class FlashClient implements IFlashClient {
       throw new Error(`${percent}% of ${flpSymbol} balance rounds to zero.`);
     }
 
-    logger.debug('CLIENT', `FLP balance: ${flpBalance.toString()}, withdrawing: ${withdrawAmount.toString()} (${percent}%)`);
+    logger.debug('CLIENT', `FLP balance: ${flpBalance.toString()}, withdrawing: ${withdrawAmount.toString()} (${percent}%), rawLp=${useRawLp}`);
 
-    const result = await this.perpClient.removeCompoundingLiquidity(
-      withdrawAmount,
-      BN_ZERO, // minAmountOut — accept any output
-      token.symbol,
-      flpMint,
-      poolConfig,
-    );
+    let result: { instructions: TransactionInstruction[]; additionalSigners: Signer[] };
+    if (useRawLp) {
+      // Raw LP tokens from withdrawStake — use removeLiquidity (needs ALTs for large tx)
+      result = await quietSdk(() => this.perpClient.removeLiquidity(
+        'USDC', withdrawAmount, BN_ZERO, poolConfig, true, true,
+      ));
+    } else {
+      // Compounding FLP tokens — use removeCompoundingLiquidity
+      result = await quietSdk(() => this.perpClient.removeCompoundingLiquidity(
+        withdrawAmount, BN_ZERO, token.symbol, flpMint, poolConfig,
+      ));
+    }
 
     const sig = await this.sendTx(result.instructions, result.additionalSigners, poolConfig);
 
@@ -3034,7 +3048,25 @@ export class FlashClient implements IFlashClient {
     };
     const activeAmount = decoded.stakeStats.activeAmount;
     const pendingActivation = decoded.stakeStats.pendingActivation;
+    const deactivatedAmount = decoded.stakeStats.deactivatedAmount;
     const totalStaked = activeAmount.add(pendingActivation);
+
+    // If tokens are already deactivated (from a previous partial unstake), withdraw + convert them
+    if (totalStaked.isZero() && !deactivatedAmount.isZero()) {
+      logger.info('CLIENT', `Found ${deactivatedAmount.toString()} deactivated ${sflpSymbol} — withdrawing and converting to USDC`);
+      const withdrawResult = await quietSdk(() => this.perpClient.withdrawStake(poolConfig, false, true, true));
+      const sig1 = await this.sendTx(withdrawResult.instructions, withdrawResult.additionalSigners, poolConfig);
+      try {
+        const removeResult = await quietSdk(() => this.perpClient.removeLiquidity(
+          'USDC', deactivatedAmount, BN_ZERO, poolConfig, true, true,
+        ));
+        const sig2 = await this.sendTx(removeResult.instructions, removeResult.additionalSigners, poolConfig);
+        return { txSignature: sig2, action: 'unstake', message: `Recovered deactivated ${sflpSymbol} → USDC` };
+      } catch {
+        return { txSignature: sig1, action: 'unstake', message: `Withdrew deactivated LP tokens. Use "earn withdraw" to convert to USDC.` };
+      }
+    }
+
     if (totalStaked.isZero()) {
       throw new Error(`No ${sflpSymbol} tokens staked. Stake FLP first.`);
     }
@@ -3060,31 +3092,47 @@ export class FlashClient implements IFlashClient {
       }
     }
 
-    const result = await this.perpClient.unstakeInstant(
-      'USDC',
-      unstakeAmount,
-      poolConfig,
-    );
+    // Full unstake flow (3 steps, matches Flash Trade website):
+    // 1. unstakeInstant → moves stake to "deactivated" state
+    // 2. withdrawStake → extracts deactivated LP tokens to wallet
+    // 3. removeLiquidity → burns LP tokens → USDC
 
-    // After unstakeInstant, tokens move to "deactivated" state.
-    // withdrawStake extracts the deactivated LP tokens back to the wallet.
-    const withdrawResult = await this.perpClient.withdrawStake(
+    // Step 1+2: unstake + withdraw in one transaction
+    const unstakeResult = await quietSdk(() => this.perpClient.unstakeInstant(
+      'USDC', unstakeAmount, poolConfig,
+    ));
+    const withdrawResult = await quietSdk(() => this.perpClient.withdrawStake(
       poolConfig, false, true, true,
-    );
+    ));
 
-    const allIxs = [
-      ...preInstructions,
-      ...result.instructions,
-      ...withdrawResult.instructions,
-    ];
-    const allSigners = [...result.additionalSigners, ...withdrawResult.additionalSigners];
-    const sig = await this.sendTx(allIxs, allSigners, poolConfig);
+    const tx1Ixs = [...preInstructions, ...unstakeResult.instructions, ...withdrawResult.instructions];
+    const tx1Signers = [...unstakeResult.additionalSigners, ...withdrawResult.additionalSigners];
+    const sig1 = await this.sendTx(tx1Ixs, tx1Signers, poolConfig);
+    logger.info('CLIENT', `Unstake + withdraw tx: ${sig1}`);
 
-    return {
-      txSignature: sig,
-      action: 'unstake',
-      message: `Unstaked ${percent}% of ${sflpSymbol} (${poolConfig.poolName})`,
-    };
+    // Step 3: burn LP tokens → USDC (separate tx — too large to combine with ALTs)
+    try {
+      const removeResult = await quietSdk(() => this.perpClient.removeLiquidity(
+        'USDC', unstakeAmount, BN_ZERO, poolConfig, true, true,
+      ));
+      const sig2 = await this.sendTx(removeResult.instructions, removeResult.additionalSigners, poolConfig);
+      logger.info('CLIENT', `Remove liquidity tx: ${sig2}`);
+
+      return {
+        txSignature: sig2,
+        action: 'unstake',
+        message: `Unstaked ${percent}% of ${sflpSymbol} → USDC (${poolConfig.poolName})`,
+      };
+    } catch (removeErr: unknown) {
+      // If removeLiquidity fails, funds are safe as LP tokens in wallet.
+      // User can manually run "earn withdraw" to convert LP → USDC.
+      logger.warn('CLIENT', `Unstake succeeded but LP→USDC conversion failed: ${getErrorMessage(removeErr)}`);
+      return {
+        txSignature: sig1,
+        action: 'unstake',
+        message: `Unstaked ${percent}% of ${sflpSymbol}. LP tokens in wallet — use "earn withdraw" to convert to USDC.`,
+      };
+    }
   }
 
   async claimRewards(pool?: string) {
