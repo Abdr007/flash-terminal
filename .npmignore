@@ -47,3 +47,7 @@ logs/
 # Build metadata
 *.tsbuildinfo
 *.js.map
+
+# Release artifacts
+*.tar.gz
+*.sha256
