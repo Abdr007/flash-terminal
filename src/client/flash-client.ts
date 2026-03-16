@@ -3032,17 +3032,33 @@ export class FlashClient implements IFlashClient {
     const decoded = this.perpClient.program.coder.accounts.decode('flpStake', stakeAccountInfo.data) as {
       stakeStats: { activeAmount: BN; pendingActivation: BN; pendingDeactivation: BN; deactivatedAmount: BN };
     };
-    const sflpBalance = decoded.stakeStats.activeAmount.add(decoded.stakeStats.pendingActivation);
-    if (sflpBalance.isZero()) {
+    const activeAmount = decoded.stakeStats.activeAmount;
+    const pendingActivation = decoded.stakeStats.pendingActivation;
+    const totalStaked = activeAmount.add(pendingActivation);
+    if (totalStaked.isZero()) {
       throw new Error(`No ${sflpSymbol} tokens staked. Stake FLP first.`);
     }
 
-    const unstakeAmount = sflpBalance.mul(new BN(percent)).div(new BN(100));
+    const unstakeAmount = totalStaked.mul(new BN(percent)).div(new BN(100));
     if (unstakeAmount.isZero()) {
       throw new Error(`${percent}% of ${sflpSymbol} balance rounds to zero.`);
     }
 
-    logger.info('CLIENT', `Unstake ${sflpSymbol}: ${unstakeAmount.toString()} native (${percent}%) from ${poolConfig.poolName}`);
+    logger.info('CLIENT', `Unstake ${sflpSymbol}: ${unstakeAmount.toString()} native (${percent}%), active=${activeAmount.toString()}, pending=${pendingActivation.toString()}`);
+
+    // If there's pending activation, refresh stake first to activate it
+    const preInstructions: TransactionInstruction[] = [];
+    if (!pendingActivation.isZero()) {
+      try {
+        const refreshIx = await this.perpClient.refreshStakeWithTokenStake(
+          'USDC', poolConfig, flpStakePda, this.wallet.publicKey,
+        );
+        preInstructions.push(refreshIx);
+        logger.info('CLIENT', `Prepending refreshStake to activate ${pendingActivation.toString()} pending sFLP`);
+      } catch {
+        logger.warn('CLIENT', 'refreshStake failed — proceeding with active amount only');
+      }
+    }
 
     const result = await this.perpClient.unstakeInstant(
       'USDC',
@@ -3050,7 +3066,8 @@ export class FlashClient implements IFlashClient {
       poolConfig,
     );
 
-    const sig = await this.sendTx(result.instructions, result.additionalSigners, poolConfig);
+    const allIxs = [...preInstructions, ...result.instructions];
+    const sig = await this.sendTx(allIxs, result.additionalSigners, poolConfig);
 
     return {
       txSignature: sig,
