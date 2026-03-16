@@ -1319,7 +1319,7 @@ export function localParse(input: string): ParsedIntent | null {
       /^earn\s+info(?:\s+(.+))?$/
     );
     if (earnInfoMatch) {
-      const pool = earnInfoMatch[1] ? resolveEarnPool(earnInfoMatch[1]) ?? earnInfoMatch[1] : undefined;
+      const pool = earnInfoMatch[1] ? resolveEarnPool(earnInfoMatch[1]) ?? earnInfoMatch[1] : earnPool;
       return { action: ActionType.EarnInfo, pool } as ParsedIntent;
     }
 
