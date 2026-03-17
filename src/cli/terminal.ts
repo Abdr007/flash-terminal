@@ -2097,16 +2097,7 @@ export class FlashTerminal {
       return;
     }
 
-    // Execute tool — show progress ticker for slow commands
-    let progressTimer: ReturnType<typeof setInterval> | null = null;
-    if (!IS_AGENT && !flags.jsonOutput) {
-      process.stdout.write(chalk.dim('  Loading...\r'));
-      let dots = 0;
-      progressTimer = setInterval(() => {
-        dots = (dots + 1) % 4;
-        process.stdout.write(chalk.dim(`  Loading${'.'.repeat(dots)}${' '.repeat(3 - dots)}\r`));
-      }, 500);
-    }
+    // Execute tool — no animated ticker (conflicts with sendTx progress output)
 
     // Enable structured output during dispatch so tools return JSON in message
     if (flags.jsonOutput) enableStructuredOutput();
@@ -2116,17 +2107,8 @@ export class FlashTerminal {
       result = await withTimeout(this.engine.dispatch(intent), COMMAND_TIMEOUT_MS, 'execution');
       // Restore output mode BEFORE any IS_AGENT display checks
       if (flags.jsonOutput) restoreOutputMode();
-      if (progressTimer) {
-        clearInterval(progressTimer);
-        progressTimer = null;
-      }
-      if (!IS_AGENT && !flags.jsonOutput) process.stdout.write('               \r');
     } catch (error: unknown) {
       if (flags.jsonOutput) restoreOutputMode();
-      if (progressTimer) {
-        clearInterval(progressTimer);
-      }
-      if (!IS_AGENT && !flags.jsonOutput) process.stdout.write('               \r');
       if (flags.jsonOutput) {
         console.log(JSON.stringify({ success: false, error: getErrorMessage(error) }, null, 2));
       } else if (IS_AGENT) {
