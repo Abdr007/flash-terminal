@@ -190,7 +190,25 @@ export class LiveTradingAgent {
     }
 
     // ANALYZE + DECIDE — for each market using regime + fusion + ensemble
+    // Track positions opened THIS tick to enforce max positions within a single iteration
+    let tickPositionCount = this.state.positions.length;
+    let tickCapitalAllocated = this.state.positions.reduce((sum, p) => sum + (p.collateralUsd ?? 0), 0);
+    const maxCapitalPct = 0.20; // Never allocate more than 20% of capital total
+    const maxCapital = this.state.currentCapital * maxCapitalPct;
+
     for (const snapshot of snapshots) {
+      // Guard: enforce max positions within this tick
+      if (tickPositionCount >= this.config.risk.maxPositions) {
+        this.log('verbose', `${snapshot.market}: skipped — max positions reached (${tickPositionCount}/${this.config.risk.maxPositions})`);
+        continue;
+      }
+
+      // Guard: enforce max capital allocation
+      if (tickCapitalAllocated >= maxCapital) {
+        this.log('verbose', `${snapshot.market}: skipped — capital limit reached ($${tickCapitalAllocated.toFixed(0)}/$${maxCapital.toFixed(0)})`);
+        continue;
+      }
+
       // Stage 0: Regime detection
       const regime = this.regimeAdapter.detectRegime(snapshot.market, snapshot.price, snapshot.priceChange24h);
       const regimeParams = this.regimeAdapter.getParams(regime.regime);
@@ -216,12 +234,19 @@ export class LiveTradingAgent {
       // Stage 4: Build trade decision with regime-adaptive params + drawdown sizing
       const decision = this.buildDecisionFromEnsemble(ensembleDecision, snapshot, composite, regimeParams, ddState.sizeMultiplier * ddState.leverageMultiplier);
 
+      // Guard: cap collateral to remaining budget
+      if (decision.collateral && tickCapitalAllocated + decision.collateral > maxCapital) {
+        decision.collateral = Math.max(1, Math.floor((maxCapital - tickCapitalAllocated) * 100) / 100);
+      }
+
       this.callbacks.onDecision?.(decision);
       this.log('normal', `Decision: ${decision.action} ${decision.market} ${decision.side ?? ''} | conf=${(decision.confidence * 100).toFixed(0)}% | risk=${decision.riskLevel} | ${decision.reasoning}`);
 
       // Stage 5: Execute
       if (decision.action === ('open' as DecisionAction) && decision.riskLevel !== 'blocked') {
         await this.executeTrade(decision, snapshot);
+        tickPositionCount++;
+        tickCapitalAllocated += decision.collateral ?? 0;
       } else if (decision.riskLevel === 'blocked') {
         this.log('normal', `Blocked: ${decision.blockReason}`);
         this.journal.record(decision);
