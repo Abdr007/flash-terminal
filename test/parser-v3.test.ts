@@ -83,7 +83,6 @@ describe('Trade Predictor', () => {
     for (let i = 0; i < 3; i++) {
       recordTradeCommand('long sol 3x 20');
     }
-    clearPredictorCache();
 
     const predictions = getPredictions('long sol');
     assert.ok(predictions.length > 0, 'should have predictions');
