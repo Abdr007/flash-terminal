@@ -1,14 +1,15 @@
 /**
  * Pool Live Data
  *
- * Fetches live pool metrics from multiple sources:
- * - fstats.io /pools — FLP/sFLP prices, total volume, total fees
- * - fstats.io /fees/daily + /volume/daily — volume-weighted fee APY
- * - Solana RPC — FLP/sFLP token supply for TVL calculation
- * - FLP price snapshots — recorded for future features (not used for APY)
+ * Primary source: Flash Trade official API (api.prod.flash.trade/earn-page/data)
+ * - Pre-calculated APY/APR per pool (matches Flash Trade Earn page exactly)
+ * - FLP/sFLP prices, AUM
  *
- * APY = (7D LP fees / TVL) * 52 * 100 (capped at 1000%)
- * TVL = (FLP supply * FLP price) + (sFLP supply * sFLP price)
+ * Secondary source: fstats.io /pools
+ * - Total volume, total fees, total trades (not in official API)
+ *
+ * Fallback: fstats.io /fees/daily + /volume/daily (volume-weighted fee APY)
+ * - Used only when official API is unavailable
  */
 
 import { Connection } from '@solana/web3.js';
@@ -18,6 +19,28 @@ import { join } from 'path';
 import { getPoolRegistry } from './pool-registry.js';
 import { FSTATS_BASE_URL } from '../config/index.js';
 import { getLogger } from '../utils/logger.js';
+
+const FLASH_EARN_API = 'https://api.prod.flash.trade/earn-page/data';
+
+// ─── Flash Trade Official API Types ─────────────────────────────────────────
+
+interface FlashEarnPool {
+  poolAddress: string;
+  aum: string;
+  flpTokenSymbol: string;
+  sflpTokenSymbol: string;
+  flpDailyApy: number | null;
+  flpWeeklyApy: number | null;
+  sflpWeeklyApr: number | null;
+  sflpDailyApr: number | null;
+  flpPrice: string;
+  sFlpPrice: string;
+}
+
+interface FlashEarnResponse {
+  pools: FlashEarnPool[];
+  lastUpdated: number;
+}
 
 // ─── FLP Price Snapshots ─────────────────────────────────────────────────────
 // Store FLP prices over time to compute APY from actual price growth.
@@ -85,6 +108,12 @@ export interface PoolMetrics {
   totalTrades: number;
   feeShareLp: number;
   weeklyLpFees: number;
+  /** FLP daily APY (compounding) — from official API */
+  flpDailyApy: number;
+  /** sFLP daily APR (non-compounding) — from official API */
+  sflpDailyApr: number;
+  /** sFLP weekly APR (non-compounding) — from official API */
+  sflpWeeklyApr: number;
 }
 
 interface CachedMetrics {
@@ -100,17 +129,30 @@ export function setPoolDataConnection(conn: Connection): void {
   _rpcConnection = conn;
 }
 
-/** Fetch pool metrics with TVL and APY. */
-export async function getPoolMetrics(): Promise<Map<string, PoolMetrics>> {
-  if (_cache && Date.now() - _cache.fetchedAt < CACHE_TTL_MS) {
-    return _cache.data;
+/** Fetch official APY/price data from Flash Trade API. */
+async function fetchOfficialEarnData(logger: ReturnType<typeof getLogger>): Promise<Map<string, FlashEarnPool> | null> {
+  try {
+    const res = await fetch(FLASH_EARN_API, { signal: AbortSignal.timeout(6000) });
+    if (!res.ok) return null;
+    const json = (await res.json()) as FlashEarnResponse;
+    if (!json.pools || !Array.isArray(json.pools)) return null;
+
+    const map = new Map<string, FlashEarnPool>();
+    for (const p of json.pools) {
+      if (p.flpTokenSymbol) map.set(p.flpTokenSymbol, p);
+    }
+    logger.debug('EARN', `Official API: ${map.size} pools loaded`);
+    return map;
+  } catch {
+    logger.debug('EARN', 'Official Flash Trade earn API unavailable');
+    return null;
   }
+}
 
-  const logger = getLogger();
-  const metrics = new Map<string, PoolMetrics>();
-  const registry = getPoolRegistry();
-
-  // Step 1: Fetch pool prices from fstats /pools
+/** Fetch supplementary data (volume, fees, trades) from fstats. */
+async function fetchFstatsPoolData(logger: ReturnType<typeof getLogger>): Promise<
+  Record<string, { flp: number; sflp: number; vol: number; fees: number; trades: number; lpShare: number }>
+> {
   const poolPrices: Record<
     string,
     { flp: number; sflp: number; vol: number; fees: number; trades: number; lpShare: number }
@@ -146,13 +188,18 @@ export async function getPoolMetrics(): Promise<Map<string, PoolMetrics>> {
   } catch {
     logger.debug('EARN', 'fstats /pools unavailable');
   }
+  return poolPrices;
+}
 
-  // Step 2: Compute 7D LP fees per pool
-  // fstats /fees/daily pool filter is broken (returns protocol-wide data for all pools).
-  // Strategy: fetch protocol-wide 7D LP fees, then distribute by each pool's 7D volume share.
+/** Fallback: compute APY from fstats fee distribution when official API is down. */
+async function computeFallbackApy(
+  registry: ReturnType<typeof getPoolRegistry>,
+  poolPrices: Record<string, { vol: number; fees: number }>,
+  tvlByPool: Record<string, number>,
+  logger: ReturnType<typeof getLogger>,
+): Promise<Record<string, number>> {
   const weeklyFeesByPool: Record<string, number> = {};
   try {
-    // 2a: Fetch protocol-wide 7D LP fees
     let protocolWeeklyLpFees = 0;
     const feesRes = await fetch(`${FSTATS_BASE_URL}/fees/daily?days=7`, { signal: AbortSignal.timeout(5000) });
     if (feesRes.ok) {
@@ -162,7 +209,6 @@ export async function getPoolMetrics(): Promise<Map<string, PoolMetrics>> {
     }
 
     if (protocolWeeklyLpFees > 0) {
-      // 2b: Fetch 7D volume per pool to determine each pool's share
       const poolVolumes: Record<string, number> = {};
       let totalWeeklyVolume = 0;
 
@@ -188,9 +234,7 @@ export async function getPoolMetrics(): Promise<Map<string, PoolMetrics>> {
         }),
       );
 
-      // 2c: Distribute protocol LP fees by volume share, adjusted for each pool's fee rate
       if (totalWeeklyVolume > 0) {
-        // Weight by volume × pool fee rate (pools with higher fees earn more per dollar of volume)
         const weights: Record<string, number> = {};
         let totalWeight = 0;
         for (const pool of registry) {
@@ -205,47 +249,61 @@ export async function getPoolMetrics(): Promise<Map<string, PoolMetrics>> {
         for (const pool of registry) {
           const w = weights[pool.poolId] ?? 0;
           if (w > 0 && totalWeight > 0) {
-            weeklyFeesByPool[pool.poolId] = protocolWeeklyLpFees * (w / totalWeight);
+            const weeklyFees = protocolWeeklyLpFees * (w / totalWeight);
+            const tvl = tvlByPool[pool.poolId] ?? 0;
+            if (tvl > 0) {
+              weeklyFeesByPool[pool.poolId] = Math.min((weeklyFees / tvl) * 52 * 100, MAX_APY);
+            }
           }
         }
-        logger.debug(
-          'EARN',
-          `Protocol 7D LP fees: $${protocolWeeklyLpFees.toFixed(0)}, distributed across ${Object.keys(poolVolumes).length} pools`,
-        );
+        logger.debug('EARN', `Fallback APY: protocol 7D LP fees $${protocolWeeklyLpFees.toFixed(0)}`);
       }
     }
   } catch {
-    logger.debug('EARN', 'Fee distribution calculation failed');
+    logger.debug('EARN', 'Fallback fee distribution failed');
+  }
+  return weeklyFeesByPool;
+}
+
+/** Fetch pool metrics with TVL and APY. */
+export async function getPoolMetrics(): Promise<Map<string, PoolMetrics>> {
+  if (_cache && Date.now() - _cache.fetchedAt < CACHE_TTL_MS) {
+    return _cache.data;
   }
 
-  // Step 3: Fetch token supplies from RPC for TVL
-  const conn = _rpcConnection;
+  const logger = getLogger();
+  const metrics = new Map<string, PoolMetrics>();
+  const registry = getPoolRegistry();
 
-  // Record current FLP prices for snapshot tracking
+  // Step 1: Fetch official Flash Trade API + fstats in parallel
+  const [officialData, fstatsData] = await Promise.all([
+    fetchOfficialEarnData(logger),
+    fetchFstatsPoolData(logger),
+  ]);
+
+  const hasOfficialData = officialData !== null && officialData.size > 0;
+
+  // Step 2: Record FLP price snapshots (from whichever source is available)
   const currentFlpPrices: Record<string, number> = {};
   for (const pool of registry) {
-    const flp = poolPrices[pool.poolId]?.flp ?? 0;
-    if (flp > 0) currentFlpPrices[pool.poolId] = flp;
+    const official = officialData?.get(pool.flpSymbol);
+    const flp = official ? parseFloat(official.flpPrice) : (fstatsData[pool.poolId]?.flp ?? 0);
+    if (Number.isFinite(flp) && flp > 0) currentFlpPrices[pool.poolId] = flp;
   }
   recordFlpPrices(currentFlpPrices);
 
-  // Fetch all token supplies in parallel across all pools
+  // Step 3: Fetch TVL from RPC (only needed when official API has no AUM)
+  const conn = _rpcConnection;
   const tvlByPool: Record<string, number> = {};
-  if (conn) {
+  if (conn && !hasOfficialData) {
     const supplyPromises = registry.map(async (pool) => {
-      const flpPrice = poolPrices[pool.poolId]?.flp ?? 0;
-      const sflpPrice = poolPrices[pool.poolId]?.sflp ?? 0;
+      const flpPrice = fstatsData[pool.poolId]?.flp ?? 0;
+      const sflpPrice = fstatsData[pool.poolId]?.sflp ?? 0;
       if (flpPrice <= 0) return;
       try {
         const [flpSupply, sflpSupply] = await Promise.all([
-          conn
-            .getTokenSupply(pool.flpMint)
-            .then((s) => s.value.uiAmount ?? 0)
-            .catch(() => 0),
-          conn
-            .getTokenSupply(pool.sflpMint)
-            .then((s) => s.value.uiAmount ?? 0)
-            .catch(() => 0),
+          conn.getTokenSupply(pool.flpMint).then((s) => s.value.uiAmount ?? 0).catch(() => 0),
+          conn.getTokenSupply(pool.sflpMint).then((s) => s.value.uiAmount ?? 0).catch(() => 0),
         ]);
         tvlByPool[pool.poolId] = flpSupply * flpPrice + sflpSupply * sflpPrice;
       } catch {
@@ -255,19 +313,33 @@ export async function getPoolMetrics(): Promise<Map<string, PoolMetrics>> {
     await Promise.all(supplyPromises);
   }
 
+  // Step 4: Compute fallback APY only if official API failed
+  const fallbackApy = hasOfficialData ? {} : await computeFallbackApy(registry, fstatsData, tvlByPool, logger);
+
+  // Step 5: Build metrics per pool
   for (const pool of registry) {
-    const prices = poolPrices[pool.poolId];
-    const flpPrice = prices?.flp ?? 0;
-    const sflpPrice = prices?.sflp ?? 0;
-    const tvl = tvlByPool[pool.poolId] ?? 0;
+    const official = officialData?.get(pool.flpSymbol);
+    const fstats = fstatsData[pool.poolId];
 
-    // APY from volume-weighted fee distribution (the only reliable source)
-    const weeklyFees = weeklyFeesByPool[pool.poolId] ?? 0;
-    const rawApy = tvl > 0 && weeklyFees > 0 ? (weeklyFees / tvl) * 52 * 100 : 0;
-    const apy7d = Math.min(rawApy, MAX_APY);
-    const apr7d = apy7d;
+    // Prices: prefer official API, fallback to fstats
+    const flpPrice = official ? parseFloat(official.flpPrice) || 0 : (fstats?.flp ?? 0);
+    const sflpPrice = official ? parseFloat(official.sFlpPrice) || 0 : (fstats?.sflp ?? 0);
 
-    logger.debug('EARN', `${pool.poolId}: APY ${apy7d.toFixed(1)}% (from fee distribution)`);
+    // TVL: prefer official AUM, fallback to RPC-computed
+    const tvl = official ? parseFloat(official.aum) || 0 : (tvlByPool[pool.poolId] ?? 0);
+
+    // APY/APR: prefer official, fallback to fee-distribution estimate
+    const flpWeeklyApy = official?.flpWeeklyApy ?? null;
+    const sflpWeeklyApr = official?.sflpWeeklyApr ?? null;
+    const apy7d = typeof flpWeeklyApy === 'number' && Number.isFinite(flpWeeklyApy)
+      ? Math.min(flpWeeklyApy, MAX_APY)
+      : (fallbackApy[pool.poolId] ?? 0);
+    const apr7d = typeof sflpWeeklyApr === 'number' && Number.isFinite(sflpWeeklyApr)
+      ? Math.min(sflpWeeklyApr, MAX_APY)
+      : apy7d;
+
+    const source = hasOfficialData ? 'official' : 'fallback';
+    logger.debug('EARN', `${pool.poolId}: APY ${apy7d.toFixed(1)}% (${source})`);
 
     metrics.set(pool.poolId, {
       poolId: pool.poolId,
@@ -276,11 +348,14 @@ export async function getPoolMetrics(): Promise<Map<string, PoolMetrics>> {
       apr7d: Math.round(apr7d * 100) / 100,
       flpPrice,
       sflpPrice,
-      totalVolume: prices?.vol ?? 0,
-      totalFees: prices?.fees ?? 0,
-      totalTrades: prices?.trades ?? 0,
-      feeShareLp: prices?.lpShare ?? pool.feeShare * 100,
-      weeklyLpFees: weeklyFees,
+      totalVolume: fstats?.vol ?? 0,
+      totalFees: fstats?.fees ?? 0,
+      totalTrades: fstats?.trades ?? 0,
+      feeShareLp: fstats?.lpShare ?? pool.feeShare * 100,
+      weeklyLpFees: 0, // no longer estimated; official APY is authoritative
+      flpDailyApy: Number.isFinite(official?.flpDailyApy) ? (official?.flpDailyApy ?? 0) : 0,
+      sflpDailyApr: Number.isFinite(official?.sflpDailyApr) ? (official?.sflpDailyApr ?? 0) : 0,
+      sflpWeeklyApr: Number.isFinite(sflpWeeklyApr) ? (sflpWeeklyApr ?? 0) : 0,
     });
   }
 
