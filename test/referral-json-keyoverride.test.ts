@@ -2,12 +2,13 @@
  * Tests for FAF Referral System, JSON Output Mode, and Per-Command Wallet Override.
  *
  * Covers:
- * - Referral command parsing (create-referral, set-referrer)
+ * - Referral command parsing (faf referral)
+ * - Auto-referral (default referrer, auto-create on first trade)
  * - JSON output flag extraction (--format json)
  * - Wallet override flag extraction (--key <name>)
  * - Flag stripping from input
  * - Structured output mode toggle (enableStructuredOutput / restoreOutputMode)
- * - Tool registration for new referral tools
+ * - Tool registration for referral tools
  */
 
 import { describe, it } from 'vitest';
@@ -26,51 +27,6 @@ describe('FAF Referral Command Parsing', () => {
     const r = localParse('faf referral');
     assert.ok(r);
     assert.strictEqual(r.action, ActionType.FafReferral);
-  });
-
-  it('faf create-referral → FafCreateReferral', () => {
-    const r = localParse('faf create-referral');
-    assert.ok(r);
-    assert.strictEqual(r.action, ActionType.FafCreateReferral);
-  });
-
-  it('faf create referral → FafCreateReferral', () => {
-    const r = localParse('faf create referral');
-    assert.ok(r);
-    assert.strictEqual(r.action, ActionType.FafCreateReferral);
-  });
-
-  it('faf referral create → FafCreateReferral', () => {
-    const r = localParse('faf referral create');
-    assert.ok(r);
-    assert.strictEqual(r.action, ActionType.FafCreateReferral);
-  });
-
-  it('faf set-referrer <address> → FafSetReferrer', () => {
-    const r = localParse('faf set-referrer 7SqarX8DihHrzHmVzJT1Hsc8ZKhgJPJrSucb7CJ152jy');
-    assert.ok(r);
-    assert.strictEqual(r.action, ActionType.FafSetReferrer);
-    assert.strictEqual((r as any).address, '7SqarX8DihHrzHmVzJT1Hsc8ZKhgJPJrSucb7CJ152jy');
-  });
-
-  it('faf set referrer <address> → FafSetReferrer', () => {
-    const r = localParse('faf set referrer Dvvzg9rwaNfUqBSscoMZJa5CHFv8Lm94ngZrRyLGLfmK');
-    assert.ok(r);
-    assert.strictEqual(r.action, ActionType.FafSetReferrer);
-    assert.strictEqual((r as any).address, 'Dvvzg9rwaNfUqBSscoMZJa5CHFv8Lm94ngZrRyLGLfmK');
-  });
-
-  it('faf referrer <address> → FafSetReferrer', () => {
-    const r = localParse('faf referrer Dvvzg9rwaNfUqBSscoMZJa5CHFv8Lm94ngZrRyLGLfmK');
-    assert.ok(r);
-    assert.strictEqual(r.action, ActionType.FafSetReferrer);
-  });
-
-  it('faf set-referrer without address → falls through to faf_status', () => {
-    const r = localParse('faf set-referrer');
-    assert.ok(r);
-    // No valid address → doesn't match regex → falls to faf_status
-    assert.strictEqual(r.action, ActionType.FafStatus);
   });
 
   it('misspellings still parse referral', () => {
@@ -230,41 +186,28 @@ describe('Per-Command Wallet Override', () => {
 // ─── Tool Registration ──────────────────────────────────────────────────────
 
 describe('Referral Tool Registration', () => {
-  it('faf_create_referral tool exists in faf-tools.ts', () => {
+  it('faf_referral tool exists in faf-tools.ts', () => {
     const src = readFileSync(resolve(ROOT, 'src/tools/faf-tools.ts'), 'utf8');
-    assert.ok(src.includes("name: 'faf_create_referral'"));
-    assert.ok(src.includes('fafCreateReferralTool'));
+    assert.ok(src.includes("name: 'faf_referral'"));
+    assert.ok(src.includes('fafReferralTool'));
   });
 
-  it('faf_set_referrer tool exists in faf-tools.ts', () => {
+  it('faf_referral in allFafTools export', () => {
     const src = readFileSync(resolve(ROOT, 'src/tools/faf-tools.ts'), 'utf8');
-    assert.ok(src.includes("name: 'faf_set_referrer'"));
-    assert.ok(src.includes('fafSetReferrerTool'));
-  });
-
-  it('new tools in allFafTools export', () => {
-    const src = readFileSync(resolve(ROOT, 'src/tools/faf-tools.ts'), 'utf8');
-    assert.ok(src.includes('fafCreateReferralTool'));
-    assert.ok(src.includes('fafSetReferrerTool'));
-    // Verify they're in the export array
     const exportSection = src.slice(src.indexOf('allFafTools'));
-    assert.ok(exportSection.includes('fafCreateReferralTool'));
-    assert.ok(exportSection.includes('fafSetReferrerTool'));
+    assert.ok(exportSection.includes('fafReferralTool'));
   });
 
-  it('engine dispatches new referral actions', () => {
+  it('engine dispatches referral action', () => {
     const src = readFileSync(resolve(ROOT, 'src/tools/engine.ts'), 'utf8');
-    assert.ok(src.includes('FafCreateReferral'));
-    assert.ok(src.includes('FafSetReferrer'));
-    assert.ok(src.includes('faf_create_referral'));
-    assert.ok(src.includes('faf_set_referrer'));
+    assert.ok(src.includes('FafReferral'));
+    assert.ok(src.includes('faf_referral'));
   });
 
-  it('command registry has new referral commands', () => {
+  it('command registry has referral command', () => {
     const src = readFileSync(resolve(ROOT, 'src/cli/command-registry.ts'), 'utf8');
-    assert.ok(src.includes('faf create-referral'));
-    assert.ok(src.includes('faf set-referrer'));
-    assert.ok(src.includes('FafCreateReferral'));
+    assert.ok(src.includes('faf referral'));
+    assert.ok(src.includes('FafReferral'));
   });
 });
 
@@ -296,10 +239,11 @@ describe('Referral Trade Integration', () => {
     assert.ok(refCalls >= 4, `getReferralParams called ${refCalls} times (need ≥4 trade paths)`);
   });
 
-  it('on-chain validation before first trade', () => {
+  it('on-chain validation + auto-create before first trade', () => {
     const src = readFileSync(resolve(ROOT, 'src/client/flash-client.ts'), 'utf8');
     assert.ok(src.includes('validateReferralOnChain'));
     assert.ok(src.includes('referralChecked'));
+    assert.ok(src.includes('autoCreateReferralAccount'));
   });
 
   it('referral cache cleared on wallet switch', () => {
@@ -330,29 +274,32 @@ describe('Referrer Config Persistence', () => {
     assert.ok(src.includes('referrerAddress'));
   });
 
-  it('referrer loaded from env or config file', () => {
+  it('referrer loaded from env or config file with default fallback', () => {
     const src = readFileSync(resolve(ROOT, 'src/config/index.ts'), 'utf8');
     assert.ok(src.includes('REFERRER_ADDRESS'));
     assert.ok(src.includes('file.referrer_address'));
+    assert.ok(src.includes('DEFAULT_REFERRER_ADDRESS'));
   });
 });
 
-// ─── Self-Referral Prevention ───────────────────────────────────────────────
+// ─── Auto-Referral System ───────────────────────────────────────────────────
 
-describe('Referral Safety', () => {
-  it('self-referral blocked', () => {
-    const src = readFileSync(resolve(ROOT, 'src/tools/faf-tools.ts'), 'utf8');
-    assert.ok(src.includes('Cannot set yourself as referrer'));
+describe('Auto-Referral System', () => {
+  it('default referrer address hardcoded in config', () => {
+    const src = readFileSync(resolve(ROOT, 'src/config/index.ts'), 'utf8');
+    assert.ok(src.includes('DEFAULT_REFERRER_ADDRESS'));
+    assert.ok(src.includes('Dvvzg9rwaNfUqBSscoMZJa5CHFv8Lm94ngZrRyLGLfmK'));
   });
 
-  it('set-referrer validates Solana address', () => {
-    const src = readFileSync(resolve(ROOT, 'src/tools/faf-tools.ts'), 'utf8');
-    assert.ok(src.includes('Invalid Solana address'));
+  it('auto-create referral account on first trade', () => {
+    const src = readFileSync(resolve(ROOT, 'src/client/flash-client.ts'), 'utf8');
+    assert.ok(src.includes('autoCreateReferralAccount'));
+    assert.ok(src.includes('Auto-creating'));
   });
 
-  it('referral tool saves to config file', () => {
-    const src = readFileSync(resolve(ROOT, 'src/tools/faf-tools.ts'), 'utf8');
-    assert.ok(src.includes('saveConfigField'));
-    assert.ok(src.includes("'referrer_address'"));
+  it('auto-create is non-fatal on failure', () => {
+    const src = readFileSync(resolve(ROOT, 'src/client/flash-client.ts'), 'utf8');
+    assert.ok(src.includes('Auto-create referral failed'));
+    assert.ok(src.includes('Falling back to no referral'));
   });
 });

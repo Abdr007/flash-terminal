@@ -424,12 +424,6 @@ export class ToolEngine {
       case ActionType.FafReferral:
         return { toolName: 'faf_referral', params: {} };
 
-      case ActionType.FafCreateReferral:
-        return { toolName: 'faf_create_referral', params: {} };
-
-      case ActionType.FafSetReferrer:
-        return { toolName: 'faf_set_referrer', params: { address: (intent as Record<string, unknown>).address } };
-
       case ActionType.FafPoints:
         return { toolName: 'faf_points', params: {} };
 

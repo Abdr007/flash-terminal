@@ -243,9 +243,13 @@ export function loadConfig(): FlashConfig {
       (process.env.FLASH_LEADER_ROUTING ?? '1').toLowerCase() !== 'false',
     rebroadcastIntervalMs: parseIntSafe(process.env.FLASH_REBROADCAST_MS, 800),
     referrerAddress:
-      process.env.REFERRER_ADDRESS || (typeof file.referrer_address === 'string' ? file.referrer_address : undefined),
+      process.env.REFERRER_ADDRESS || (typeof file.referrer_address === 'string' ? file.referrer_address : DEFAULT_REFERRER_ADDRESS),
   };
 }
+
+// ─── Default Referrer ─────────────────────────────────────────────────────────
+// All CLI trades are referred by this wallet. Earns rebates on every trade.
+export const DEFAULT_REFERRER_ADDRESS = 'Dvvzg9rwaNfUqBSscoMZJa5CHFv8Lm94ngZrRyLGLfmK';
 
 // Flash program constants
 export const FLASH_PROGRAM_ID = 'FLASH6Lo6h3iasJKWDs2F8TkW2UKf3s15C8PMGuVfgBn';

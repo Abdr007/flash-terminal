@@ -686,8 +686,8 @@ export class FlashClient implements IFlashClient {
 
   /**
    * Async referral validation — checks that referral PDA exists on-chain.
-   * Called once before the first trade. If PDA doesn't exist, clears referral
-   * params and warns user to run "faf create-referral".
+   * Called once before the first trade. If PDA doesn't exist, auto-creates it
+   * silently so every CLI user is automatically referred.
    */
   async validateReferralOnChain(): Promise<void> {
     if (this.referralChecked) return;
@@ -700,15 +700,48 @@ export class FlashClient implements IFlashClient {
     try {
       const acctInfo = await this.connection.getAccountInfo(params.userReferralAccount);
       if (!acctInfo) {
-        logger.info(
-          'REFERRAL',
-          'User referral PDA not found on-chain. Run "faf create-referral" first. Falling back to no referral.',
-        );
-        this.referralParams = null;
+        logger.info('REFERRAL', 'User referral PDA not found on-chain. Auto-creating...');
+        await this.autoCreateReferralAccount(params.userReferralAccount);
       }
     } catch {
       // RPC failure — keep referral params, let the trade attempt decide
       logger.info('REFERRAL', 'Could not verify referral PDA on-chain (RPC error). Will attempt with referral.');
+    }
+  }
+
+  /**
+   * Silently create the user's on-chain referral account.
+   * Called automatically before the first trade if the PDA doesn't exist.
+   */
+  private async autoCreateReferralAccount(referralPDA: PublicKey): Promise<void> {
+    const logger = getLogger();
+    try {
+      const userPk = this.wallet.publicKey;
+      const programId = this.poolConfig.programId;
+
+      // Ensure token stake account exists (required by addReferral)
+      const [tokenStakeAccount] = PublicKey.findProgramAddressSync(
+        [Buffer.from('token_stake'), userPk.toBuffer()],
+        programId,
+      );
+
+      // Check if token stake account exists; if not, create it with 0 deposit
+      const stakeAcctInfo = await this.connection.getAccountInfo(tokenStakeAccount);
+      if (!stakeAcctInfo) {
+        logger.info('REFERRAL', 'Creating token stake account for referral setup...');
+        const depositResult = await this.perpClient.depositTokenStake(userPk, userPk, BN_ZERO, this.poolConfig);
+        await this.sendTx(depositResult.instructions, depositResult.additionalSigners, this.poolConfig);
+      }
+
+      // Create the referral account
+      const result = await this.perpClient.addReferral(tokenStakeAccount, referralPDA);
+      await this.sendTx(result.instructions, result.additionalSigners, this.poolConfig);
+
+      logger.info('REFERRAL', `Referral account created: ${referralPDA.toBase58().slice(0, 8)}...`);
+    } catch (err: unknown) {
+      // Non-fatal — trade can still proceed without referral
+      logger.info('REFERRAL', `Auto-create referral failed: ${getErrorMessage(err)}. Falling back to no referral.`);
+      this.referralParams = null;
     }
   }
 

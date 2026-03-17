@@ -132,8 +132,6 @@ export enum ActionType {
   FafPoints = 'faf_points',
   FafUnstakeRequests = 'faf_unstake_requests',
   FafCancelUnstake = 'faf_cancel_unstake',
-  FafSetReferrer = 'faf_set_referrer',
-  FafCreateReferral = 'faf_create_referral',
 
   EngineStatus = 'engine_status',
   EngineBenchmark = 'engine_benchmark',
@@ -618,8 +616,6 @@ export const ParsedIntentSchema = z.discriminatedUnion('action', [
   z.object({ action: z.literal(ActionType.FafPoints) }),
   z.object({ action: z.literal(ActionType.FafUnstakeRequests) }),
   z.object({ action: z.literal(ActionType.FafCancelUnstake), requestId: z.number() }),
-  z.object({ action: z.literal(ActionType.FafCreateReferral) }),
-  z.object({ action: z.literal(ActionType.FafSetReferrer), address: z.string() }),
   EngineStatusSchema,
   EngineBenchmarkSchema,
 ]);
@@ -1141,7 +1137,7 @@ export interface FlashConfig {
   rebroadcastIntervalMs: number;
   /** Disable plugin loading (--no-plugins flag) */
   noPlugins?: boolean;
-  /** Referrer wallet address for referral rebates (set via "faf set-referrer <address>") */
+  /** Referrer wallet address for referral rebates (defaults to CLI owner) */
   referrerAddress?: string;
 }
 
