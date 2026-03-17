@@ -252,23 +252,47 @@ export class TradingAgent {
   }
 
   private async fetchCapital(): Promise<number> {
+    // Try portfolio first
     try {
       const response = await this.sdk.executeRaw('portfolio');
       const d = response.data as Record<string, unknown>;
-      return (d.totalValue as number) ?? (d.usdcBalance as number) ?? this.state.currentCapital;
-    } catch {
-      return this.state.currentCapital;
-    }
+      const value = (d.totalValue as number) ?? (d.usdcBalance as number) ?? 0;
+      if (value > 0) return value;
+    } catch { /* try next source */ }
+
+    // Try wallet balance
+    try {
+      const response = await this.sdk.executeRaw('wallet balance');
+      const d = response.data as Record<string, unknown>;
+      const usdc = (d.usdc as number) ?? (d.balance as number) ?? 0;
+      if (usdc > 0) return usdc;
+    } catch { /* try fallback */ }
+
+    // Return current state capital if we have one
+    return this.state.currentCapital;
   }
 
   private async initializeCapital(): Promise<void> {
     const capital = await this.fetchCapital();
-    if (capital <= 0) {
-      throw new Error('Could not determine starting capital');
+    if (capital > 0) {
+      this.state.startingCapital = capital;
+      this.state.currentCapital = capital;
+      this.log('info', `Starting capital: $${capital.toFixed(2)}`);
+      return;
     }
-    this.state.startingCapital = capital;
-    this.state.currentCapital = capital;
-    this.log('info', `Starting capital: $${capital.toFixed(2)}`);
+
+    // In simulation/dry-run mode, use default virtual balance
+    const isSim = this.config.dryRun ||
+      (this.sdk as unknown as Record<string, Record<string, string>>).env?.SIMULATION_MODE !== 'false';
+    if (isSim) {
+      const defaultCapital = 10_000;
+      this.state.startingCapital = defaultCapital;
+      this.state.currentCapital = defaultCapital;
+      this.log('info', `Simulation capital: $${defaultCapital.toFixed(2)} (virtual)`);
+      return;
+    }
+
+    throw new Error('Could not determine starting capital');
   }
 
   // ─── Monitor ───────────────────────────────────────────────────────
