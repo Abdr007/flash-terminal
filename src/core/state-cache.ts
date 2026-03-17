@@ -184,7 +184,7 @@ export class StateCache {
       if (allKeys.length === 0) return;
 
       // Deduplicate keys
-      const uniqueKeys = [...new Map(allKeys.map(k => [k.toBase58(), k])).values()];
+      const uniqueKeys = [...new Map(allKeys.map((k) => [k.toBase58(), k])).values()];
 
       // Batch fetch
       for (let i = 0; i < uniqueKeys.length; i += BATCH_SIZE) {
@@ -212,7 +212,10 @@ export class StateCache {
             });
           }
         } catch (batchErr) {
-          logger.debug('STATE-CACHE', `Batch fetch failed: ${batchErr instanceof Error ? batchErr.message : 'unknown'}`);
+          logger.debug(
+            'STATE-CACHE',
+            `Batch fetch failed: ${batchErr instanceof Error ? batchErr.message : 'unknown'}`,
+          );
         }
       }
 
@@ -260,7 +263,7 @@ export class StateCache {
     const key = pubkey.toBase58();
     const cached = this.accountCache.get(key);
 
-    if (cached && (Date.now() - cached.fetchedAt) < STALENESS_THRESHOLD_MS) {
+    if (cached && Date.now() - cached.fetchedAt < STALENESS_THRESHOLD_MS) {
       this._metrics.cacheHits++;
       return {
         data: cached.data,
@@ -315,7 +318,7 @@ export class StateCache {
       const key = pubkeys[i].toBase58();
       const cached = this.accountCache.get(key);
 
-      if (cached && (now - cached.fetchedAt) < STALENESS_THRESHOLD_MS) {
+      if (cached && now - cached.fetchedAt < STALENESS_THRESHOLD_MS) {
         this._metrics.cacheHits++;
         results[i] = {
           data: cached.data,
@@ -383,7 +386,7 @@ export class StateCache {
    */
   isFresh(pubkey: PublicKey): boolean {
     const cached = this.accountCache.get(pubkey.toBase58());
-    return cached ? (Date.now() - cached.fetchedAt) < STALENESS_THRESHOLD_MS : false;
+    return cached ? Date.now() - cached.fetchedAt < STALENESS_THRESHOLD_MS : false;
   }
 
   /**

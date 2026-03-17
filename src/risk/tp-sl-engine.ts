@@ -36,11 +36,7 @@ export interface TpSlTarget {
 export type CloseReason = 'TAKE_PROFIT' | 'STOP_LOSS';
 
 /** Callback to execute a close. Provided by the terminal at init time. */
-export type CloseExecutor = (
-  market: string,
-  side: TradeSide,
-  reason: CloseReason,
-) => Promise<void>;
+export type CloseExecutor = (market: string, side: TradeSide, reason: CloseReason) => Promise<void>;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -301,8 +297,8 @@ export class TpSlEngine {
       logger.info('TP_SL', `${reason} triggered for ${pos.market} ${pos.side} at $${valuationPrice.toFixed(4)}`);
       process.stdout.write(
         chalk.bold.yellow(`\n  [TP/SL] ${reason} triggered for ${pos.market} ${pos.side.toUpperCase()}`) +
-        chalk.dim(` — price: $${valuationPrice.toFixed(4)}`) +
-        chalk.dim(` — executing close...\n`)
+          chalk.dim(` — price: $${valuationPrice.toFixed(4)}`) +
+          chalk.dim(` — executing close...\n`),
       );
 
       // Fire-and-forget close execution (non-blocking for other positions)
@@ -315,12 +311,7 @@ export class TpSlEngine {
     this.maybeStopPolling();
   }
 
-  private async executeClose(
-    market: string,
-    side: TradeSide,
-    reason: CloseReason,
-    key: string,
-  ): Promise<void> {
+  private async executeClose(market: string, side: TradeSide, reason: CloseReason, key: string): Promise<void> {
     try {
       await this.closeExecutor!(market, side, reason);
     } finally {

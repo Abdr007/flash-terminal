@@ -178,11 +178,7 @@ export const profilingSummaryTool: ToolDefinition = {
     if (categories.length === 0) {
       return {
         success: true,
-        message: [
-          '',
-          `  ${theme.dim('Profiling enabled but no samples recorded yet.')}`,
-          '',
-        ].join('\n'),
+        message: ['', `  ${theme.dim('Profiling enabled but no samples recorded yet.')}`, ''].join('\n'),
       };
     }
 

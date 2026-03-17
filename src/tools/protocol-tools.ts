@@ -1,18 +1,6 @@
 import { z } from 'zod';
-import {
-  ToolDefinition,
-  ToolContext,
-  ToolResult,
-  MarketOI,
-} from '../types/index.js';
-import {
-  formatUsd,
-  formatPrice,
-  formatPercent,
-  formatTable,
-  padVisible,
-  padVisibleStart,
-} from '../utils/format.js';
+import { ToolDefinition, ToolContext, ToolResult, MarketOI } from '../types/index.js';
+import { formatUsd, formatPrice, formatPercent, formatTable, padVisible, padVisibleStart } from '../utils/format.js';
 import { getErrorMessage } from '../utils/retry.js';
 import { getProtocolFeeRates } from '../utils/protocol-fees.js';
 import { DATA_STALENESS_WARNING_SECONDS } from '../core/risk-config.js';
@@ -117,7 +105,9 @@ export const protocolStatusTool: ToolDefinition = {
         const latency = mgr.activeLatencyMs;
         lines.push(`  RPC Latency:   ${latency >= 0 ? chalk.green(`${latency}ms`) : chalk.dim('N/A')}`);
         const lag = mgr.activeSlotLag;
-        lines.push(`  Slot Lag:      ${lag === 0 ? chalk.green('0') : lag > 0 ? chalk.yellow(String(lag)) : chalk.dim('N/A')}`);
+        lines.push(
+          `  Slot Lag:      ${lag === 0 ? chalk.green('0') : lag > 0 ? chalk.yellow(String(lag)) : chalk.dim('N/A')}`,
+        );
       } else {
         lines.push(`  RPC Slot:      ${chalk.dim('not connected')}`);
       }
@@ -130,9 +120,12 @@ export const protocolStatusTool: ToolDefinition = {
       const oracleStart = performance.now();
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), 5_000);
-      const resp = await fetch('https://hermes.pyth.network/api/latest_vaas?ids[]=0xef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d', {
-        signal: controller.signal,
-      });
+      const resp = await fetch(
+        'https://hermes.pyth.network/api/latest_vaas?ids[]=0xef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d',
+        {
+          signal: controller.signal,
+        },
+      );
       clearTimeout(timer);
       const oracleMs = Math.round(performance.now() - oracleStart);
       lines.push(`  Oracle Health: ${resp.ok ? chalk.green(`OK (${oracleMs}ms)`) : chalk.red(`HTTP ${resp.status}`)}`);
@@ -275,21 +268,23 @@ interface AggregatedTrade {
  * Events are processed chronologically; OPEN creates a record,
  * ADD/REMOVE_COLLATERAL adjusts it, CLOSE finalizes it.
  */
-function aggregateTradeEvents(events: Array<{
-  action: string;
-  market: string;
-  side: string;
-  leverage?: number;
-  collateral?: number;
-  collateralUsd?: number;
-  sizeUsd?: number;
-  entryPrice?: number;
-  exitPrice?: number;
-  price?: number;
-  pnl?: number;
-  closeReason?: string;
-  timestamp: number;
-}>): AggregatedTrade[] {
+function aggregateTradeEvents(
+  events: Array<{
+    action: string;
+    market: string;
+    side: string;
+    leverage?: number;
+    collateral?: number;
+    collateralUsd?: number;
+    sizeUsd?: number;
+    entryPrice?: number;
+    exitPrice?: number;
+    price?: number;
+    pnl?: number;
+    closeReason?: string;
+    timestamp: number;
+  }>,
+): AggregatedTrade[] {
   const active = new Map<string, AggregatedTrade>();
   const completed: AggregatedTrade[] = [];
 
@@ -377,14 +372,21 @@ function renderAggregatedRows(trades: AggregatedTrade[]): string[] {
     const exitStr = padVisibleStart(t.exitPrice !== undefined ? `$${formatPrice(t.exitPrice)}` : theme.dim('—'), 10);
     const sizeStr = padVisibleStart(t.sizeUsd > 0 ? formatUsd(t.sizeUsd) : theme.dim('—'), 8);
     const coll = padVisibleStart(t.collateral > 0 ? formatUsd(t.collateral) : theme.dim('—'), 8);
-    const pnlStr = t.pnl !== undefined
-      ? padVisibleStart(t.pnl >= 0 ? theme.positive(`+${formatUsd(t.pnl)}`) : theme.negative(formatUsd(t.pnl)), 8)
-      : padVisibleStart(theme.dim('—'), 8);
+    const pnlStr =
+      t.pnl !== undefined
+        ? padVisibleStart(t.pnl >= 0 ? theme.positive(`+${formatUsd(t.pnl)}`) : theme.negative(formatUsd(t.pnl)), 8)
+        : padVisibleStart(theme.dim('—'), 8);
     const reason = t.closeReason
-      ? (t.closeReason === 'TAKE_PROFIT' ? theme.positive('TP') : t.closeReason === 'STOP_LOSS' ? theme.negative('SL') : t.closeReason)
+      ? t.closeReason === 'TAKE_PROFIT'
+        ? theme.positive('TP')
+        : t.closeReason === 'STOP_LOSS'
+          ? theme.negative('SL')
+          : t.closeReason
       : '';
 
-    rows.push(`  ${time}  ${market}  ${side}  ${lev}  ${entryStr}  ${exitStr}  ${sizeStr}  ${coll}  ${pnlStr}  ${reason}`);
+    rows.push(
+      `  ${time}  ${market}  ${side}  ${lev}  ${entryStr}  ${exitStr}  ${sizeStr}  ${coll}  ${pnlStr}  ${reason}`,
+    );
   }
   return rows;
 }
@@ -486,7 +488,7 @@ export const liquidationMapTool: ToolDefinition = {
       }
 
       const targetMarkets = marketFilter
-        ? markets.filter(m => m.symbol.toUpperCase() === marketFilter)
+        ? markets.filter((m) => m.symbol.toUpperCase() === marketFilter)
         : markets.slice(0, 3);
 
       if (targetMarkets.length === 0) {
@@ -499,7 +501,7 @@ export const liquidationMapTool: ToolDefinition = {
         const price = mkt.price;
         if (!Number.isFinite(price) || price <= 0) continue;
 
-        const oi = oiData.markets.find(m => m.market.toUpperCase() === mkt.symbol.toUpperCase());
+        const oi = oiData.markets.find((m) => m.market.toUpperCase() === mkt.symbol.toUpperCase());
         const longOi = oi?.longOi ?? mkt.openInterestLong;
         const shortOi = oi?.shortOi ?? mkt.openInterestShort;
         const totalOi = longOi + shortOi;
@@ -521,32 +523,29 @@ export const liquidationMapTool: ToolDefinition = {
 
         const leverageBands = [2, 3, 5, 10, 20, 50, 100];
         const levHeaders = ['Leverage', 'Long Liq Price', 'Short Liq Price', 'Distance'];
-        const levRows = leverageBands.map(lev => {
+        const levRows = leverageBands.map((lev) => {
           const longLiq = price * (1 - 1 / lev);
           const shortLiq = price * (1 + 1 / lev);
           const distPct = (1 / lev) * 100;
-          return [
-            `${lev}x`,
-            formatPrice(longLiq),
-            formatPrice(shortLiq),
-            `${distPct.toFixed(1)}%`,
-          ];
+          return [`${lev}x`, formatPrice(longLiq), formatPrice(shortLiq), `${distPct.toFixed(1)}%`];
         });
         lines.push(formatTable(levHeaders, levRows));
         lines.push('');
 
         // ── Whale positions with known data ──
-        const mktWhales = whalePositions.filter(w => {
-          const sym = (w.market_symbol ?? w.market ?? '').toUpperCase();
-          return sym === mkt.symbol.toUpperCase() && Number.isFinite(w.size_usd) && (w.size_usd ?? 0) > 0;
-        }).sort((a, b) => (Number(b.size_usd) || 0) - (Number(a.size_usd) || 0));
+        const mktWhales = whalePositions
+          .filter((w) => {
+            const sym = (w.market_symbol ?? w.market ?? '').toUpperCase();
+            return sym === mkt.symbol.toUpperCase() && Number.isFinite(w.size_usd) && (w.size_usd ?? 0) > 0;
+          })
+          .sort((a, b) => (Number(b.size_usd) || 0) - (Number(a.size_usd) || 0));
 
         if (mktWhales.length > 0) {
           lines.push(`  ${theme.section('Whale Positions')}`);
           lines.push('');
 
           const whaleHeaders = ['Side', 'Size', 'Entry Price', 'Dist from Current'];
-          const whaleRows = mktWhales.slice(0, 10).map(w => {
+          const whaleRows = mktWhales.slice(0, 10).map((w) => {
             const side = String(w.side ?? '?').toUpperCase();
             const size = Number(w.size_usd ?? 0);
             const entry = Number(w.entry_price ?? w.mark_price ?? 0);
@@ -569,7 +568,11 @@ export const liquidationMapTool: ToolDefinition = {
           const imbalance = Math.abs(longPct - 50);
           if (imbalance > 10) {
             const direction = longPct > 50 ? 'long-heavy' : 'short-heavy';
-            lines.push(chalk.yellow(`  OI is ${direction} (${longPct.toFixed(0)}/${(100 - longPct).toFixed(0)}) — cascading liquidations more likely on the heavy side.`));
+            lines.push(
+              chalk.yellow(
+                `  OI is ${direction} (${longPct.toFixed(0)}/${(100 - longPct).toFixed(0)}) — cascading liquidations more likely on the heavy side.`,
+              ),
+            );
             lines.push('');
           }
         }
@@ -613,11 +616,14 @@ export const fundingDashboardTool: ToolDefinition = {
       }
 
       const targetMarkets = marketFilter
-        ? markets.filter(m => m.symbol.toUpperCase() === marketFilter)
-        : markets.filter(m => m.openInterestLong + m.openInterestShort > 0);
+        ? markets.filter((m) => m.symbol.toUpperCase() === marketFilter)
+        : markets.filter((m) => m.openInterestLong + m.openInterestShort > 0);
 
       if (targetMarkets.length === 0) {
-        return { success: false, message: theme.negative(`\n  No market data available${marketFilter ? ` for ${marketFilter}` : ''}.\n`) };
+        return {
+          success: false,
+          message: theme.negative(`\n  No market data available${marketFilter ? ` for ${marketFilter}` : ''}.\n`),
+        };
       }
 
       const lines: string[] = [];
@@ -661,17 +667,21 @@ export const fundingDashboardTool: ToolDefinition = {
           if (poolName) {
             const pc = PoolConfig.fromIdsByName(poolName, 'mainnet-beta');
             const custodies = pc.custodies as Array<{ custodyAccount: unknown; symbol: string }>;
-            const custody = custodies.find(c => c.symbol.toUpperCase() === mkt.symbol.toUpperCase());
+            const custody = custodies.find((c) => c.symbol.toUpperCase() === mkt.symbol.toUpperCase());
             if (custody) {
-              const perpClient = (context.flashClient as unknown as Record<string, unknown>).perpClient as Record<string, unknown> | undefined;
+              const perpClient = (context.flashClient as unknown as Record<string, unknown>).perpClient as
+                | Record<string, unknown>
+                | undefined;
               if (perpClient) {
                 const RATE_POWER = 1_000_000_000;
                 const program = (perpClient as Record<string, unknown>).program as Record<string, unknown>;
                 const acct = (program.account as Record<string, unknown>).custody as Record<string, unknown>;
-                const custodyAcct = await (acct.fetch as (addr: unknown) => Promise<Record<string, unknown>>)(custody.custodyAccount);
+                const custodyAcct = await (acct.fetch as (addr: unknown) => Promise<Record<string, unknown>>)(
+                  custody.custodyAccount,
+                );
                 const fees = custodyAcct.fees as Record<string, unknown>;
-                const openFee = parseFloat(String(fees.openPosition)) / RATE_POWER * 100;
-                const closeFee = parseFloat(String(fees.closePosition)) / RATE_POWER * 100;
+                const openFee = (parseFloat(String(fees.openPosition)) / RATE_POWER) * 100;
+                const closeFee = (parseFloat(String(fees.closePosition)) / RATE_POWER) * 100;
                 lines.push('');
                 lines.push(theme.pair('Open Fee', `${openFee.toFixed(4)}%`));
                 lines.push(theme.pair('Close Fee', `${closeFee.toFixed(4)}%`));
@@ -691,17 +701,15 @@ export const fundingDashboardTool: ToolDefinition = {
         lines.push('');
 
         // Sort by total OI descending
-        const sorted = [...targetMarkets].sort((a, b) =>
-          (b.openInterestLong + b.openInterestShort) - (a.openInterestLong + a.openInterestShort)
+        const sorted = [...targetMarkets].sort(
+          (a, b) => b.openInterestLong + b.openInterestShort - (a.openInterestLong + a.openInterestShort),
         );
 
         const headers = ['Market', 'Long OI', 'Short OI', 'Total OI', 'L/S Ratio', 'Bias'];
-        const rows = sorted.map(m => {
+        const rows = sorted.map((m) => {
           const totalOi = m.openInterestLong + m.openInterestShort;
           const longPct = totalOi > 0 ? (m.openInterestLong / totalOi) * 100 : 50;
-          const ratio = totalOi > 0
-            ? `${longPct.toFixed(0)}/${(100 - longPct).toFixed(0)}`
-            : 'N/A';
+          const ratio = totalOi > 0 ? `${longPct.toFixed(0)}/${(100 - longPct).toFixed(0)}` : 'N/A';
           const imbalance = longPct - 50;
           let bias = theme.dim('balanced');
           if (imbalance > 10) bias = theme.positive('LONG');
@@ -751,7 +759,7 @@ export const liquidityDepthTool: ToolDefinition = {
       }
 
       const targetMarkets = marketFilter
-        ? markets.filter(m => m.symbol.toUpperCase() === marketFilter)
+        ? markets.filter((m) => m.symbol.toUpperCase() === marketFilter)
         : markets.slice(0, 3);
 
       if (targetMarkets.length === 0) {
@@ -764,7 +772,7 @@ export const liquidityDepthTool: ToolDefinition = {
         const price = mkt.price;
         if (!Number.isFinite(price) || price <= 0) continue;
 
-        const oi = oiData.markets.find(m => m.market.toUpperCase() === mkt.symbol.toUpperCase());
+        const oi = oiData.markets.find((m) => m.market.toUpperCase() === mkt.symbol.toUpperCase());
         const longOi = oi?.longOi ?? mkt.openInterestLong;
         const shortOi = oi?.shortOi ?? mkt.openInterestShort;
         const totalOi = longOi + shortOi;
@@ -815,17 +823,20 @@ export const protocolHealthTool: ToolDefinition = {
           const slot = rpcMgr.activeSlot > 0 ? rpcMgr.activeSlot : await rpcMgr.connection.getSlot('confirmed');
           if (Number.isFinite(slot)) blockHeight = slot.toLocaleString();
         }
-      } catch { /* non-critical */ }
+      } catch {
+        /* non-critical */
+      }
 
       // Top markets by OI
-      const top5 = stats.marketsByOI.filter(m => m.total > 0).slice(0, 5);
+      const top5 = stats.marketsByOI.filter((m) => m.total > 0).slice(0, 5);
 
       const dataAge = pss.getDataAge();
-      const freshnessStr = dataAge >= 0
-        ? (dataAge > DATA_STALENESS_WARNING_SECONDS
-          ? chalk.yellow(`  ⚠ Data updated: ${dataAge}s ago — protocol data may be stale`)
-          : theme.dim(`  Data updated: ${dataAge}s ago`))
-        : '';
+      const freshnessStr =
+        dataAge >= 0
+          ? dataAge > DATA_STALENESS_WARNING_SECONDS
+            ? chalk.yellow(`  ⚠ Data updated: ${dataAge}s ago — protocol data may be stale`)
+            : theme.dim(`  Data updated: ${dataAge}s ago`)
+          : '';
 
       const lines: string[] = [
         theme.titleBlock('FLASH PROTOCOL HEALTH'),
@@ -833,7 +844,10 @@ export const protocolHealthTool: ToolDefinition = {
         `  ${theme.section('Protocol Overview')}`,
         theme.pair('Active Markets', stats.activeMarkets.toString()),
         theme.pair('Open Interest', formatUsd(stats.totalOpenInterest)),
-        theme.pair('Long/Short Ratio', `${theme.positive(stats.longPct + '%')} / ${theme.negative(stats.shortPct + '%')}`),
+        theme.pair(
+          'Long/Short Ratio',
+          `${theme.positive(stats.longPct + '%')} / ${theme.negative(stats.shortPct + '%')}`,
+        ),
         '',
       ];
 
@@ -867,7 +881,10 @@ export const protocolHealthTool: ToolDefinition = {
 
       return { success: true, message: lines.join('\n') };
     } catch (error: unknown) {
-      return { success: false, message: theme.dim(`\n  Protocol health data unavailable: ${getErrorMessage(error)}\n`) };
+      return {
+        success: false,
+        message: theme.dim(`\n  Protocol health data unavailable: ${getErrorMessage(error)}\n`),
+      };
     }
   },
 };
@@ -879,25 +896,35 @@ export const systemAuditTool: ToolDefinition = {
   description: 'Verify protocol data integrity across all subsystems',
   parameters: z.object({}),
   execute: async (_params, context): Promise<ToolResult> => {
-    const lines: string[] = [
-      theme.titleBlock('SYSTEM AUDIT'),
-      '',
-    ];
+    const lines: string[] = [theme.titleBlock('SYSTEM AUDIT'), ''];
 
     let passCount = 0;
     let failCount = 0;
 
-    const pass = (msg: string) => { passCount++; lines.push(theme.positive(`  ✔ ${msg}`)); };
-    const fail = (msg: string) => { failCount++; lines.push(theme.negative(`  ✘ ${msg}`)); };
+    const pass = (msg: string) => {
+      passCount++;
+      lines.push(theme.positive(`  ✔ ${msg}`));
+    };
+    const fail = (msg: string) => {
+      failCount++;
+      lines.push(theme.negative(`  ✘ ${msg}`));
+    };
 
     // 1. Fee engine vs on-chain custody
     lines.push(`  ${theme.section('Fee Engine')}`);
     const testMarkets = ['SOL', 'BTC', 'ETH'];
     for (const market of testMarkets) {
       try {
-        const rates = await getProtocolFeeRates(market, context.simulationMode ? null : (context.flashClient as unknown as Record<string, unknown>).perpClient ?? null);
+        const rates = await getProtocolFeeRates(
+          market,
+          context.simulationMode
+            ? null
+            : ((context.flashClient as unknown as Record<string, unknown>).perpClient ?? null),
+        );
         if (rates.source === 'on-chain') {
-          pass(`${market}: on-chain (open=${(rates.openFeeRate * 100).toFixed(4)}%, close=${(rates.closeFeeRate * 100).toFixed(4)}%)`);
+          pass(
+            `${market}: on-chain (open=${(rates.openFeeRate * 100).toFixed(4)}%, close=${(rates.closeFeeRate * 100).toFixed(4)}%)`,
+          );
         } else {
           fail(`${market}: using sdk-default fallback (not on-chain)`);
         }
@@ -1004,7 +1031,9 @@ export const systemAuditTool: ToolDefinition = {
     // Summary
     lines.push(`  ${theme.separator(40)}`);
     lines.push('');
-    lines.push(`  ${theme.dim('Pass:')} ${theme.positive(String(passCount))}  ${theme.dim('Fail:')} ${failCount > 0 ? theme.negative(String(failCount)) : theme.dim('0')}`);
+    lines.push(
+      `  ${theme.dim('Pass:')} ${theme.positive(String(passCount))}  ${theme.dim('Fail:')} ${failCount > 0 ? theme.negative(String(failCount)) : theme.dim('0')}`,
+    );
     lines.push('');
 
     if (failCount === 0) {
@@ -1033,7 +1062,10 @@ export const txMetricsTool: ToolDefinition = {
 
     const s = engine.getMetricsSummary();
     if (s.totalTxs === 0) {
-      return { success: true, message: theme.titleBlock('TX ENGINE METRICS') + '\n\n  No transactions recorded yet.\n' };
+      return {
+        success: true,
+        message: theme.titleBlock('TX ENGINE METRICS') + '\n\n  No transactions recorded yet.\n',
+      };
     }
 
     const w = 26; // label width for alignment
@@ -1045,7 +1077,11 @@ export const txMetricsTool: ToolDefinition = {
       theme.pair('Avg Confirm Time', `${s.avgConfirmLatencyMs}ms`, w),
       theme.pair('P50 Confirm', `${s.p50ConfirmMs}ms`, w),
       theme.pair('P95 Confirm', `${s.p95ConfirmMs}ms`, w),
-      theme.pair('Avg Blockhash Fetch', s.avgBlockhashLatencyMs === 0 ? 'pre-cached' : `${s.avgBlockhashLatencyMs}ms`, w),
+      theme.pair(
+        'Avg Blockhash Fetch',
+        s.avgBlockhashLatencyMs === 0 ? 'pre-cached' : `${s.avgBlockhashLatencyMs}ms`,
+        w,
+      ),
       theme.pair('Avg Build Time', `${s.avgBuildTimeMs}ms`, w),
       theme.pair('WS Confirmation', `${s.wsConfirmPct}%`, w),
       theme.pair('Avg Broadcast Endpoints', `${s.avgBroadcastCount}`, w),
@@ -1057,7 +1093,15 @@ export const txMetricsTool: ToolDefinition = {
       theme.pair('Leader Routed', `${s.leaderRoutedPct}%`, w),
       theme.pair('TPU Forwarded', `${s.tpuForwardedPct}%`, w),
       theme.pair('Avg Slot Delay', s.avgSlotDelay > 0 ? `${s.avgSlotDelay} slots` : 'n/a', w),
-      theme.pair('Fastest Endpoint', s.fastestEndpoint ? s.fastestEndpoint.replace(/[?&](api[-_]?key|token|secret|auth)=[^&]*/gi, '') .replace(/\/v2\/[a-zA-Z0-9_-]{10,}/, '/v2/***') : 'n/a', w),
+      theme.pair(
+        'Fastest Endpoint',
+        s.fastestEndpoint
+          ? s.fastestEndpoint
+              .replace(/[?&](api[-_]?key|token|secret|auth)=[^&]*/gi, '')
+              .replace(/\/v2\/[a-zA-Z0-9_-]{10,}/, '/v2/***')
+          : 'n/a',
+        w,
+      ),
       '',
     ];
 

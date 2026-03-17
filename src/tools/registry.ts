@@ -43,11 +43,7 @@ export class ToolRegistry {
     return Array.from(this.tools.keys());
   }
 
-  async execute(
-    toolName: string,
-    params: Record<string, unknown>,
-    context: ToolContext
-  ): Promise<ToolResult> {
+  async execute(toolName: string, params: Record<string, unknown>, context: ToolContext): Promise<ToolResult> {
     const tool = this.tools.get(toolName);
     if (!tool) {
       return {

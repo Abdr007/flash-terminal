@@ -50,7 +50,7 @@ export class AlertManager {
   onAlert(handler: AlertHandler): () => void {
     this.handlers.push(handler);
     return () => {
-      this.handlers = this.handlers.filter(h => h !== handler);
+      this.handlers = this.handlers.filter((h) => h !== handler);
     };
   }
 
@@ -78,16 +78,22 @@ export class AlertManager {
       } else {
         logger.info('ALERT', `[${severity.toUpperCase()}] ${event}: ${message}`, data);
       }
-    } catch { /* logging must never throw */ }
+    } catch {
+      /* logging must never throw */
+    }
 
     // Fire all handlers asynchronously
     for (const handler of this.handlers) {
       try {
         const result = handler(alert);
         if (result && typeof (result as Promise<void>).catch === 'function') {
-          (result as Promise<void>).catch(() => { /* handler errors are silenced */ });
+          (result as Promise<void>).catch(() => {
+            /* handler errors are silenced */
+          });
         }
-      } catch { /* handler errors are silenced */ }
+      } catch {
+        /* handler errors are silenced */
+      }
     }
   }
 

@@ -13,10 +13,10 @@ export interface VolatilityInput {
 }
 
 export interface VolatilityResult {
-  stddev: number;           // raw standard deviation of returns
-  volatility: number;       // normalized 0-1
+  stddev: number; // raw standard deviation of returns
+  volatility: number; // normalized 0-1
   isHighVolatility: boolean; // volatility > 0.7
-  isLowVolatility: boolean;  // volatility < 0.3
+  isLowVolatility: boolean; // volatility < 0.3
 }
 
 /**

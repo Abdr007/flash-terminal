@@ -1,17 +1,6 @@
 import { z } from 'zod';
-import {
-  ToolDefinition,
-  ToolResult,
-  MarketOI,
-  DailyVolume,
-  LeaderboardEntry,
-} from '../types/index.js';
-import {
-  formatUsd,
-  formatTable,
-  colorPnl,
-  shortAddress,
-} from '../utils/format.js';
+import { ToolDefinition, ToolResult, MarketOI, DailyVolume, LeaderboardEntry } from '../types/index.js';
+import { formatUsd, formatTable, colorPnl, shortAddress } from '../utils/format.js';
 import chalk from 'chalk';
 import { theme } from '../cli/theme.js';
 
@@ -113,7 +102,11 @@ export const flashGetLeaderboard: ToolDefinition = {
   }),
   execute: async (params, context): Promise<ToolResult> => {
     try {
-      const { metric: rawMetric, period, limit: rawLimit } = params as {
+      const {
+        metric: rawMetric,
+        period,
+        limit: rawLimit,
+      } = params as {
         metric?: 'pnl' | 'volume';
         period?: number;
         limit?: number;

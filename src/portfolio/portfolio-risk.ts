@@ -97,7 +97,13 @@ export function checkPortfolioRisk(params: {
   }
 
   // 6. Correlation check — includes proposed trade's notional
-  const corrCheck = checkCorrelation(market, exposureByMarket, totalCapital, ALLOCATION_LIMITS.MAX_CORRELATED_EXPOSURE, notional);
+  const corrCheck = checkCorrelation(
+    market,
+    exposureByMarket,
+    totalCapital,
+    ALLOCATION_LIMITS.MAX_CORRELATED_EXPOSURE,
+    notional,
+  );
   if (!corrCheck.passed) {
     return { passed: false, reason: corrCheck.reason };
   }

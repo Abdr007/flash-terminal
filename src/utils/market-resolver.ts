@@ -59,7 +59,7 @@ const MARKET_ALIASES: Record<string, string> = {
   apple: 'AAPL',
   amazon: 'AMZN',
   palantir: 'PLTR',
-  'sp500': 'SPY',
+  sp500: 'SPY',
   's&p': 'SPY',
   's&p500': 'SPY',
   'sp 500': 'SPY',
@@ -85,9 +85,7 @@ export function resolveMarket(input: string): string {
   const collapsed = upper.replace(/\s+/g, '');
 
   // Strip common suffixes: "-perp", "-perpetual", "perp", "perpetual"
-  const stripped = lower
-    .replace(/[-\s]?perp(?:etual)?$/i, '')
-    .trim();
+  const stripped = lower.replace(/[-\s]?perp(?:etual)?$/i, '').trim();
   if (stripped && stripped !== lower) {
     const resolved = resolveMarket(stripped);
     if (resolved && getAllMarkets().includes(resolved)) return resolved;

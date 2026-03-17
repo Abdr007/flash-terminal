@@ -104,13 +104,17 @@ export class CircuitBreaker {
 
     // Check session loss limit
     if (this.config.maxSessionLossUsd > 0 && this.state.sessionLossUsd >= this.config.maxSessionLossUsd) {
-      this.trip(`Session loss limit reached: $${this.state.sessionLossUsd.toFixed(2)} >= $${this.config.maxSessionLossUsd.toFixed(2)}`);
+      this.trip(
+        `Session loss limit reached: $${this.state.sessionLossUsd.toFixed(2)} >= $${this.config.maxSessionLossUsd.toFixed(2)}`,
+      );
       return { allowed: false, reason: this.state.tripReason };
     }
 
     // Check daily loss limit
     if (this.config.maxDailyLossUsd > 0 && this.state.dailyLossUsd >= this.config.maxDailyLossUsd) {
-      this.trip(`Daily loss limit reached: $${this.state.dailyLossUsd.toFixed(2)} >= $${this.config.maxDailyLossUsd.toFixed(2)}`);
+      this.trip(
+        `Daily loss limit reached: $${this.state.dailyLossUsd.toFixed(2)} >= $${this.config.maxDailyLossUsd.toFixed(2)}`,
+      );
       return { allowed: false, reason: this.state.tripReason };
     }
 
@@ -179,9 +183,7 @@ export class CircuitBreaker {
 
   /** Check if any limits are configured (non-zero) */
   get isConfigured(): boolean {
-    return this.config.maxSessionLossUsd > 0 ||
-           this.config.maxDailyLossUsd > 0 ||
-           this.config.maxTradesPerSession > 0;
+    return this.config.maxSessionLossUsd > 0 || this.config.maxDailyLossUsd > 0 || this.config.maxTradesPerSession > 0;
   }
 }
 

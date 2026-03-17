@@ -1,13 +1,6 @@
 import chalk from 'chalk';
 import { AIInterpreter, OfflineInterpreter } from '../ai/interpreter.js';
-import {
-  ActionType,
-  ParsedIntent,
-  DryRunPreview,
-  TradeSide,
-  IFlashClient,
-  FlashConfig,
-} from '../types/index.js';
+import { ActionType, ParsedIntent, DryRunPreview, TradeSide, IFlashClient, FlashConfig } from '../types/index.js';
 import { resolveMarket } from '../utils/market-resolver.js';
 import { humanizeSdkError } from '../utils/format.js';
 import { getErrorMessage } from '../utils/retry.js';
@@ -21,13 +14,16 @@ const FAST_DISPATCH = buildFastDispatch() as Record<string, ParsedIntent>;
 /** Timeout wrapper for async operations */
 function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
   return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(
-      () => reject(new Error(`Command timed out after ${ms / 1000}s: ${label}`)),
-      ms,
-    );
+    const timer = setTimeout(() => reject(new Error(`Command timed out after ${ms / 1000}s: ${label}`)), ms);
     promise.then(
-      (val) => { clearTimeout(timer); resolve(val); },
-      (err) => { clearTimeout(timer); reject(err); },
+      (val) => {
+        clearTimeout(timer);
+        resolve(val);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      },
     );
   });
 }
@@ -61,12 +57,27 @@ export function normalizeDryRunCommand(raw: string): string {
   // Leverage: NNx or NNX
   const levMatch = stripped.match(/\b(\d+(?:\.\d+)?)\s*x\b/i);
   // Amount: $NN, NN dollars, NN bucks, for NN, or bare number at end
-  const amountMatch = stripped.match(/\$\s*(\d+(?:\.\d+)?)/) ||
+  const amountMatch =
+    stripped.match(/\$\s*(\d+(?:\.\d+)?)/) ||
     stripped.match(/(\d+(?:\.\d+)?)\s*(?:dollars?|bucks?|usd)\b/) ||
     stripped.match(/(?:for|with)\s+\$?\s*(\d+(?:\.\d+)?)/) ||
     stripped.match(/\b(\d+(?:\.\d+)?)\s*$/);
   // Asset: first word that isn't a known keyword
-  const keywords = new Set(['open', 'long', 'short', 'for', 'with', 'lev', 'leverage', 'dollars', 'dollar', 'bucks', 'buck', 'usd', 'x']);
+  const keywords = new Set([
+    'open',
+    'long',
+    'short',
+    'for',
+    'with',
+    'lev',
+    'leverage',
+    'dollars',
+    'dollar',
+    'bucks',
+    'buck',
+    'usd',
+    'x',
+  ]);
   const words = stripped.split(/\s+/);
   let asset = '';
   for (const w of words) {
@@ -92,7 +103,7 @@ export function normalizeDryRunCommand(raw: string): string {
 
   // Fallback: prepend "open" if missing action keyword
   const actionKeywords = ['open', 'close', 'add', 'remove', 'long', 'short'];
-  const hasAction = actionKeywords.some(k => lower.startsWith(k));
+  const hasAction = actionKeywords.some((k) => lower.startsWith(k));
   return hasAction ? raw : `open ${raw}`;
 }
 
@@ -115,7 +126,9 @@ export function renderDryRunPreview(preview: DryRunPreview): void {
   console.log(`    Position Size:  ${chalk.bold('$' + preview.positionSize.toFixed(2))}`);
   console.log('');
   console.log(`    Entry Price:    $${preview.entryPrice.toFixed(preview.entryPrice < 1 ? 6 : 2)}`);
-  console.log(`    Liq. Price:     ${chalk.red('$' + preview.liquidationPrice.toFixed(preview.liquidationPrice < 1 ? 6 : 2))}`);
+  console.log(
+    `    Liq. Price:     ${chalk.red('$' + preview.liquidationPrice.toFixed(preview.liquidationPrice < 1 ? 6 : 2))}`,
+  );
   console.log(`    Est. Fee:       $${preview.estimatedFee.toFixed(4)}`);
 
   // Solana transaction info (live mode only)
@@ -303,7 +316,13 @@ export async function resolveIntent(deps: DryRunDeps, input: string): Promise<Pa
     return { action: ActionType.InspectPool, pool } as ParsedIntent;
   }
 
-  if (lower.startsWith('inspect market ') || (lower.startsWith('inspect ') && !lower.startsWith('inspect pool ') && !lower.startsWith('inspect protocol') && lower !== 'inspect')) {
+  if (
+    lower.startsWith('inspect market ') ||
+    (lower.startsWith('inspect ') &&
+      !lower.startsWith('inspect pool ') &&
+      !lower.startsWith('inspect protocol') &&
+      lower !== 'inspect')
+  ) {
     const prefix = lower.startsWith('inspect market ') ? 'inspect market ' : 'inspect ';
     const rawMarket = input.slice(prefix.length).trim();
     const market = resolveMarketAlias(rawMarket);

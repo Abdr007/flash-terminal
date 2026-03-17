@@ -44,18 +44,12 @@ export function createBatch(): InstructionBatch {
  * Append an SDK result (instructions + signers) to the batch.
  * Deduplicates signers by public key.
  */
-export function appendToBatch(
-  batch: InstructionBatch,
-  result: SdkResult,
-  label: string,
-): void {
+export function appendToBatch(batch: InstructionBatch, result: SdkResult, label: string): void {
   batch.instructions.push(...result.instructions);
   batch.labels.push(label);
 
   // Deduplicate signers by pubkey
-  const existingKeys = new Set(
-    batch.additionalSigners.map(s => s.publicKey.toBase58()),
-  );
+  const existingKeys = new Set(batch.additionalSigners.map((s) => s.publicKey.toBase58()));
   for (const signer of result.additionalSigners) {
     if (!existingKeys.has(signer.publicKey.toBase58())) {
       batch.additionalSigners.push(signer);

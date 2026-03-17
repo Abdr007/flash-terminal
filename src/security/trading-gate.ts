@@ -64,9 +64,10 @@ export class TradingGate {
     if (!this.config.tradingEnabled) {
       return {
         allowed: false,
-        reason: 'Trading is disabled (TRADING_ENABLED=false). ' +
-                'Set TRADING_ENABLED=true in .env to resume trading. ' +
-                'CLI is operating in monitoring-only mode.',
+        reason:
+          'Trading is disabled (TRADING_ENABLED=false). ' +
+          'Set TRADING_ENABLED=true in .env to resume trading. ' +
+          'CLI is operating in monitoring-only mode.',
       };
     }
     return { allowed: true };
@@ -90,12 +91,13 @@ export class TradingGate {
       if (projectedExposure > this.config.maxPortfolioExposure) {
         return {
           allowed: false,
-          reason: `Portfolio exposure limit exceeded.\n` +
-                  `  Current exposure: $${currentExposure.toFixed(2)}\n` +
-                  `  New position:     $${newPositionSizeUsd.toFixed(2)}\n` +
-                  `  Projected total:  $${projectedExposure.toFixed(2)}\n` +
-                  `  Limit:            $${this.config.maxPortfolioExposure.toFixed(2)}\n` +
-                  `  Adjust MAX_PORTFOLIO_EXPOSURE in .env to change this limit.`,
+          reason:
+            `Portfolio exposure limit exceeded.\n` +
+            `  Current exposure: $${currentExposure.toFixed(2)}\n` +
+            `  New position:     $${newPositionSizeUsd.toFixed(2)}\n` +
+            `  Projected total:  $${projectedExposure.toFixed(2)}\n` +
+            `  Limit:            $${this.config.maxPortfolioExposure.toFixed(2)}\n` +
+            `  Adjust MAX_PORTFOLIO_EXPOSURE in .env to change this limit.`,
         };
       }
 

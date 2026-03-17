@@ -48,10 +48,7 @@ export function computeAllocation(
   }
 
   // Core formula: smaller of 25% free capital or 20% total capital
-  const raw = Math.min(
-    freeCapital * 0.25,
-    totalCapital * ALLOCATION_LIMITS.MAX_POSITION_ALLOCATION,
-  );
+  const raw = Math.min(freeCapital * 0.25, totalCapital * ALLOCATION_LIMITS.MAX_POSITION_ALLOCATION);
 
   // Clamp to [10, maxPositionSize]
   const collateral = Math.min(maxPositionSize, Math.max(10, Math.round(raw)));
@@ -62,7 +59,7 @@ export function computeAllocation(
 
   return {
     collateral,
-    leverage: 0,  // Leverage is set by the scanner/strategy — not by allocation
+    leverage: 0, // Leverage is set by the scanner/strategy — not by allocation
     reason: `Allocated $${collateral} (${((collateral / totalCapital) * 100).toFixed(1)}% of capital)`,
   };
 }
@@ -126,24 +123,36 @@ export function filterOpportunities(
     const currentMarketExposure = exposureByMarket[market] ?? 0;
     const maxMarketAllowed = totalCapital * ALLOCATION_LIMITS.MAX_MARKET_EXPOSURE;
     if (currentMarketExposure >= maxMarketAllowed) {
-      rejected.push({ market, reason: `Market exposure ${((currentMarketExposure / totalCapital) * 100).toFixed(0)}% >= ${(ALLOCATION_LIMITS.MAX_MARKET_EXPOSURE * 100).toFixed(0)}% limit` });
+      rejected.push({
+        market,
+        reason: `Market exposure ${((currentMarketExposure / totalCapital) * 100).toFixed(0)}% >= ${(ALLOCATION_LIMITS.MAX_MARKET_EXPOSURE * 100).toFixed(0)}% limit`,
+      });
       continue;
     }
 
     // 4. Directional exposure limit (60%) — includes proposed trade's notional
     const proposedNotional = Number.isFinite(opp.recommendedCollateral * opp.recommendedLeverage)
-      ? opp.recommendedCollateral * opp.recommendedLeverage : 0;
-    const directionExposure = opp.direction === TradeSide.Long
-      ? longExposure + proposedNotional
-      : shortExposure + proposedNotional;
+      ? opp.recommendedCollateral * opp.recommendedLeverage
+      : 0;
+    const directionExposure =
+      opp.direction === TradeSide.Long ? longExposure + proposedNotional : shortExposure + proposedNotional;
     const maxDirectional = totalCapital * ALLOCATION_LIMITS.MAX_DIRECTIONAL_EXPOSURE;
     if (directionExposure > maxDirectional) {
-      rejected.push({ market, reason: `${opp.direction} exposure $${directionExposure.toFixed(0)} > ${(ALLOCATION_LIMITS.MAX_DIRECTIONAL_EXPOSURE * 100).toFixed(0)}% limit ($${maxDirectional.toFixed(0)})` });
+      rejected.push({
+        market,
+        reason: `${opp.direction} exposure $${directionExposure.toFixed(0)} > ${(ALLOCATION_LIMITS.MAX_DIRECTIONAL_EXPOSURE * 100).toFixed(0)}% limit ($${maxDirectional.toFixed(0)})`,
+      });
       continue;
     }
 
     // 5. Correlation check (30%) — includes proposed trade's notional
-    const corrCheck = checkCorrelation(market, exposureByMarket, totalCapital, ALLOCATION_LIMITS.MAX_CORRELATED_EXPOSURE, proposedNotional);
+    const corrCheck = checkCorrelation(
+      market,
+      exposureByMarket,
+      totalCapital,
+      ALLOCATION_LIMITS.MAX_CORRELATED_EXPOSURE,
+      proposedNotional,
+    );
     if (!corrCheck.passed) {
       rejected.push({ market, reason: corrCheck.reason ?? 'Correlated exposure limit' });
       continue;

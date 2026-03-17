@@ -5,16 +5,8 @@
  * All functions are internal to the tools layer.
  */
 
-import {
-  ToolContext,
-  TradeSide,
-  getLeverageLimits,
-} from '../types/index.js';
-import {
-  formatUsd,
-  formatPrice,
-  colorPnl,
-} from '../utils/format.js';
+import { ToolContext, TradeSide, getLeverageLimits } from '../types/index.js';
+import { formatUsd, formatPrice, colorPnl } from '../utils/format.js';
 import { getProtocolFeeRates } from '../utils/protocol-fees.js';
 import { computeSimulationLiquidationPrice } from '../utils/protocol-liq.js';
 import chalk from 'chalk';
@@ -31,9 +23,12 @@ export function classifyRisk(distancePct: number): RiskLevel {
 
 export function colorRisk(level: RiskLevel): string {
   switch (level) {
-    case 'LOW': return chalk.green(level);
-    case 'MEDIUM': return chalk.yellow(level);
-    case 'HIGH': return chalk.red(level);
+    case 'LOW':
+      return chalk.green(level);
+    case 'MEDIUM':
+      return chalk.yellow(level);
+    case 'HIGH':
+      return chalk.red(level);
   }
 }
 
@@ -54,17 +49,21 @@ export async function estimateLiqPrice(
   const feeRates = await getProtocolFeeRates(market, perpClient);
   const sizeUsd = 1; // normalized
   const collateralUsd = sizeUsd / leverage;
-  return computeSimulationLiquidationPrice(entryPrice, sizeUsd, collateralUsd, side, feeRates.maintenanceMarginRate, feeRates.closeFeeRate);
+  return computeSimulationLiquidationPrice(
+    entryPrice,
+    sizeUsd,
+    collateralUsd,
+    side,
+    feeRates.maintenanceMarginRate,
+    feeRates.closeFeeRate,
+  );
 }
 
 // ─── Timeout Helper ──────────────────────────────────────────────────────
 
 /** Timeout helper — resolves to fallback if promise takes too long. */
 export function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
-  return Promise.race([
-    promise,
-    new Promise<T>(resolve => setTimeout(() => resolve(fallback), ms)),
-  ]);
+  return Promise.race([promise, new Promise<T>((resolve) => setTimeout(() => resolve(fallback), ms))]);
 }
 
 export const PREVIEW_TIMEOUT_MS = 3_000;
@@ -92,14 +91,16 @@ async function _buildRiskPreview(
   const lines: string[] = [];
   try {
     const marketData = await context.flashClient.getMarketData(market);
-    const md = marketData.find(m => m.symbol.toUpperCase() === market.toUpperCase());
+    const md = marketData.find((m) => m.symbol.toUpperCase() === market.toUpperCase());
     if (!md || !Number.isFinite(md.price) || md.price <= 0) return lines;
 
     const entryEst = md.price;
-    const perpClient = context.simulationMode ? null : (context.flashClient as unknown as Record<string, unknown>).perpClient ?? null;
+    const perpClient = context.simulationMode
+      ? null
+      : ((context.flashClient as unknown as Record<string, unknown>).perpClient ?? null);
     const liqEst = await estimateLiqPrice(entryEst, leverage, side, market, perpClient);
     if (liqEst <= 0) return lines;
-    const distancePct = Math.abs(entryEst - liqEst) / entryEst * 100;
+    const distancePct = (Math.abs(entryEst - liqEst) / entryEst) * 100;
     const risk = classifyRisk(distancePct);
 
     lines.push('');
@@ -110,8 +111,7 @@ async function _buildRiskPreview(
     lines.push(`    Risk:         ${colorRisk(risk)}`);
 
     const positions = await context.flashClient.getPositions();
-    const currentExposure = positions.reduce((sum, p) =>
-      sum + (Number.isFinite(p.sizeUsd) ? p.sizeUsd : 0), 0);
+    const currentExposure = positions.reduce((sum, p) => sum + (Number.isFinite(p.sizeUsd) ? p.sizeUsd : 0), 0);
     const newExposure = currentExposure + sizeUsd;
 
     lines.push(`    Exposure:     ${formatUsd(currentExposure)} → ${chalk.bold(formatUsd(newExposure))}`);
@@ -124,25 +124,15 @@ async function _buildRiskPreview(
 // ─── Position Preview ────────────────────────────────────────────────────
 
 /** Build position details for close/modify confirmations. */
-export async function buildPositionPreview(
-  context: ToolContext,
-  market: string,
-  side: TradeSide,
-): Promise<string[]> {
+export async function buildPositionPreview(context: ToolContext, market: string, side: TradeSide): Promise<string[]> {
   return withTimeout(_buildPositionPreview(context, market, side), PREVIEW_TIMEOUT_MS, []);
 }
 
-async function _buildPositionPreview(
-  context: ToolContext,
-  market: string,
-  side: TradeSide,
-): Promise<string[]> {
+async function _buildPositionPreview(context: ToolContext, market: string, side: TradeSide): Promise<string[]> {
   const lines: string[] = [];
   try {
     const positions = await context.flashClient.getPositions();
-    const pos = positions.find(p =>
-      p.market.toUpperCase() === market.toUpperCase() && p.side === side
-    );
+    const pos = positions.find((p) => p.market.toUpperCase() === market.toUpperCase() && p.side === side);
     if (!pos) return lines;
 
     lines.push(`  Size:    ${formatUsd(pos.sizeUsd)}`);

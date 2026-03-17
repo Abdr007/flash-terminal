@@ -1,8 +1,4 @@
-import {
-  Position,
-  TradeSide,
-  Opportunity,
-} from '../types/index.js';
+import { Position, TradeSide, Opportunity } from '../types/index.js';
 import { computeAllocation, filterOpportunities } from './allocation-engine.js';
 import { checkPortfolioRisk } from './portfolio-risk.js';
 import { analyzeRebalance, RebalanceResult } from './rebalance.js';
@@ -43,7 +39,6 @@ export interface PortfolioPosition {
  * no trade execution. Uses only data already fetched by SolanaInspector.
  */
 export class PortfolioManager {
-
   /**
    * Compute current portfolio state from positions and balance.
    * Runs in < 1ms — no I/O.
@@ -137,7 +132,10 @@ export class PortfolioManager {
     );
 
     if (rejected.length > 0) {
-      logger.debug('PORTFOLIO', `Rejected ${rejected.length} opportunities: ${rejected.map((r) => `${r.market}(${r.reason})`).join(', ')}`);
+      logger.debug(
+        'PORTFOLIO',
+        `Rejected ${rejected.length} opportunities: ${rejected.map((r) => `${r.market}(${r.reason})`).join(', ')}`,
+      );
     }
 
     if (accepted.length === 0) {

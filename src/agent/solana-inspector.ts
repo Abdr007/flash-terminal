@@ -17,9 +17,9 @@ interface CacheEntry<T> {
   expiry: number;
 }
 
-const MARKET_CACHE_TTL = 30_000;   // 30s for market data
+const MARKET_CACHE_TTL = 30_000; // 30s for market data
 const ANALYTICS_CACHE_TTL = 60_000; // 60s for analytics
-const MAX_CACHE_ENTRIES = 50;       // Prevent unbounded cache growth
+const MAX_CACHE_ENTRIES = 50; // Prevent unbounded cache growth
 
 /**
  * Cached data aggregator wrapping FlashClient + FStatsClient + PriceService.
@@ -83,9 +83,7 @@ export class SolanaInspector {
         const oi = await this.dataClient.getOpenInterest();
         for (const m of data) {
           if (m.openInterestLong === 0 && m.openInterestShort === 0) {
-            const oiEntry = oi.markets.find(
-              (o) => o.market.toUpperCase() === m.symbol.toUpperCase()
-            );
+            const oiEntry = oi.markets.find((o) => o.market.toUpperCase() === m.symbol.toUpperCase());
             if (oiEntry) {
               m.openInterestLong = oiEntry.longOi;
               m.openInterestShort = oiEntry.shortOi;
@@ -99,7 +97,7 @@ export class SolanaInspector {
       // Enrich with 24h price change from Pyth Hermes
       // (FlashClient.getMarketData() returns priceChange24h: 0)
       try {
-        const symbols = data.map(m => m.symbol);
+        const symbols = data.map((m) => m.symbol);
         const pythPrices = await this.priceService.getPrices(symbols);
         for (const m of data) {
           if (m.priceChange24h === 0) {
@@ -197,7 +195,16 @@ export class SolanaInspector {
       return data;
     } catch {
       getLogger().warn('INSPECTOR', 'Failed to fetch overview stats');
-      return { volumeUsd: 0, volumeChangePct: 0, trades: 0, tradesChangePct: 0, feesUsd: 0, poolPnlUsd: 0, poolRevenueUsd: 0, uniqueTraders: 0 };
+      return {
+        volumeUsd: 0,
+        volumeChangePct: 0,
+        trades: 0,
+        tradesChangePct: 0,
+        feesUsd: 0,
+        poolPnlUsd: 0,
+        poolRevenueUsd: 0,
+        uniqueTraders: 0,
+      };
     }
   }
 
@@ -259,18 +266,44 @@ export class SolanaInspector {
     return {
       markets: results[0].status === 'fulfilled' ? results[0].value : [],
       positions: results[1].status === 'fulfilled' ? results[1].value : [],
-      portfolio: results[2].status === 'fulfilled' ? results[2].value : {
-        walletAddress: 'unknown', balance: 0, balanceLabel: '$0.00',
-        totalCollateralUsd: 0, totalUnrealizedPnl: 0, totalRealizedPnl: 0, totalFees: 0, positions: [], totalPositionValue: 0,
-      },
+      portfolio:
+        results[2].status === 'fulfilled'
+          ? results[2].value
+          : {
+              walletAddress: 'unknown',
+              balance: 0,
+              balanceLabel: '$0.00',
+              totalCollateralUsd: 0,
+              totalUnrealizedPnl: 0,
+              totalRealizedPnl: 0,
+              totalFees: 0,
+              positions: [],
+              totalPositionValue: 0,
+            },
       openInterest: results[3].status === 'fulfilled' ? results[3].value : { markets: [] },
-      volume: results[4].status === 'fulfilled' ? results[4].value : {
-        period: '30d', totalVolumeUsd: 0, trades: 0, uniqueTraders: 0, dailyVolumes: [],
-      },
-      overviewStats: results[5].status === 'fulfilled' ? results[5].value : {
-        volumeUsd: 0, volumeChangePct: 0, trades: 0, tradesChangePct: 0,
-        feesUsd: 0, poolPnlUsd: 0, poolRevenueUsd: 0, uniqueTraders: 0,
-      },
+      volume:
+        results[4].status === 'fulfilled'
+          ? results[4].value
+          : {
+              period: '30d',
+              totalVolumeUsd: 0,
+              trades: 0,
+              uniqueTraders: 0,
+              dailyVolumes: [],
+            },
+      overviewStats:
+        results[5].status === 'fulfilled'
+          ? results[5].value
+          : {
+              volumeUsd: 0,
+              volumeChangePct: 0,
+              trades: 0,
+              tradesChangePct: 0,
+              feesUsd: 0,
+              poolPnlUsd: 0,
+              poolRevenueUsd: 0,
+              uniqueTraders: 0,
+            },
     };
   }
 }

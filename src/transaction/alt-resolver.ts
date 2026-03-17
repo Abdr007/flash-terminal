@@ -10,11 +10,7 @@
  * via `perpClient.getOrLoadAddressLookupTable()`.
  */
 
-import {
-  type AddressLookupTableAccount,
-  type TransactionInstruction,
-  type MessageV0,
-} from '@solana/web3.js';
+import { type AddressLookupTableAccount, type TransactionInstruction, type MessageV0 } from '@solana/web3.js';
 import type { PoolConfig } from 'flash-sdk';
 import { getLogger } from '../utils/logger.js';
 
@@ -75,11 +71,14 @@ export async function resolveALTs(
 
     // Validate ALT content — tables without addresses are useless
     const validTables = addressLookupTables.filter(
-      t => t && t.state && t.state.addresses && t.state.addresses.length > 0,
+      (t) => t && t.state && t.state.addresses && t.state.addresses.length > 0,
     );
 
     if (addressLookupTables.length > 0 && validTables.length === 0) {
-      logger.info('ALT', `${cacheKey}: ${addressLookupTables.length} table(s) loaded but NONE contain addresses — ALTs will have no effect`);
+      logger.info(
+        'ALT',
+        `${cacheKey}: ${addressLookupTables.length} table(s) loaded but NONE contain addresses — ALTs will have no effect`,
+      );
     } else if (validTables.length > 0) {
       const totalAddrs = validTables.reduce((sum, t) => sum + t.state.addresses.length, 0);
       logger.debug('ALT', `${cacheKey}: ${validTables.length} table(s), ${totalAddrs} total addresses`);
@@ -93,7 +92,10 @@ export async function resolveALTs(
 
     // Fallback: check if SDK has previously loaded tables on the perpClient instance
     if (perpClient.addressLookupTables && perpClient.addressLookupTables.length > 0) {
-      logger.debug('ALT', `Using perpClient.addressLookupTables fallback (${perpClient.addressLookupTables.length} tables)`);
+      logger.debug(
+        'ALT',
+        `Using perpClient.addressLookupTables fallback (${perpClient.addressLookupTables.length} tables)`,
+      );
       altCache.set(cacheKey, { tables: perpClient.addressLookupTables, fetchedAt: Date.now() });
       return perpClient.addressLookupTables;
     }
@@ -113,7 +115,7 @@ export function getALTDiagnostics(poolName: string): ALTDiagnostics | null {
   const cached = altCache.get(poolName);
   if (!cached) return null;
 
-  const tableDetails = cached.tables.map(t => ({
+  const tableDetails = cached.tables.map((t) => ({
     key: t.key.toBase58(),
     addressCount: t.state?.addresses?.length ?? 0,
   }));
@@ -121,7 +123,7 @@ export function getALTDiagnostics(poolName: string): ALTDiagnostics | null {
   return {
     tableCount: cached.tables.length,
     totalAddresses: tableDetails.reduce((sum, t) => sum + t.addressCount, 0),
-    tablesWithAddresses: tableDetails.filter(t => t.addressCount > 0).length,
+    tablesWithAddresses: tableDetails.filter((t) => t.addressCount > 0).length,
     tableDetails,
   };
 }
@@ -137,10 +139,7 @@ export function verifyALTAccountOverlap(
 ): { totalAccounts: number; compressible: number; compressionRatio: number } {
   if (altAccounts.length === 0 || instructions.length === 0) {
     const totalAccounts = new Set(
-      instructions.flatMap(ix => [
-        ix.programId.toBase58(),
-        ...ix.keys.map(k => k.pubkey.toBase58()),
-      ]),
+      instructions.flatMap((ix) => [ix.programId.toBase58(), ...ix.keys.map((k) => k.pubkey.toBase58())]),
     ).size;
     return { totalAccounts, compressible: 0, compressionRatio: 0 };
   }
@@ -182,10 +181,7 @@ export function verifyALTAccountOverlap(
  * Log compilation diagnostics after MessageV0 is compiled.
  * Checks whether ALT lookups were actually used in the compiled message.
  */
-export function logMessageALTDiagnostics(
-  message: MessageV0,
-  label: string,
-): void {
+export function logMessageALTDiagnostics(message: MessageV0, label: string): void {
   const logger = getLogger();
   const lookups = message.addressTableLookups ?? [];
   const staticCount = message.staticAccountKeys?.length ?? 0;
@@ -195,7 +191,10 @@ export function logMessageALTDiagnostics(
       (sum, l) => sum + l.readonlyIndexes.length + l.writableIndexes.length,
       0,
     );
-    logger.debug('ALT', `${label}: ${staticCount} static + ${totalLookupAccounts} via ALT (${lookups.length} table(s))`);
+    logger.debug(
+      'ALT',
+      `${label}: ${staticCount} static + ${totalLookupAccounts} via ALT (${lookups.length} table(s))`,
+    );
   } else {
     logger.debug('ALT', `${label}: ${staticCount} static accounts, no ALT lookups used`);
   }

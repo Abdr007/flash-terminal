@@ -23,9 +23,15 @@ let _cache: Record<string, string> | null = null;
 export function loadTemplates(): Record<string, string> {
   if (_cache) return _cache;
   try {
-    if (!existsSync(TEMPLATE_FILE)) { _cache = {}; return _cache; }
+    if (!existsSync(TEMPLATE_FILE)) {
+      _cache = {};
+      return _cache;
+    }
     const raw = JSON.parse(readFileSync(TEMPLATE_FILE, 'utf8'));
-    if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) { _cache = {}; return _cache; }
+    if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+      _cache = {};
+      return _cache;
+    }
     _cache = raw as Record<string, string>;
     return _cache;
   } catch {
@@ -40,7 +46,9 @@ function saveTemplates(templates: Record<string, string>): void {
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
     writeFileSync(TEMPLATE_FILE, JSON.stringify(templates, null, 2), { mode: 0o600 });
     _cache = templates;
-  } catch { /* best-effort */ }
+  } catch {
+    /* best-effort */
+  }
 }
 
 export function setTemplate(name: string, command: string): boolean {

@@ -5,16 +5,16 @@
 
 // Correlation groups: markets within the same group are considered correlated
 const CORRELATION_GROUPS: string[][] = [
-  ['SOL', 'JTO', 'JUP', 'PYTH', 'RAY', 'BONK', 'WIF', 'PENGU', 'PUMP'],  // Solana ecosystem
-  ['BTC'],                                                                     // Bitcoin
-  ['ETH'],                                                                     // Ethereum
-  ['BNB'],                                                                     // BNB
-  ['XAU', 'XAG'],                                                             // Precious metals
-  ['EUR', 'GBP'],                                                             // Forex (vs USD)
-  ['CRUDEOIL'],                                                                // Commodities
-  ['HYPE'],                                                                    // Standalone
-  ['FARTCOIN'],                                                                // Standalone
-  ['ORE'],                                                                     // Standalone
+  ['SOL', 'JTO', 'JUP', 'PYTH', 'RAY', 'BONK', 'WIF', 'PENGU', 'PUMP'], // Solana ecosystem
+  ['BTC'], // Bitcoin
+  ['ETH'], // Ethereum
+  ['BNB'], // BNB
+  ['XAU', 'XAG'], // Precious metals
+  ['EUR', 'GBP'], // Forex (vs USD)
+  ['CRUDEOIL'], // Commodities
+  ['HYPE'], // Standalone
+  ['FARTCOIN'], // Standalone
+  ['ORE'], // Standalone
 ];
 
 // Pre-compute lookup: symbol → group index
@@ -73,7 +73,7 @@ export function checkCorrelation(
   market: string,
   exposureByMarket: Record<string, number>,
   totalCapital: number,
-  maxCorrelatedPct = 0.30,
+  maxCorrelatedPct = 0.3,
   proposedNotional = 0,
 ): CorrelationCheck {
   if (totalCapital <= 0) {

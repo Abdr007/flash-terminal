@@ -11,9 +11,7 @@ export interface MeanReversionInput {
  * a reversion becomes more likely.
  */
 export function computeMeanReversionSignal({ market, openInterest }: MeanReversionInput): StrategySignal {
-  const oi = openInterest.markets.find(
-    (m) => m.market.toUpperCase() === market.symbol.toUpperCase()
-  );
+  const oi = openInterest.markets.find((m) => m.market.toUpperCase() === market.symbol.toUpperCase());
 
   if (!oi) {
     return {

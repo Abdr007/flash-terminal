@@ -32,7 +32,9 @@ export function recordEarnAction(entry: EarnJournalEntry): void {
     while (entries.length > MAX_ENTRIES) entries.shift();
 
     writeFileSync(JOURNAL_FILE, JSON.stringify(entries, null, 2), { mode: 0o600 });
-  } catch { /* non-critical — don't break transactions */ }
+  } catch {
+    /* non-critical — don't break transactions */
+  }
 }
 
 /** Read all journal entries. */
@@ -45,7 +47,8 @@ export function getEarnJournal(): EarnJournalEntry[] {
     // Basic validation
     return data.filter(
       (e: unknown) =>
-        typeof e === 'object' && e !== null &&
+        typeof e === 'object' &&
+        e !== null &&
         typeof (e as EarnJournalEntry).pool === 'string' &&
         typeof (e as EarnJournalEntry).action === 'string' &&
         typeof (e as EarnJournalEntry).amountUsd === 'number' &&

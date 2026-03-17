@@ -38,11 +38,7 @@ export const swapTool: ToolDefinition = {
     }
 
     try {
-      const result = await client.swap(
-        inputToken.toUpperCase(),
-        outputToken.toUpperCase(),
-        amount,
-      );
+      const result = await client.swap(inputToken.toUpperCase(), outputToken.toUpperCase(), amount);
 
       const lines = [
         '',

@@ -32,24 +32,39 @@ export interface TradeEvent {
 export function logKillSwitchBlock(market: string, side: string): void {
   try {
     getMetrics().increment(METRIC.KILL_SWITCH_BLOCKS);
-    getAlertManager().emit('critical', ALERT_EVENT.KILL_SWITCH_BLOCK,
-      `Kill switch blocked ${side} trade on ${market}`, { market, side });
+    getAlertManager().emit(
+      'critical',
+      ALERT_EVENT.KILL_SWITCH_BLOCK,
+      `Kill switch blocked ${side} trade on ${market}`,
+      { market, side },
+    );
     getLogger().warn('GATE', 'Kill switch blocked trade', {
       event: 'kill_switch_block',
       market,
       side,
       timestamp: new Date().toISOString(),
     });
-  } catch { /* observability must never throw */ }
+  } catch {
+    /* observability must never throw */
+  }
 }
 
 /** Emitted when a trade is blocked by exposure limits. */
-export function logExposureBlock(market: string, side: string, sizeUsd: number, currentExposure: number, limit: number): void {
+export function logExposureBlock(
+  market: string,
+  side: string,
+  sizeUsd: number,
+  currentExposure: number,
+  limit: number,
+): void {
   try {
     getMetrics().increment(METRIC.EXPOSURE_BLOCKS);
-    getAlertManager().emit('warning', ALERT_EVENT.EXPOSURE_LIMIT_BLOCK,
+    getAlertManager().emit(
+      'warning',
+      ALERT_EVENT.EXPOSURE_LIMIT_BLOCK,
       `Exposure limit blocked $${sizeUsd.toFixed(0)} ${side} on ${market}`,
-      { market, side, sizeUsd, currentExposure, limit });
+      { market, side, sizeUsd, currentExposure, limit },
+    );
     getLogger().warn('GATE', 'Exposure limit blocked trade', {
       event: 'exposure_block',
       market,
@@ -59,15 +74,21 @@ export function logExposureBlock(market: string, side: string, sizeUsd: number, 
       limit,
       timestamp: new Date().toISOString(),
     });
-  } catch { /* observability must never throw */ }
+  } catch {
+    /* observability must never throw */
+  }
 }
 
 /** Emitted when a trade is blocked by the circuit breaker. */
 export function logCircuitBreakerBlock(market: string, side: string, reason: string): void {
   try {
     getMetrics().increment(METRIC.CIRCUIT_BREAKER_TRIPS);
-    getAlertManager().emit('critical', ALERT_EVENT.CIRCUIT_BREAKER_TRIP,
-      `Circuit breaker blocked ${side} on ${market}: ${reason}`, { market, side, reason });
+    getAlertManager().emit(
+      'critical',
+      ALERT_EVENT.CIRCUIT_BREAKER_TRIP,
+      `Circuit breaker blocked ${side} on ${market}: ${reason}`,
+      { market, side, reason },
+    );
     getLogger().warn('CIRCUIT_BREAKER', 'Circuit breaker blocked trade', {
       event: 'circuit_breaker_block',
       market,
@@ -75,11 +96,18 @@ export function logCircuitBreakerBlock(market: string, side: string, reason: str
       reason,
       timestamp: new Date().toISOString(),
     });
-  } catch { /* observability must never throw */ }
+  } catch {
+    /* observability must never throw */
+  }
 }
 
 /** Emitted when a trade execution begins (after confirmation). */
-export function logTradeStart(type: 'open' | 'close' | 'add_collateral' | 'remove_collateral', market: string, side: string, details?: Record<string, unknown>): void {
+export function logTradeStart(
+  type: 'open' | 'close' | 'add_collateral' | 'remove_collateral',
+  market: string,
+  side: string,
+  details?: Record<string, unknown>,
+): void {
   try {
     if (type === 'open') getMetrics().increment(METRIC.TRADE_OPEN);
     if (type === 'close') getMetrics().increment(METRIC.TRADE_CLOSE);
@@ -91,11 +119,18 @@ export function logTradeStart(type: 'open' | 'close' | 'add_collateral' | 'remov
       ...details,
       timestamp: new Date().toISOString(),
     });
-  } catch { /* observability must never throw */ }
+  } catch {
+    /* observability must never throw */
+  }
 }
 
 /** Emitted when a trade execution succeeds. */
-export function logTradeSuccess(type: 'open' | 'close' | 'partial_close' | 'add_collateral' | 'remove_collateral', market: string, side: string, details?: Record<string, unknown>): void {
+export function logTradeSuccess(
+  type: 'open' | 'close' | 'partial_close' | 'add_collateral' | 'remove_collateral',
+  market: string,
+  side: string,
+  details?: Record<string, unknown>,
+): void {
   try {
     getMetrics().increment(METRIC.TRADE_SUCCESS);
     getLogger().info('TRADE_EXEC', `${type.toUpperCase()} succeeded`, {
@@ -106,11 +141,18 @@ export function logTradeSuccess(type: 'open' | 'close' | 'partial_close' | 'add_
       ...details,
       timestamp: new Date().toISOString(),
     });
-  } catch { /* observability must never throw */ }
+  } catch {
+    /* observability must never throw */
+  }
 }
 
 /** Emitted when a trade execution fails. */
-export function logTradeFailure(type: 'open' | 'close' | 'add_collateral' | 'remove_collateral', market: string, side: string, error: string): void {
+export function logTradeFailure(
+  type: 'open' | 'close' | 'add_collateral' | 'remove_collateral',
+  market: string,
+  side: string,
+  error: string,
+): void {
   try {
     getMetrics().increment(METRIC.TRADE_FAILURE);
     getLogger().warn('TRADE_EXEC', `${type.toUpperCase()} failed`, {
@@ -121,7 +163,9 @@ export function logTradeFailure(type: 'open' | 'close' | 'add_collateral' | 'rem
       error,
       timestamp: new Date().toISOString(),
     });
-  } catch { /* observability must never throw */ }
+  } catch {
+    /* observability must never throw */
+  }
 }
 
 /** Emitted on transaction submission to track RPC latency. */
@@ -135,7 +179,9 @@ export function logTxSubmission(txSignature: string, durationMs: number, endpoin
       endpoint,
       timestamp: new Date().toISOString(),
     });
-  } catch { /* observability must never throw */ }
+  } catch {
+    /* observability must never throw */
+  }
 }
 
 /** Emitted on transaction confirmation. */
@@ -148,7 +194,9 @@ export function logTxConfirmed(txSignature: string, durationMs: number): void {
       durationMs,
       timestamp: new Date().toISOString(),
     });
-  } catch { /* observability must never throw */ }
+  } catch {
+    /* observability must never throw */
+  }
 }
 
 /** Emitted on transaction timeout/failure. */
@@ -161,7 +209,9 @@ export function logTxTimeout(txSignature: string, durationMs: number, error: str
       error,
       timestamp: new Date().toISOString(),
     });
-  } catch { /* observability must never throw */ }
+  } catch {
+    /* observability must never throw */
+  }
 }
 
 /** Emitted when RPC latency exceeds threshold. */
@@ -177,5 +227,7 @@ export function logRpcLatency(endpoint: string, latencyMs: number, operation: st
         timestamp: new Date().toISOString(),
       });
     }
-  } catch { /* observability must never throw */ }
+  } catch {
+    /* observability must never throw */
+  }
 }

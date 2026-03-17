@@ -15,13 +15,7 @@ const NOT_AVAILABLE_MSG = chalk.yellow(
 
 function poolNotFound(name: string): ToolResult {
   const pools = getPoolRegistry();
-  const lines = [
-    '',
-    chalk.red(`  Unknown pool: "${name}"`),
-    '',
-    chalk.dim('  Available pools:'),
-    '',
-  ];
+  const lines = ['', chalk.red(`  Unknown pool: "${name}"`), '', chalk.dim('  Available pools:'), ''];
   for (const p of pools) {
     lines.push(`    ${chalk.cyan(p.aliases[0].padEnd(12))} ${p.displayName}`);
   }
@@ -40,7 +34,7 @@ export const earnPoolsTool: ToolDefinition = {
     const metrics = await getPoolMetrics();
 
     if (IS_AGENT) {
-      const poolData = registry.map(p => {
+      const poolData = registry.map((p) => {
         const m = metrics.get(p.poolId);
         return {
           pool_id: p.poolId,
@@ -70,13 +64,15 @@ export const earnPoolsTool: ToolDefinition = {
 
     for (const pool of registry) {
       const m = metrics.get(pool.poolId);
-      const tvl = m?.tvl ? (m.tvl >= 1e6 ? `$${(m.tvl/1e6).toFixed(1)}M` : `$${(m.tvl/1e3).toFixed(0)}K`) : '-';
+      const tvl = m?.tvl ? (m.tvl >= 1e6 ? `$${(m.tvl / 1e6).toFixed(1)}M` : `$${(m.tvl / 1e3).toFixed(0)}K`) : '-';
       const flp = m?.flpPrice ? `$${m.flpPrice.toFixed(3)}` : '-';
       const sflp = m?.sflpPrice ? `$${m.sflpPrice.toFixed(3)}` : '-';
       const apy = m?.apy7d ? `~${m.apy7d.toFixed(1)}%` : '-';
       const fee = `${(pool.feeShare * 100).toFixed(0)}%`;
       const assets = pool.assets.slice(0, 3).join(' ');
-      lines.push(`  ${chalk.cyan(pool.aliases[0].padEnd(12))} ${tvl.padEnd(10)} ${chalk.green(flp.padEnd(10))} ${sflp.padEnd(10)} ${chalk.green(apy.padEnd(12))} ${fee.padEnd(8)} ${chalk.dim(assets)}`);
+      lines.push(
+        `  ${chalk.cyan(pool.aliases[0].padEnd(12))} ${tvl.padEnd(10)} ${chalk.green(flp.padEnd(10))} ${sflp.padEnd(10)} ${chalk.green(apy.padEnd(12))} ${fee.padEnd(8)} ${chalk.dim(assets)}`,
+      );
     }
 
     lines.push('');
@@ -221,9 +217,11 @@ export const earnAddLiquidityTool: ToolDefinition = {
     }
     if (m?.apy7d) {
       previewLines.push(theme.pair('Est. APY', chalk.green(`~${m.apy7d.toFixed(1)}%`)));
-      const yearlyReturn = amount * m.apy7d / 100;
+      const yearlyReturn = (amount * m.apy7d) / 100;
       if (Number.isFinite(yearlyReturn) && yearlyReturn > 0) {
-        previewLines.push(theme.pair('Est. Yearly Return', chalk.green(`~${formatUsd(yearlyReturn)} (at current APY)`)));
+        previewLines.push(
+          theme.pair('Est. Yearly Return', chalk.green(`~${formatUsd(yearlyReturn)} (at current APY)`)),
+        );
       }
     }
     previewLines.push('');
@@ -312,7 +310,9 @@ export const earnRemoveLiquidityTool: ToolDefinition = {
                 }
               }
             }
-          } catch { /* non-critical */ }
+          } catch {
+            /* non-critical */
+          }
         }
         const estimatedWithdraw = positionValue > 0 ? positionValue * (percent / 100) : 0;
         if (estimatedWithdraw > 0) {
@@ -539,7 +539,8 @@ export const earnPositionsTool: ToolDefinition = {
     try {
       const { PublicKey } = await import('@solana/web3.js');
       const { BN } = await import('bn.js');
-      const flashClient = context.flashClient as unknown as import('../types/flash-sdk-interfaces.js').FlashClientInternals;
+      const flashClient =
+        context.flashClient as unknown as import('../types/flash-sdk-interfaces.js').FlashClientInternals;
       if (flashClient?.perpClient?.program?.coder && flashClient?.connection) {
         const registry = getPoolRegistry();
         const walletPk = new PublicKey(context.walletAddress);
@@ -551,7 +552,9 @@ export const earnPositionsTool: ToolDefinition = {
             );
             const info = await flashClient.connection.getAccountInfo(pda);
             if (!info) continue;
-            const decoded = flashClient.perpClient.program.coder.accounts.decode('flpStake', info.data) as { stakeStats: { activeAmount: { toString(): string }; pendingActivation: { toString(): string } } };
+            const decoded = flashClient.perpClient.program.coder.accounts.decode('flpStake', info.data) as {
+              stakeStats: { activeAmount: { toString(): string }; pendingActivation: { toString(): string } };
+            };
             const active = new BN(decoded.stakeStats.activeAmount.toString());
             const pending = new BN(decoded.stakeStats.pendingActivation.toString());
             const total = active.add(pending).toNumber() / Math.pow(10, pool.lpDecimals);
@@ -566,10 +569,14 @@ export const earnPositionsTool: ToolDefinition = {
                 rewards: 'USDC hourly',
               });
             }
-          } catch { /* skip pool on error */ }
+          } catch {
+            /* skip pool on error */
+          }
         }
       }
-    } catch { /* non-critical — staking PDA check failed */ }
+    } catch {
+      /* non-critical — staking PDA check failed */
+    }
 
     if (positions.length === 0) {
       return {
@@ -597,7 +604,7 @@ export const earnPositionsTool: ToolDefinition = {
 
     for (const pos of positions) {
       lines.push(
-        `  ${chalk.cyan(pos.pool.padEnd(12))} ${pos.type.padEnd(8)} ${pos.balance.toFixed(4).padEnd(14)} ${formatUsd(pos.value).padEnd(12)} ${chalk.dim(pos.rewards)}`
+        `  ${chalk.cyan(pos.pool.padEnd(12))} ${pos.type.padEnd(8)} ${pos.balance.toFixed(4).padEnd(14)} ${formatUsd(pos.value).padEnd(12)} ${chalk.dim(pos.rewards)}`,
       );
     }
 
@@ -645,19 +652,16 @@ export const earnBestTool: ToolDefinition = {
       return chalk.bgRed.white(` ${r} `);
     };
 
-    const lines = [
-      '',
-      `  ${theme.accentBold('TOP YIELD POOLS')}`,
-      `  ${theme.separator(50)}`,
-      '',
-    ];
+    const lines = ['', `  ${theme.accentBold('TOP YIELD POOLS')}`, `  ${theme.separator(50)}`, ''];
 
     for (let i = 0; i < ranked.length; i++) {
       const r = ranked[i];
       const apy = r.metrics.apy7d > 0 ? `~${r.metrics.apy7d.toFixed(1)}%` : '-';
       lines.push(`  ${chalk.bold(`${i + 1}.`)} ${chalk.cyan(r.pool.displayName)}`);
       lines.push(`     Est. APY: ${chalk.green(apy)}   TVL: ${formatUsd(r.metrics.tvl)}   Risk: ${riskColor(r.risk)}`);
-      lines.push(`     FLP: $${r.metrics.flpPrice.toFixed(3)}   Fee Share: ${(r.pool.feeShare * 100).toFixed(0)}%   Assets: ${r.pool.assets.slice(0, 3).join(', ')}`);
+      lines.push(
+        `     FLP: $${r.metrics.flpPrice.toFixed(3)}   Fee Share: ${(r.pool.feeShare * 100).toFixed(0)}%   Assets: ${r.pool.assets.slice(0, 3).join(', ')}`,
+      );
       lines.push('');
     }
 
@@ -807,7 +811,9 @@ export const earnDashboardTool: ToolDefinition = {
       lines.push(`  ${'Pool'.padEnd(12)} ${'Type'.padEnd(8)} ${'Value'.padEnd(12)} APY`);
       lines.push(`  ${theme.separator(45)}`);
       for (const pos of positions) {
-        lines.push(`  ${chalk.cyan(pos.pool.padEnd(12))} ${pos.type.padEnd(8)} ${formatUsd(pos.value).padEnd(12)} ${chalk.green(pos.apy.toFixed(1) + '%')}`);
+        lines.push(
+          `  ${chalk.cyan(pos.pool.padEnd(12))} ${pos.type.padEnd(8)} ${formatUsd(pos.value).padEnd(12)} ${chalk.green(pos.apy.toFixed(1) + '%')}`,
+        );
       }
     }
 
@@ -830,7 +836,11 @@ export const earnPnlTool: ToolDefinition = {
     const metrics = await getPoolMetrics();
 
     let tokenData: { sol: number; tokens: Array<{ mint: string; amount: number }> } | null;
-    try { tokenData = await wm.getTokenBalances(); } catch { return { success: false, message: chalk.red('  Failed to fetch balances.') }; }
+    try {
+      tokenData = await wm.getTokenBalances();
+    } catch {
+      return { success: false, message: chalk.red('  Failed to fetch balances.') };
+    }
     if (!tokenData) return { success: true, message: chalk.dim('  No token data.') };
 
     let totalValue = 0;
@@ -871,7 +881,17 @@ export const earnPnlTool: ToolDefinition = {
     const hasJournal = journal.length > 0;
 
     if (IS_AGENT) {
-      return { success: true, message: JSON.stringify({ action: 'earn_pnl', total_value: totalValue, total_deposited: totalDeposited, total_withdrawn: totalWithdrawn, pnl, positions }) };
+      return {
+        success: true,
+        message: JSON.stringify({
+          action: 'earn_pnl',
+          total_value: totalValue,
+          total_deposited: totalDeposited,
+          total_withdrawn: totalWithdrawn,
+          pnl,
+          positions,
+        }),
+      };
     }
 
     const lines = [
@@ -897,7 +917,9 @@ export const earnPnlTool: ToolDefinition = {
       lines.push(`  ${'Pool'.padEnd(12)} ${'Type'.padEnd(8)} ${'Tokens'.padEnd(12)} ${'Value'.padEnd(12)} Price`);
       lines.push(`  ${theme.separator(55)}`);
       for (const pos of positions) {
-        lines.push(`  ${chalk.cyan(pos.pool.padEnd(12))} ${pos.type.padEnd(8)} ${pos.tokens.toFixed(2).padEnd(12)} ${formatUsd(pos.value).padEnd(12)} $${pos.price.toFixed(3)}`);
+        lines.push(
+          `  ${chalk.cyan(pos.pool.padEnd(12))} ${pos.type.padEnd(8)} ${pos.tokens.toFixed(2).padEnd(12)} ${formatUsd(pos.value).padEnd(12)} $${pos.price.toFixed(3)}`,
+        );
       }
     }
 
@@ -928,7 +950,7 @@ export const earnDemandTool: ToolDefinition = {
         success: true,
         message: JSON.stringify({
           action: 'earn_demand',
-          pools: ranked.map(r => ({
+          pools: ranked.map((r) => ({
             pool: r.pool.aliases[0],
             apy: r.metrics.apy7d,
             apr: r.metrics.apr7d,
@@ -960,12 +982,17 @@ export const earnDemandTool: ToolDefinition = {
       else if (demandRatio > 30) demand = 'High';
       else if (demandRatio > 10) demand = 'Medium';
 
-      const demandColor = demand === 'Very High' ? chalk.green(demand) :
-        demand === 'High' ? chalk.green(demand) :
-        demand === 'Medium' ? chalk.yellow(demand) : chalk.dim(demand);
+      const demandColor =
+        demand === 'Very High'
+          ? chalk.green(demand)
+          : demand === 'High'
+            ? chalk.green(demand)
+            : demand === 'Medium'
+              ? chalk.yellow(demand)
+              : chalk.dim(demand);
 
       lines.push(
-        `  ${chalk.cyan(r.pool.aliases[0].padEnd(12))} ${(r.metrics.apy7d.toFixed(1) + '%').padEnd(10)} ${formatUsd(r.metrics.tvl).padEnd(12)} ${((r.pool.feeShare * 100).toFixed(0) + '%').padEnd(12)} ${demandColor}`
+        `  ${chalk.cyan(r.pool.aliases[0].padEnd(12))} ${(r.metrics.apy7d.toFixed(1) + '%').padEnd(10)} ${formatUsd(r.metrics.tvl).padEnd(12)} ${((r.pool.feeShare * 100).toFixed(0) + '%').padEnd(12)} ${demandColor}`,
       );
     }
 
@@ -992,7 +1019,11 @@ export const earnRotateTool: ToolDefinition = {
     const ranked = await rankPools();
 
     let tokenData: { sol: number; tokens: Array<{ mint: string; amount: number }> } | null;
-    try { tokenData = await wm.getTokenBalances(); } catch { return { success: false, message: chalk.red('  Failed to fetch balances.') }; }
+    try {
+      tokenData = await wm.getTokenBalances();
+    } catch {
+      return { success: false, message: chalk.red('  Failed to fetch balances.') };
+    }
     if (!tokenData) return { success: true, message: chalk.dim('  No token data.') };
 
     // Find current positions
@@ -1040,22 +1071,32 @@ export const earnRotateTool: ToolDefinition = {
     ];
 
     for (const pos of currentPositions) {
-      lines.push(`  ${chalk.cyan(pos.pool.padEnd(12))} ${pos.type.padEnd(8)} ${formatUsd(pos.value).padEnd(12)} APY: ${pos.apy.toFixed(1)}%`);
+      lines.push(
+        `  ${chalk.cyan(pos.pool.padEnd(12))} ${pos.type.padEnd(8)} ${formatUsd(pos.value).padEnd(12)} APY: ${pos.apy.toFixed(1)}%`,
+      );
     }
 
     // Find rotation opportunities
     lines.push('');
-    lines.push(`  ${theme.section('Rotation Opportunities')}`,);
+    lines.push(`  ${theme.section('Rotation Opportunities')}`);
     lines.push('');
 
     let hasOpportunity = false;
     for (const pos of currentPositions) {
       if (bestPool.pool.poolId !== pos.poolId && bestPool.metrics.apy7d > pos.apy * 1.2) {
         hasOpportunity = true;
-        lines.push(`  ${chalk.yellow('→')} ${chalk.bold(pos.pool)} (${pos.apy.toFixed(1)}%) → ${chalk.green(bestPool.pool.aliases[0])} (${bestPool.metrics.apy7d.toFixed(1)}%)`);
-        lines.push(chalk.dim(`    +${(bestPool.metrics.apy7d - pos.apy).toFixed(1)}% higher yield | Risk: ${bestPool.risk}`));
+        lines.push(
+          `  ${chalk.yellow('→')} ${chalk.bold(pos.pool)} (${pos.apy.toFixed(1)}%) → ${chalk.green(bestPool.pool.aliases[0])} (${bestPool.metrics.apy7d.toFixed(1)}%)`,
+        );
+        lines.push(
+          chalk.dim(`    +${(bestPool.metrics.apy7d - pos.apy).toFixed(1)}% higher yield | Risk: ${bestPool.risk}`),
+        );
         lines.push('');
-        lines.push(chalk.dim(`    To rotate: earn withdraw 100% ${pos.pool} && earn deposit $${pos.value.toFixed(0)} ${bestPool.pool.aliases[0]}`));
+        lines.push(
+          chalk.dim(
+            `    To rotate: earn withdraw 100% ${pos.pool} && earn deposit $${pos.value.toFixed(0)} ${bestPool.pool.aliases[0]}`,
+          ),
+        );
         lines.push('');
       }
     }
@@ -1079,7 +1120,10 @@ export const earnIntegrationsTool: ToolDefinition = {
     const { FLP_INTEGRATIONS } = await import('../earn/earn-integrations.js');
 
     if (IS_AGENT) {
-      return { success: true, message: JSON.stringify({ action: 'earn_integrations', integrations: FLP_INTEGRATIONS }) };
+      return {
+        success: true,
+        message: JSON.stringify({ action: 'earn_integrations', integrations: FLP_INTEGRATIONS }),
+      };
     }
 
     const lines = [
@@ -1126,7 +1170,7 @@ export const earnHistoryTool: ToolDefinition = {
         return { success: true, message: chalk.dim('  Historical APY data unavailable for this endpoint.') };
       }
 
-      const data = await res.json() as Array<{ date: string; apy: number }>;
+      const data = (await res.json()) as Array<{ date: string; apy: number }>;
       if (!Array.isArray(data) || data.length === 0) {
         return { success: true, message: chalk.dim('  Historical data unavailable.') };
       }
@@ -1135,12 +1179,7 @@ export const earnHistoryTool: ToolDefinition = {
         return { success: true, message: JSON.stringify({ action: 'earn_history', pool: pool.aliases[0], data }) };
       }
 
-      const lines = [
-        '',
-        `  ${theme.accentBold(`${pool.displayName} — APY History`)}`,
-        `  ${theme.separator(40)}`,
-        '',
-      ];
+      const lines = ['', `  ${theme.accentBold(`${pool.displayName} — APY History`)}`, `  ${theme.separator(40)}`, ''];
 
       // Show last 10 data points
       const recent = data.slice(-10);

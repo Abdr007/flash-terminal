@@ -54,9 +54,15 @@ export async function checkLiquidationDivergence(
   }
 
   try {
-    const client = perpClient as unknown as { getLiquidationPriceContractHelper: (...args: unknown[]) => { toUiPrice: (decimals: number) => string } };
+    const client = perpClient as unknown as {
+      getLiquidationPriceContractHelper: (...args: unknown[]) => { toUiPrice: (decimals: number) => string };
+    };
     const liqOraclePrice = client.getLiquidationPriceContractHelper(
-      entryOraclePrice, unsettledFees, sdkSide, custodyAcct, posAcct,
+      entryOraclePrice,
+      unsettledFees,
+      sdkSide,
+      custodyAcct,
+      posAcct,
     );
     const sdkLiq = parseFloat(liqOraclePrice.toUiPrice(8));
 
@@ -78,7 +84,9 @@ export async function checkLiquidationDivergence(
       getLogger().warn('DIVERGENCE', msg);
 
       if (STRICT_MODE) {
-        throw new Error(`Protocol divergence exceeds threshold (${(deviation * 100).toFixed(2)}% > ${(DIVERGENCE_THRESHOLD * 100).toFixed(1)}%) for ${market}`);
+        throw new Error(
+          `Protocol divergence exceeds threshold (${(deviation * 100).toFixed(2)}% > ${(DIVERGENCE_THRESHOLD * 100).toFixed(1)}%) for ${market}`,
+        );
       }
 
       // Print warning to CLI
@@ -127,9 +135,15 @@ export function computeLiquidationPrice(
   posAcct: unknown,
 ): number {
   try {
-    const client = perpClient as { getLiquidationPriceContractHelper: (...args: unknown[]) => { toUiPrice: (decimals: number) => string } };
+    const client = perpClient as {
+      getLiquidationPriceContractHelper: (...args: unknown[]) => { toUiPrice: (decimals: number) => string };
+    };
     const liqOraclePrice = client.getLiquidationPriceContractHelper(
-      entryOraclePrice, unsettledFees, side, custodyAcct, posAcct,
+      entryOraclePrice,
+      unsettledFees,
+      side,
+      custodyAcct,
+      posAcct,
     );
     const liqUi = parseFloat(liqOraclePrice.toUiPrice(8));
     if (Number.isFinite(liqUi) && liqUi > 0) {
@@ -168,9 +182,14 @@ export function computeSimulationLiquidationPrice(
   closeFeeRate: number = 0.0008,
   unsettledFeesUsd: number = 0,
 ): number {
-  if (!Number.isFinite(entryPrice) || entryPrice <= 0 ||
-      !Number.isFinite(sizeUsd) || sizeUsd <= 0 ||
-      !Number.isFinite(collateralUsd) || collateralUsd <= 0) {
+  if (
+    !Number.isFinite(entryPrice) ||
+    entryPrice <= 0 ||
+    !Number.isFinite(sizeUsd) ||
+    sizeUsd <= 0 ||
+    !Number.isFinite(collateralUsd) ||
+    collateralUsd <= 0
+  ) {
     return 0;
   }
 

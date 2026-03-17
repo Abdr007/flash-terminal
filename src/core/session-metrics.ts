@@ -55,12 +55,24 @@ class MetricsCollector {
     if (latencyMs > this.stats.peakLatencyMs) this.stats.peakLatencyMs = latencyMs;
   }
 
-  recordCacheHit(): void { this.stats.cacheHits++; }
-  recordCacheMiss(): void { this.stats.cacheMisses++; }
-  recordRpcRequest(): void { this.stats.rpcRequests++; }
-  recordRpcFailure(): void { this.stats.rpcFailures++; }
-  recordTxSubmitted(): void { this.stats.txSubmitted++; }
-  recordTxConfirmed(): void { this.stats.txConfirmed++; }
+  recordCacheHit(): void {
+    this.stats.cacheHits++;
+  }
+  recordCacheMiss(): void {
+    this.stats.cacheMisses++;
+  }
+  recordRpcRequest(): void {
+    this.stats.rpcRequests++;
+  }
+  recordRpcFailure(): void {
+    this.stats.rpcFailures++;
+  }
+  recordTxSubmitted(): void {
+    this.stats.txSubmitted++;
+  }
+  recordTxConfirmed(): void {
+    this.stats.txConfirmed++;
+  }
 
   getStats(): SessionStats {
     return { ...this.stats };

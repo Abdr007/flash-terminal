@@ -218,7 +218,13 @@ export class TpuClient {
 
     // Validate tx size
     if (txBytes.length > MAX_TX_SIZE) {
-      return { attempted: false, transport: 'none', targetValidator: null, latencyMs: 0, error: 'tx too large for TPU' };
+      return {
+        attempted: false,
+        transport: 'none',
+        targetValidator: null,
+        latencyMs: 0,
+        error: 'tx too large for TPU',
+      };
     }
 
     // Get current leader from leader router
@@ -236,7 +242,13 @@ export class TpuClient {
     // Resolve TPU address
     const tpuAddr = this.nodeMap.get(targetLeader);
     if (!tpuAddr || !tpuAddr.tpuUdp) {
-      return { attempted: false, transport: 'none', targetValidator: targetLeader, latencyMs: 0, error: 'no TPU address for leader' };
+      return {
+        attempted: false,
+        transport: 'none',
+        targetValidator: targetLeader,
+        latencyMs: 0,
+        error: 'no TPU address for leader',
+      };
     }
 
     // Forward via UDP
@@ -372,7 +384,11 @@ export class TpuClient {
       this.nodeRefreshTimer = null;
     }
     if (this.udpSocket) {
-      try { this.udpSocket.close(); } catch { /* already closed */ }
+      try {
+        this.udpSocket.close();
+      } catch {
+        /* already closed */
+      }
       this.udpSocket = null;
     }
     this.nodeMap.clear();

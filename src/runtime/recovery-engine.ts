@@ -24,15 +24,15 @@ import { Connection } from '@solana/web3.js';
 import { getLogger } from '../utils/logger.js';
 import { getTradeJournal, JournalEntry } from '../journal/trade-journal.js';
 
-const RECOVERY_TIMEOUT_MS = 3_000;        // Max 3s for entire recovery
+const RECOVERY_TIMEOUT_MS = 3_000; // Max 3s for entire recovery
 const SIGNATURE_CHECK_TIMEOUT_MS = 2_000; // Per-signature RPC check
 const STALE_ENTRY_AGE_MS = 24 * 60 * 60_000; // 24h — entries older than this are pruned
 
 export interface RecoveryResult {
-  recovered: number;    // entries confirmed on-chain
-  failed: number;       // entries that did not land
-  pruned: number;       // stale entries removed
-  skipped: boolean;     // true if recovery was skipped (no RPC, no entries)
+  recovered: number; // entries confirmed on-chain
+  failed: number; // entries that did not land
+  pruned: number; // stale entries removed
+  skipped: boolean; // true if recovery was skipped (no RPC, no entries)
   durationMs: number;
 }
 
@@ -97,7 +97,10 @@ export async function runRecovery(connection: Connection | null): Promise<Recove
   result.durationMs = Date.now() - startTime;
 
   if (result.recovered > 0 || result.failed > 0) {
-    logger.info('RECOVERY', `Recovery complete: ${result.recovered} confirmed, ${result.failed} unconfirmed (${result.durationMs}ms)`);
+    logger.info(
+      'RECOVERY',
+      `Recovery complete: ${result.recovered} confirmed, ${result.failed} unconfirmed (${result.durationMs}ms)`,
+    );
   }
 
   return result;
@@ -129,8 +132,11 @@ async function verifyEntry(
       const { value } = await connection.getSignatureStatuses([entry.signature]);
       const status = value?.[0];
 
-      if (status && !status.err &&
-          (status.confirmationStatus === 'confirmed' || status.confirmationStatus === 'finalized')) {
+      if (
+        status &&
+        !status.err &&
+        (status.confirmationStatus === 'confirmed' || status.confirmationStatus === 'finalized')
+      ) {
         // Transaction landed on-chain
         logger.info('RECOVERY', `${label}: confirmed on-chain (${entry.signature.slice(0, 12)}...)`);
         journal.recordConfirmed(entry.id);

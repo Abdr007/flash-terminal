@@ -48,7 +48,6 @@ export enum ActionType {
   PortfolioExposure = 'portfolio_exposure',
   PortfolioRebalance = 'portfolio_rebalance',
 
-
   // Market Observability
   LiquidationMap = 'liquidation_map',
   FundingDashboard = 'funding_dashboard',
@@ -609,7 +608,10 @@ export const ParsedIntentSchema = z.discriminatedUnion('action', [
   z.object({ action: z.literal(ActionType.FafStatus) }),
   z.object({ action: z.literal(ActionType.FafStake), amount: z.number().positive() }),
   z.object({ action: z.literal(ActionType.FafUnstake), amount: z.number().positive() }),
-  z.object({ action: z.literal(ActionType.FafClaim), type: z.enum(['all', 'rewards', 'revenue', 'rebate']).optional() }),
+  z.object({
+    action: z.literal(ActionType.FafClaim),
+    type: z.enum(['all', 'rewards', 'revenue', 'rebate']).optional(),
+  }),
   z.object({ action: z.literal(ActionType.FafTier) }),
   z.object({ action: z.literal(ActionType.FafRewards) }),
   z.object({ action: z.literal(ActionType.FafReferral) }),
@@ -827,7 +829,6 @@ export interface MarketAnalysis {
   summary: string;
 }
 
-
 export interface ExposureSummary {
   totalLongExposure: number;
   totalShortExposure: number;
@@ -836,7 +837,6 @@ export interface ExposureSummary {
   collateralUtilization: number; // percentage
   concentrationRisk: { market: string; percentage: number }[];
 }
-
 
 // ─── Market Scanner Types ───────────────────────────────────────────────────
 
@@ -900,7 +900,7 @@ export interface IFlashClient {
     side: TradeSide,
     collateralAmount: number,
     leverage: number,
-    collateralToken?: string
+    collateralToken?: string,
   ): Promise<OpenPositionResult>;
 
   closePosition(
@@ -908,20 +908,12 @@ export interface IFlashClient {
     side: TradeSide,
     receiveToken?: string,
     closePercent?: number,
-    closeAmount?: number
+    closeAmount?: number,
   ): Promise<ClosePositionResult>;
 
-  addCollateral(
-    market: string,
-    side: TradeSide,
-    amount: number
-  ): Promise<CollateralResult>;
+  addCollateral(market: string, side: TradeSide, amount: number): Promise<CollateralResult>;
 
-  removeCollateral(
-    market: string,
-    side: TradeSide,
-    amount: number
-  ): Promise<CollateralResult>;
+  removeCollateral(market: string, side: TradeSide, amount: number): Promise<CollateralResult>;
 
   getPositions(): Promise<Position[]>;
   getMarketData(market?: string): Promise<MarketData[]>;
@@ -981,25 +973,13 @@ export interface IFlashClient {
   ): Promise<CancelOrderResult>;
 
   /** Cancel all trigger orders for a position */
-  cancelAllTriggerOrders?(
-    market: string,
-    side: TradeSide,
-  ): Promise<CancelOrderResult>;
+  cancelAllTriggerOrders?(market: string, side: TradeSide): Promise<CancelOrderResult>;
 
   /** Cancel an on-chain limit order */
-  cancelLimitOrder?(
-    market: string,
-    side: TradeSide,
-    orderId: number,
-  ): Promise<CancelOrderResult>;
+  cancelLimitOrder?(market: string, side: TradeSide, orderId: number): Promise<CancelOrderResult>;
 
   /** Edit an on-chain limit order price */
-  editLimitOrder?(
-    market: string,
-    side: TradeSide,
-    orderId: number,
-    newLimitPrice: number,
-  ): Promise<CancelOrderResult>;
+  editLimitOrder?(market: string, side: TradeSide, orderId: number, newLimitPrice: number): Promise<CancelOrderResult>;
 
   /** Get all on-chain orders for the current wallet */
   getUserOrders?(): Promise<OnChainOrder[]>;
@@ -1007,40 +987,21 @@ export interface IFlashClient {
   // ─── Swap ───────────────────────────────────────────────────────────────
 
   /** Swap tokens via Flash Trade pool */
-  swap?(
-    inputToken: string,
-    outputToken: string,
-    amountIn: number,
-    minAmountOut?: number,
-  ): Promise<SwapResult>;
+  swap?(inputToken: string, outputToken: string, amountIn: number, minAmountOut?: number): Promise<SwapResult>;
 
   // ─── Earn (LP & Staking) ──────────────────────────────────────────────
 
   /** Add liquidity to a pool */
-  addLiquidity?(
-    tokenSymbol: string,
-    amountUsd: number,
-    pool?: string,
-  ): Promise<EarnResult>;
+  addLiquidity?(tokenSymbol: string, amountUsd: number, pool?: string): Promise<EarnResult>;
 
   /** Remove liquidity from a pool */
-  removeLiquidity?(
-    tokenSymbol: string,
-    percent: number,
-    pool?: string,
-  ): Promise<EarnResult>;
+  removeLiquidity?(tokenSymbol: string, percent: number, pool?: string): Promise<EarnResult>;
 
   /** Stake FLP tokens */
-  stakeFLP?(
-    amountUsd: number,
-    pool?: string,
-  ): Promise<EarnResult>;
+  stakeFLP?(amountUsd: number, pool?: string): Promise<EarnResult>;
 
   /** Unstake FLP tokens */
-  unstakeFLP?(
-    percent: number,
-    pool?: string,
-  ): Promise<EarnResult>;
+  unstakeFLP?(percent: number, pool?: string): Promise<EarnResult>;
 
   /** Claim staking/LP rewards */
   claimRewards?(pool?: string): Promise<EarnResult>;
@@ -1253,7 +1214,7 @@ export function validateTrade(
   side: TradeSide,
   collateral: number,
   leverage: number,
-  balance: number
+  balance: number,
 ): TradeValidation {
   const errors: string[] = [];
   const warnings: string[] = [];

@@ -8,7 +8,7 @@ const VIRTUAL_POOLS = ['Virtual.1'] as const;
 
 // Pre-compute the set of virtual market symbols for O(1) lookup
 const VIRTUAL_MARKETS: ReadonlySet<string> = new Set(
-  VIRTUAL_POOLS.flatMap(pool => (POOL_MARKETS[pool] ?? []).map(s => s.toUpperCase()))
+  VIRTUAL_POOLS.flatMap((pool) => (POOL_MARKETS[pool] ?? []).map((s) => s.toUpperCase())),
 );
 
 /**
@@ -26,7 +26,7 @@ export function getVirtualPool(symbol: string): string | null {
   const upper = symbol.toUpperCase();
   for (const pool of VIRTUAL_POOLS) {
     const markets = POOL_MARKETS[pool];
-    if (markets && markets.some(m => m.toUpperCase() === upper)) {
+    if (markets && markets.some((m) => m.toUpperCase() === upper)) {
       return pool;
     }
   }

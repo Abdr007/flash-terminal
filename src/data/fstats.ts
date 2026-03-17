@@ -113,7 +113,7 @@ async function safeFetchJson<T>(path: string): Promise<T | null> {
         const retryAfter = parseInt(res.headers.get('retry-after') ?? '0', 10);
         const delay = retryAfter > 0 ? retryAfter * 1000 : 2000;
         logger.info('ANALYTICS', `fstats rate limited (429), backing off ${delay}ms for ${path}`);
-        await new Promise(resolve => setTimeout(resolve, Math.min(delay, 8000)));
+        await new Promise((resolve) => setTimeout(resolve, Math.min(delay, 8000)));
         // Single retry after backoff
         try {
           const retryRes = await fetch(url, {
@@ -163,7 +163,10 @@ async function safeFetchJson<T>(path: string): Promise<T | null> {
       totalBytes += value.byteLength;
       if (totalBytes > MAX_RESPONSE_BYTES) {
         reader.cancel();
-        logger.info('ANALYTICS', `fstats response body too large for ${path}: >${MAX_RESPONSE_BYTES} bytes (streaming abort)`);
+        logger.info(
+          'ANALYTICS',
+          `fstats response body too large for ${path}: >${MAX_RESPONSE_BYTES} bytes (streaming abort)`,
+        );
         return null;
       }
       chunks.push(value);
@@ -282,16 +285,12 @@ export class FStatsClient implements IDataClient {
     };
   }
 
-  async getLeaderboard(
-    metric: 'pnl' | 'volume' = 'pnl',
-    days = 30,
-    limit = 10
-  ): Promise<LeaderboardEntry[]> {
+  async getLeaderboard(metric: 'pnl' | 'volume' = 'pnl', days = 30, limit = 10): Promise<LeaderboardEntry[]> {
     // Clamp parameters to prevent abuse via unbounded query params
     days = Math.max(1, Math.min(days, 365));
     limit = Math.max(1, Math.min(limit, 100));
     const raw = await safeFetchJson<unknown>(
-      `/leaderboards/${encodeURIComponent(metric)}?days=${encodeURIComponent(String(days))}&limit=${encodeURIComponent(String(limit))}`
+      `/leaderboards/${encodeURIComponent(metric)}?days=${encodeURIComponent(String(days))}&limit=${encodeURIComponent(String(limit))}`,
     );
     const entries = safeArray<RawLeaderboardEntry>(raw);
     return entries.map((entry, i) => ({

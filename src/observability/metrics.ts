@@ -98,9 +98,18 @@ export class MetricsCollector {
 
   /** Get a histogram snapshot. */
   getHistogram(name: string): HistogramSnapshot {
-    return this.histograms.get(name)?.snapshot() ?? {
-      count: 0, sum: 0, min: 0, max: 0, avg: 0, p50: 0, p95: 0, p99: 0,
-    };
+    return (
+      this.histograms.get(name)?.snapshot() ?? {
+        count: 0,
+        sum: 0,
+        min: 0,
+        max: 0,
+        avg: 0,
+        p50: 0,
+        p95: 0,
+        p99: 0,
+      }
+    );
   }
 
   /** Export all metrics as a JSON-serializable snapshot. */

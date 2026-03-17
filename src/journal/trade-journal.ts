@@ -36,14 +36,14 @@ export interface JournalEntry {
   id: string;
   market: string;
   side: string;
-  action: string;           // open, close, add_collateral, remove_collateral
+  action: string; // open, close, add_collateral, remove_collateral
   collateral?: number;
   leverage?: number;
   sizeUsd?: number;
   signature?: string;
   status: JournalStatus;
-  createdAt: number;        // ms timestamp
-  updatedAt: number;        // ms timestamp
+  createdAt: number; // ms timestamp
+  updatedAt: number; // ms timestamp
 }
 
 interface JournalFile {
@@ -110,7 +110,7 @@ export class TradeJournal {
    * Update entry after signature is obtained from sendRawTransaction.
    */
   recordSent(id: string, signature: string): void {
-    const entry = this.entries.find(e => e.id === id);
+    const entry = this.entries.find((e) => e.id === id);
     if (!entry) return;
     entry.signature = signature;
     entry.status = 'sent';
@@ -122,7 +122,7 @@ export class TradeJournal {
    * Mark entry as confirmed after RPC confirmation.
    */
   recordConfirmed(id: string): void {
-    const entry = this.entries.find(e => e.id === id);
+    const entry = this.entries.find((e) => e.id === id);
     if (!entry) return;
     entry.status = 'confirmed';
     entry.updatedAt = Date.now();
@@ -133,7 +133,7 @@ export class TradeJournal {
    * Remove entry after successful confirmation (cleanup).
    */
   remove(id: string): void {
-    const idx = this.entries.findIndex(e => e.id === id);
+    const idx = this.entries.findIndex((e) => e.id === id);
     if (idx >= 0) {
       this.entries.splice(idx, 1);
       this.flush();
@@ -144,7 +144,7 @@ export class TradeJournal {
    * Get all pending/sent entries (for recovery engine).
    */
   getPendingEntries(): JournalEntry[] {
-    return this.entries.filter(e => e.status === 'pending' || e.status === 'sent');
+    return this.entries.filter((e) => e.status === 'pending' || e.status === 'sent');
   }
 
   /**
@@ -160,7 +160,7 @@ export class TradeJournal {
   pruneStale(maxAgeMs: number): number {
     const cutoff = Date.now() - maxAgeMs;
     const before = this.entries.length;
-    this.entries = this.entries.filter(e => e.updatedAt > cutoff);
+    this.entries = this.entries.filter((e) => e.updatedAt > cutoff);
     const pruned = before - this.entries.length;
     if (pruned > 0) this.flush();
     return pruned;
@@ -193,7 +193,7 @@ export class TradeJournal {
       }
 
       // Validate each entry
-      this.entries = data.entries.filter(e => {
+      this.entries = data.entries.filter((e) => {
         if (!e.id || !e.market || !e.side || !e.action || !e.status) return false;
         if (!Number.isFinite(e.createdAt) || !Number.isFinite(e.updatedAt)) return false;
         if (e.createdAt <= 0 || e.updatedAt <= 0) return false;
@@ -206,7 +206,10 @@ export class TradeJournal {
         getLogger().info('JOURNAL', `Loaded ${this.entries.length} journal entries`);
       }
     } catch (err: unknown) {
-      getLogger().warn('JOURNAL', `Failed to load journal, rebuilding: ${err instanceof Error ? err.message : 'unknown'}`);
+      getLogger().warn(
+        'JOURNAL',
+        `Failed to load journal, rebuilding: ${err instanceof Error ? err.message : 'unknown'}`,
+      );
       this.entries = [];
       this.flush();
     }
@@ -245,7 +248,9 @@ export class TradeJournal {
       // Journal write failure is non-critical — log but don't crash
       try {
         getLogger().warn('JOURNAL', `Failed to write journal: ${err instanceof Error ? err.message : 'unknown'}`);
-      } catch { /* truly nothing we can do */ }
+      } catch {
+        /* truly nothing we can do */
+      }
     }
   }
 

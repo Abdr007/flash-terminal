@@ -59,8 +59,8 @@ export function getSafeCommandSuggestion(input: string): string | null {
 
   // Common near-misses for protected commands
   const suggestions: Record<string, string[]> = {
-    'exit': ['eexit', 'exiit', 'exitt', 'exi', 'exot', 'exir'],
-    'quit': ['quiit', 'qut', 'quitt', 'qit'],
+    exit: ['eexit', 'exiit', 'exitt', 'exi', 'exot', 'exir'],
+    quit: ['quiit', 'qut', 'quitt', 'qit'],
     'close all': ['clsoe all', 'colse all', 'closee all', 'close al'],
     'wallet disconnect': ['wallet disconect', 'walet disconnect', 'wallet disconnet'],
   };

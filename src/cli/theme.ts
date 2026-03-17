@@ -140,11 +140,7 @@ export const theme = {
   /** Section title block with separator */
   titleBlock(title: string, width = 40): string {
     if (IS_AGENT) return `  ${title}`;
-    return [
-      '',
-      `  ${ACCENT_BOLD(title)}`,
-      `  ${MUTED('─'.repeat(width))}`,
-    ].join('\n');
+    return ['', `  ${ACCENT_BOLD(title)}`, `  ${MUTED('─'.repeat(width))}`].join('\n');
   },
 
   /** Table header styling */

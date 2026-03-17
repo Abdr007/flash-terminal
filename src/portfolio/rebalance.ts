@@ -10,7 +10,7 @@ export interface RebalanceAction {
   market: string;
   side: TradeSide;
   reason: string;
-  amount?: number;  // For reduce_collateral: how much to remove
+  amount?: number; // For reduce_collateral: how much to remove
 }
 
 export interface RebalanceResult {
@@ -33,10 +33,7 @@ export interface RebalanceResult {
  *
  * This function is pure — it does NOT execute any trades.
  */
-export function analyzeRebalance(
-  positions: Position[],
-  totalCapital: number,
-): RebalanceResult {
+export function analyzeRebalance(positions: Position[], totalCapital: number): RebalanceResult {
   if (positions.length === 0 || !Number.isFinite(totalCapital) || totalCapital <= 0) {
     return {
       balanced: true,
@@ -107,9 +104,7 @@ export function analyzeRebalance(
   }
 
   // ── Step 3: Recompute exposure AFTER simulated closures ──
-  const remainingPositions = positions.filter(
-    (p) => !closedKeys.has(`${p.market}:${p.side}`)
-  );
+  const remainingPositions = positions.filter((p) => !closedKeys.has(`${p.market}:${p.side}`));
 
   const remainingExposure = new Map<string, number>();
   for (const pos of remainingPositions) {

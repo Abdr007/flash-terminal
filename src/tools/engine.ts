@@ -1,10 +1,4 @@
-import {
-  ActionType,
-  ParsedIntent,
-  ToolContext,
-  ToolDefinition,
-  ToolResult,
-} from '../types/index.js';
+import { ActionType, ParsedIntent, ToolContext, ToolDefinition, ToolResult } from '../types/index.js';
 import { ToolRegistry } from './registry.js';
 import { allFlashTools } from './flash-tools.js';
 import { allAgentTools } from '../agent/agent-tools.js';
@@ -76,9 +70,7 @@ export class ToolEngine {
     return this.registry.execute(toolName, params, this.context);
   }
 
-  private getToolMapping(
-    intent: ParsedIntent
-  ): { toolName: string; params: Record<string, unknown> } | null {
+  private getToolMapping(intent: ParsedIntent): { toolName: string; params: Record<string, unknown> } | null {
     switch (intent.action) {
       case ActionType.OpenPosition:
         return {
@@ -98,8 +90,10 @@ export class ToolEngine {
         return {
           toolName: 'flash_close_position',
           params: {
-            market: intent.market, side: intent.side,
-            closePercent: intent.closePercent, closeAmount: intent.closeAmount,
+            market: intent.market,
+            side: intent.side,
+            closePercent: intent.closePercent,
+            closeAmount: intent.closeAmount,
           },
         };
 

@@ -23,7 +23,7 @@ let reconcileLogWriteCount = 0;
 
 /** Small delay helper */
 function delay(ms: number): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, ms));
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 /** Append a structured entry to the reconcile log file */
@@ -38,7 +38,8 @@ function writeReconcileLog(entry: {
     if (!existsSync(RECONCILE_LOG_DIR)) {
       mkdirSync(RECONCILE_LOG_DIR, { recursive: true, mode: 0o700 });
     }
-    const line = `[${new Date().toISOString()}] [RECONCILE] ` +
+    const line =
+      `[${new Date().toISOString()}] [RECONCILE] ` +
       `Local positions: ${entry.localCount} | ` +
       `RPC positions: ${entry.rpcCount} | ` +
       `Retry attempted: ${entry.retryCount !== undefined ? 'yes' : 'no'}` +
@@ -173,9 +174,12 @@ export class StateReconciler {
       for (const pos of onChainPositions) {
         // Validate numeric integrity before accepting
         if (
-          !Number.isFinite(pos.sizeUsd) || pos.sizeUsd <= 0 ||
-          !Number.isFinite(pos.entryPrice) || pos.entryPrice <= 0 ||
-          !Number.isFinite(pos.collateralUsd) || pos.collateralUsd <= 0
+          !Number.isFinite(pos.sizeUsd) ||
+          pos.sizeUsd <= 0 ||
+          !Number.isFinite(pos.entryPrice) ||
+          pos.entryPrice <= 0 ||
+          !Number.isFinite(pos.collateralUsd) ||
+          pos.collateralUsd <= 0
         ) {
           continue; // Skip corrupt positions
         }
@@ -197,10 +201,14 @@ export class StateReconciler {
           const retryMap = new Map<string, Position>();
           for (const pos of retryPositions) {
             if (
-              !Number.isFinite(pos.sizeUsd) || pos.sizeUsd <= 0 ||
-              !Number.isFinite(pos.entryPrice) || pos.entryPrice <= 0 ||
-              !Number.isFinite(pos.collateralUsd) || pos.collateralUsd <= 0
-            ) continue;
+              !Number.isFinite(pos.sizeUsd) ||
+              pos.sizeUsd <= 0 ||
+              !Number.isFinite(pos.entryPrice) ||
+              pos.entryPrice <= 0 ||
+              !Number.isFinite(pos.collateralUsd) ||
+              pos.collateralUsd <= 0
+            )
+              continue;
             retryMap.set(`${pos.market}:${pos.side}`, pos);
           }
           retryCount = retryMap.size;
@@ -241,14 +249,17 @@ export class StateReconciler {
           rpcCount: onChainMap.size,
           retryCount,
           retrySucceeded: false,
-          action: this.consecutiveMismatchCycles >= StateReconciler.MISMATCH_CYCLES_BEFORE_REMOVAL
-            ? 'accepting_rpc_state' : 'preserving_local_state',
+          action:
+            this.consecutiveMismatchCycles >= StateReconciler.MISMATCH_CYCLES_BEFORE_REMOVAL
+              ? 'accepting_rpc_state'
+              : 'preserving_local_state',
         });
 
         // Log internally at debug level (never prints to CLI)
-        logger.debug('RECONCILE',
+        logger.debug(
+          'RECONCILE',
           `RPC mismatch: local=${this.lastKnownPositions.size} rpc=${onChainMap.size} ` +
-          `retry=${retryCount} cycle=${this.consecutiveMismatchCycles}`,
+            `retry=${retryCount} cycle=${this.consecutiveMismatchCycles}`,
         );
 
         // Show one CLI warning per mismatch event (anti-spam)
@@ -268,7 +279,8 @@ export class StateReconciler {
           };
         }
         // Fall through to normal comparison after enough consistent mismatches
-        logger.debug('RECONCILE',
+        logger.debug(
+          'RECONCILE',
           `Accepting RPC state after ${this.consecutiveMismatchCycles} consistent mismatch cycles`,
         );
       } else {
@@ -342,9 +354,7 @@ export class StateReconciler {
     try {
       const positions = await this.client.getPositions();
       const key = `${market.toUpperCase()}:${side}`;
-      const found = positions.some(
-        p => `${p.market.toUpperCase()}:${p.side}` === key
-      );
+      const found = positions.some((p) => `${p.market.toUpperCase()}:${p.side}` === key);
 
       if (!found) {
         logger.warn('RECONCILE', `Trade verification failed: ${key} not found on-chain`);
@@ -354,9 +364,12 @@ export class StateReconciler {
       const posMap = new Map<string, Position>();
       for (const p of positions) {
         if (
-          !Number.isFinite(p.sizeUsd) || p.sizeUsd <= 0 ||
-          !Number.isFinite(p.entryPrice) || p.entryPrice <= 0 ||
-          !Number.isFinite(p.collateralUsd) || p.collateralUsd <= 0
+          !Number.isFinite(p.sizeUsd) ||
+          p.sizeUsd <= 0 ||
+          !Number.isFinite(p.entryPrice) ||
+          p.entryPrice <= 0 ||
+          !Number.isFinite(p.collateralUsd) ||
+          p.collateralUsd <= 0
         ) {
           continue; // Skip corrupt positions
         }

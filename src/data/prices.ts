@@ -130,8 +130,7 @@ export class PriceService {
 
     // Bounded LRU eviction: remove oldest entries regardless of expiry
     if (this.cache.size >= MAX_PRICE_CACHE_ENTRIES) {
-      const entries = Array.from(this.cache.entries())
-        .sort(([, a], [, b]) => a.expiry - b.expiry);
+      const entries = Array.from(this.cache.entries()).sort(([, a], [, b]) => a.expiry - b.expiry);
       const toEvict = entries.slice(0, Math.max(10, this.cache.size - Math.floor(MAX_PRICE_CACHE_ENTRIES / 2)));
       for (const [k] of toEvict) this.cache.delete(k);
     }
@@ -159,7 +158,7 @@ export class PriceService {
     }
 
     // Stale cache fallback for missing symbols
-    const missing = uncached.filter(sym => !priceMap.has(sym));
+    const missing = uncached.filter((sym) => !priceMap.has(sym));
     if (missing.length > 0) {
       for (const sym of missing) {
         const stale = this.cache.get(sym);
@@ -168,9 +167,12 @@ export class PriceService {
         }
       }
 
-      const trulyMissing = missing.filter(sym => !priceMap.has(sym));
+      const trulyMissing = missing.filter((sym) => !priceMap.has(sym));
       if (trulyMissing.length > 0 && now - this.lastMissingWarnTime >= PriceService.MISSING_WARN_INTERVAL_MS) {
-        logger.warn('PRICE', `No live price for ${trulyMissing.length} market(s): ${trulyMissing.join(', ')} — excluded from analysis`);
+        logger.warn(
+          'PRICE',
+          `No live price for ${trulyMissing.length} market(s): ${trulyMissing.join(', ')} — excluded from analysis`,
+        );
         this.lastMissingWarnTime = now;
       }
     }
@@ -196,7 +198,7 @@ export class PriceService {
 
     if (feedIds.length === 0) return [];
 
-    const params = feedIds.map(id => `ids[]=${id}`).join('&');
+    const params = feedIds.map((id) => `ids[]=${id}`).join('&');
     const url = `https://hermes.pyth.network/v2/updates/price/latest?${params}&parsed=true`;
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
@@ -237,7 +239,10 @@ export class PriceService {
         if (cached && cached.data.price > 0) {
           const deviation = Math.abs(price - cached.data.price) / cached.data.price;
           if (deviation > 0.5) {
-            getLogger().warn('PRICE', `Rejecting suspicious price for ${sym}: $${price} vs cached $${cached.data.price.toFixed(2)} (${(deviation * 100).toFixed(0)}% deviation)`);
+            getLogger().warn(
+              'PRICE',
+              `Rejecting suspicious price for ${sym}: $${price} vs cached $${cached.data.price.toFixed(2)} (${(deviation * 100).toFixed(0)}% deviation)`,
+            );
             continue;
           }
         }
@@ -379,7 +384,7 @@ export class PriceService {
             typeof s.timestamp === 'number' &&
             Number.isFinite(s.price) &&
             s.price > 0 &&
-            s.timestamp > now - HISTORY_WINDOW_MS
+            s.timestamp > now - HISTORY_WINDOW_MS,
         );
 
         if (valid.length > 0) {

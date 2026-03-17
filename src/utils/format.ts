@@ -77,17 +77,17 @@ export function formatToolResult(result: ToolResult): string {
 }
 
 export function formatTable(headers: string[], rows: string[][]): string {
-  const colWidths = headers.map((h, i) =>
-    Math.max(h.length, ...rows.map(r => stripAnsi(r[i] || '').length))
-  );
+  const colWidths = headers.map((h, i) => Math.max(h.length, ...rows.map((r) => stripAnsi(r[i] || '').length)));
   const headerLine = headers.map((h, i) => theme.tableHeader(h.padEnd(colWidths[i]))).join('  ');
   const separator = theme.tableSeparator(colWidths.reduce((a, b) => a + b + 2, -2));
-  const bodyLines = rows.map(row =>
-    row.map((cell, i) => {
-      const stripped = stripAnsi(cell);
-      const padding = colWidths[i] - stripped.length;
-      return cell + ' '.repeat(Math.max(0, padding));
-    }).join('  ')
+  const bodyLines = rows.map((row) =>
+    row
+      .map((cell, i) => {
+        const stripped = stripAnsi(cell);
+        const padding = colWidths[i] - stripped.length;
+        return cell + ' '.repeat(Math.max(0, padding));
+      })
+      .join('  '),
   );
   return [headerLine, separator, ...bodyLines].join('\n');
 }
@@ -117,12 +117,7 @@ export function padVisibleStart(str: string, width: number): string {
 
 export function banner(): string {
   if (IS_AGENT) return ''; // NO_DNA: no ASCII art / decorations
-  return [
-    '',
-    `  ${theme.accentBold('FLASH AI TERMINAL')}`,
-    `  ${theme.separator(32)}`,
-    '',
-  ].join('\n');
+  return ['', `  ${theme.accentBold('FLASH AI TERMINAL')}`, `  ${theme.separator(32)}`, ''].join('\n');
 }
 
 export function shortAddress(address: string): string {
@@ -147,7 +142,9 @@ export function humanizeSdkError(msg: string, collateral?: number, leverage?: nu
       const parts: string[] = [`Insufficient funds — need ${formatUsd(usdAmount)} more USDC`];
       if (collateral && leverage) {
         const totalRequired = collateral + (collateral * leverage * 8) / 10_000;
-        parts.push(`(${formatUsd(collateral)} collateral + ~${formatUsd(totalRequired - collateral)} fees at ${leverage}x)`);
+        parts.push(
+          `(${formatUsd(collateral)} collateral + ~${formatUsd(totalRequired - collateral)} fees at ${leverage}x)`,
+        );
       }
       return parts.join(' ');
     }

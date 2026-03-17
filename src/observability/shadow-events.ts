@@ -48,7 +48,9 @@ export function logShadowTrade(result: ShadowTradeResult): void {
       error: result.error,
       timestamp: new Date().toISOString(),
     });
-  } catch { /* observability must never throw */ }
+  } catch {
+    /* observability must never throw */
+  }
 }
 
 /** Log a risk mirror divergence. */
@@ -63,7 +65,9 @@ export function logShadowDivergence(divergence: RiskDivergence): void {
       delta: divergence.delta,
       timestamp: divergence.timestamp,
     });
-  } catch { /* observability must never throw */ }
+  } catch {
+    /* observability must never throw */
+  }
 }
 
 /** Log shadow engine state change. */
@@ -74,5 +78,7 @@ export function logShadowStateChange(enabled: boolean): void {
       enabled,
       timestamp: new Date().toISOString(),
     });
-  } catch { /* observability must never throw */ }
+  } catch {
+    /* observability must never throw */
+  }
 }

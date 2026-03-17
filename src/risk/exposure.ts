@@ -27,9 +27,7 @@ export function computeExposure(portfolio: Portfolio): ExposureSummary {
   // Uses usdcBalance (available capital) + totalCollateral (deployed capital) as denominator
   const walletBalance = Number.isFinite(portfolio.usdcBalance) ? portfolio.usdcBalance! : 0;
   const totalCapital = walletBalance + totalCollateral;
-  const rawUtilization = totalCapital > 0
-    ? (totalCollateral / totalCapital) * 100
-    : 0;
+  const rawUtilization = totalCapital > 0 ? (totalCollateral / totalCapital) * 100 : 0;
   const collateralUtilization = Number.isFinite(rawUtilization) ? rawUtilization : 0;
 
   const concentrationRisk = Array.from(marketExposure.entries())

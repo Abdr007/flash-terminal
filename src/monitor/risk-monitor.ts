@@ -36,14 +36,14 @@ export enum RiskLevel {
 // ─── Hysteresis Thresholds ───────────────────────────────────────────────────
 // Upward thresholds (entering risk level) and recovery thresholds (exiting)
 // prevent oscillation when distance hovers near a boundary.
-const SAFE_ENTER = 0.30;           // enters WARNING when distance < 30%
-const SAFE_RECOVER = 0.35;         // recovers to SAFE when distance > 35%
-const WARNING_ENTER = 0.15;        // enters CRITICAL when distance < 15%
-const WARNING_RECOVER = 0.18;      // recovers to WARNING when distance > 18%
+const SAFE_ENTER = 0.3; // enters WARNING when distance < 30%
+const SAFE_RECOVER = 0.35; // recovers to SAFE when distance > 35%
+const WARNING_ENTER = 0.15; // enters CRITICAL when distance < 15%
+const WARNING_RECOVER = 0.18; // recovers to WARNING when distance > 18%
 const TARGET_SAFE_DISTANCE = 0.35; // collateral suggestion target
 
 // Tiered refresh intervals
-const PRICE_INTERVAL_MS = 5_000;     // price/risk checks every 5s
+const PRICE_INTERVAL_MS = 5_000; // price/risk checks every 5s
 const POSITION_INTERVAL_MS = 20_000; // full position refresh every 20s
 const MAX_POSITION_STALE_MS = 120_000; // cached positions expire after 2 minutes
 
@@ -63,7 +63,7 @@ export interface PositionRisk {
   sizeUsd: number;
   distanceToLiquidation: number; // 0..1 ratio
   riskLevel: RiskLevel;
-  suggestedCollateral: number;   // extra $ to restore safe distance
+  suggestedCollateral: number; // extra $ to restore safe distance
 }
 
 export interface PortfolioRiskSnapshot {
@@ -179,12 +179,18 @@ export class RiskMonitor {
           // If fetch fails and cached data is stale beyond the hard limit,
           // skip this tick entirely — don't assess risk with ancient data
           if (positionAge > MAX_POSITION_STALE_MS) {
-            logger.warn('RISK_MONITOR', `Position data stale (${Math.round(positionAge / 1000)}s) and refresh failed — skipping tick`);
+            logger.warn(
+              'RISK_MONITOR',
+              `Position data stale (${Math.round(positionAge / 1000)}s) and refresh failed — skipping tick`,
+            );
             return;
           }
           // Use cached data for now — it's still within the staleness window
           positions = this.cachedPositions;
-          logger.debug('RISK_MONITOR', `Position refresh failed, using cached data (${Math.round(positionAge / 1000)}s old): ${getErrorMessage(fetchErr)}`);
+          logger.debug(
+            'RISK_MONITOR',
+            `Position refresh failed, using cached data (${Math.round(positionAge / 1000)}s old): ${getErrorMessage(fetchErr)}`,
+          );
         }
       } else {
         positions = this.cachedPositions;
@@ -206,12 +212,16 @@ export class RiskMonitor {
       }
 
       // Skip positions with invalid numeric data
-      const valid = positions.filter(p =>
-        Number.isFinite(p.sizeUsd) && p.sizeUsd > 0 &&
-        Number.isFinite(p.collateralUsd) && p.collateralUsd > 0 &&
-        Number.isFinite(p.entryPrice) && p.entryPrice > 0
+      const valid = positions.filter(
+        (p) =>
+          Number.isFinite(p.sizeUsd) &&
+          p.sizeUsd > 0 &&
+          Number.isFinite(p.collateralUsd) &&
+          p.collateralUsd > 0 &&
+          Number.isFinite(p.entryPrice) &&
+          p.entryPrice > 0,
       );
-      const assessed = await Promise.all(valid.map(p => this.assessPosition(p)));
+      const assessed = await Promise.all(valid.map((p) => this.assessPosition(p)));
       const totalExposure = assessed.reduce((sum, r) => sum + r.sizeUsd, 0);
 
       // Leverage-weighted risk: sum(leverage * sizeWeight * (1 - distance))
@@ -250,13 +260,15 @@ export class RiskMonitor {
       if (this.tickCount === 1 || now2 - this.lastHeartbeat >= RiskMonitor.HEARTBEAT_INTERVAL_MS) {
         this.lastHeartbeat = now2;
         const worstDist = worstPosition ? `${(worstPosition.distanceToLiquidation * 100).toFixed(0)}%` : '—';
-        const overallLevel = assessed.some(r => r.riskLevel === RiskLevel.Critical) ? chalk.red('CRITICAL')
-          : assessed.some(r => r.riskLevel === RiskLevel.Warning) ? chalk.yellow('WARNING')
-          : chalk.green('SAFE');
+        const overallLevel = assessed.some((r) => r.riskLevel === RiskLevel.Critical)
+          ? chalk.red('CRITICAL')
+          : assessed.some((r) => r.riskLevel === RiskLevel.Warning)
+            ? chalk.yellow('WARNING')
+            : chalk.green('SAFE');
         process.stdout.write(
           chalk.dim(`\n  [Risk Monitor] ${assessed.length} position(s) monitored | `) +
-          `Risk: ${overallLevel}` +
-          chalk.dim(` | Closest liq: ${worstDist}\n`)
+            `Risk: ${overallLevel}` +
+            chalk.dim(` | Closest liq: ${worstDist}\n`),
         );
       }
     } catch (error: unknown) {
@@ -383,7 +395,12 @@ export class RiskMonitor {
       const newCollateral = collateralUsd + mid;
       // Use protocol-aligned liquidation formula with on-chain rates
       const newLiqPrice = computeSimulationLiquidationPrice(
-        entryPrice, sizeUsd, newCollateral, pos.side, feeRates.maintenanceMarginRate, feeRates.closeFeeRate,
+        entryPrice,
+        sizeUsd,
+        newCollateral,
+        pos.side,
+        feeRates.maintenanceMarginRate,
+        feeRates.closeFeeRate,
       );
       // Use entryPrice as denominator (consistent)
       const newDistance = Math.abs(currentPrice - newLiqPrice) / entryPrice;
@@ -415,7 +432,9 @@ export class RiskMonitor {
         // Clear alert tracking if position recovered
         if (prevLevel && prevLevel !== RiskLevel.Safe) {
           process.stdout.write(
-            chalk.green(`\n  ✓ ${r.market} ${r.side} recovered to safe distance (${(r.distanceToLiquidation * 100).toFixed(0)}%)\n`)
+            chalk.green(
+              `\n  ✓ ${r.market} ${r.side} recovered to safe distance (${(r.distanceToLiquidation * 100).toFixed(0)}%)\n`,
+            ),
           );
         }
         this.lastAlertLevel.set(key, RiskLevel.Safe);

@@ -47,13 +47,43 @@ const POOL_DEFS: Array<{
   feeShare: number;
   skipTokens: string[];
 }> = [
-  { poolId: 'Crypto.1', displayName: 'Crypto Pool', aliases: ['crypto', 'main', 'bluechip'], feeShare: 0.70, skipTokens: ['USDC', 'USDT', 'WSOL'] },
-  { poolId: 'Virtual.1', displayName: 'Gold Pool', aliases: ['gold', 'virtual', 'forex', 'commodities'], feeShare: 0.70, skipTokens: ['USDC', 'USDT'] },
-  { poolId: 'Governance.1', displayName: 'DeFi Pool', aliases: ['defi', 'governance', 'gov'], feeShare: 0.70, skipTokens: ['USDC', 'USDT'] },
-  { poolId: 'Community.1', displayName: 'Meme Pool', aliases: ['meme', 'community'], feeShare: 0.80, skipTokens: ['USDC', 'USDT'] },
-  { poolId: 'Community.2', displayName: 'WIF Pool', aliases: ['wif'], feeShare: 0.80, skipTokens: ['USDC', 'USDT'] },
-  { poolId: 'Ore.1', displayName: 'Ore Pool', aliases: ['ore'], feeShare: 0.90, skipTokens: ['USDC', 'USDT'] },
-  { poolId: 'Trump.1', displayName: 'FART Pool', aliases: ['fart', 'fartcoin', 'trump'], feeShare: 0.80, skipTokens: ['USDC', 'USDT'] },
+  {
+    poolId: 'Crypto.1',
+    displayName: 'Crypto Pool',
+    aliases: ['crypto', 'main', 'bluechip'],
+    feeShare: 0.7,
+    skipTokens: ['USDC', 'USDT', 'WSOL'],
+  },
+  {
+    poolId: 'Virtual.1',
+    displayName: 'Gold Pool',
+    aliases: ['gold', 'virtual', 'forex', 'commodities'],
+    feeShare: 0.7,
+    skipTokens: ['USDC', 'USDT'],
+  },
+  {
+    poolId: 'Governance.1',
+    displayName: 'DeFi Pool',
+    aliases: ['defi', 'governance', 'gov'],
+    feeShare: 0.7,
+    skipTokens: ['USDC', 'USDT'],
+  },
+  {
+    poolId: 'Community.1',
+    displayName: 'Meme Pool',
+    aliases: ['meme', 'community'],
+    feeShare: 0.8,
+    skipTokens: ['USDC', 'USDT'],
+  },
+  { poolId: 'Community.2', displayName: 'WIF Pool', aliases: ['wif'], feeShare: 0.8, skipTokens: ['USDC', 'USDT'] },
+  { poolId: 'Ore.1', displayName: 'Ore Pool', aliases: ['ore'], feeShare: 0.9, skipTokens: ['USDC', 'USDT'] },
+  {
+    poolId: 'Trump.1',
+    displayName: 'FART Pool',
+    aliases: ['fart', 'fartcoin', 'trump'],
+    feeShare: 0.8,
+    skipTokens: ['USDC', 'USDT'],
+  },
 ];
 
 // ─── Registry ───────────────────────────────────────────────────────────────
@@ -120,7 +150,7 @@ export function resolveTokenMint(mint: string): { pool: PoolInfo; type: 'FLP' | 
 
 /** Get all pool aliases for autocomplete. */
 export function getAllPoolAliases(): string[] {
-  return getPoolRegistry().flatMap(p => p.aliases);
+  return getPoolRegistry().flatMap((p) => p.aliases);
 }
 
 /** Force refresh the registry cache. */

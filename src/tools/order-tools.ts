@@ -1,14 +1,6 @@
 import { z } from 'zod';
-import {
-  ToolDefinition,
-  ToolContext,
-  ToolResult,
-  TradeSide,
-} from '../types/index.js';
-import {
-  colorPnl,
-  colorSide,
-} from '../utils/format.js';
+import { ToolDefinition, ToolContext, ToolResult, TradeSide } from '../types/index.js';
+import { colorPnl, colorSide } from '../utils/format.js';
 import { getErrorMessage } from '../utils/retry.js';
 import chalk from 'chalk';
 import { theme } from '../cli/theme.js';
@@ -38,10 +30,7 @@ export const flashCloseAll: ToolDefinition = {
 
       for (const pos of positions) {
         try {
-          const result = await context.flashClient.closePosition(
-            pos.market,
-            pos.side as TradeSide,
-          );
+          const result = await context.flashClient.closePosition(pos.market, pos.side as TradeSide);
           closed++;
           const pnl = result.pnl ?? 0;
           totalPnl += pnl;
@@ -80,13 +69,17 @@ export const setTpSlTool: ToolDefinition = {
   }),
   async execute(params: Record<string, unknown>, context: ToolContext): Promise<ToolResult> {
     const { market, side, type, price } = params as {
-      market: string; side: TradeSide; type: 'tp' | 'sl'; price: number;
+      market: string;
+      side: TradeSide;
+      type: 'tp' | 'sl';
+      price: number;
     };
 
     if (context.simulationMode) {
       return {
         success: false,
-        message: '  On-chain TP/SL requires live mode. TP/SL orders are placed on the Flash Trade protocol and require a real wallet.',
+        message:
+          '  On-chain TP/SL requires live mode. TP/SL orders are placed on the Flash Trade protocol and require a real wallet.',
       };
     }
 
@@ -128,7 +121,9 @@ export const removeTpSlTool: ToolDefinition = {
   }),
   async execute(params: Record<string, unknown>, context: ToolContext): Promise<ToolResult> {
     const { market, side, type } = params as {
-      market: string; side: TradeSide; type: 'tp' | 'sl';
+      market: string;
+      side: TradeSide;
+      type: 'tp' | 'sl';
     };
 
     if (context.simulationMode) {
@@ -148,9 +143,7 @@ export const removeTpSlTool: ToolDefinition = {
       // Find the order to cancel
       const orders = await client.getUserOrders();
       const targetType = isStopLoss ? 'stop_loss' : 'take_profit';
-      const order = orders.find(
-        o => o.market === market.toUpperCase() && o.side === side && o.type === targetType
-      );
+      const order = orders.find((o) => o.market === market.toUpperCase() && o.side === side && o.type === targetType);
       if (!order) {
         return { success: false, message: `  No ${type.toUpperCase()} order found for ${market} ${side}.` };
       }
@@ -160,12 +153,7 @@ export const removeTpSlTool: ToolDefinition = {
       const txLink = `https://solscan.io/tx/${result.txSignature}`;
       return {
         success: true,
-        message: [
-          '',
-          chalk.green(`  ${label} Removed (On-Chain)`),
-          chalk.dim(`  TX: ${txLink}`),
-          '',
-        ].join('\n'),
+        message: ['', chalk.green(`  ${label} Removed (On-Chain)`), chalk.dim(`  TX: ${txLink}`), ''].join('\n'),
       };
     } catch (err: unknown) {
       return { success: false, message: `  Failed to remove ${type.toUpperCase()}: ${getErrorMessage(err)}` };
@@ -197,7 +185,7 @@ export const tpSlStatusTool: ToolDefinition = {
 
     try {
       const orders = await client.getUserOrders();
-      const triggerOrders = orders.filter(o => o.type === 'take_profit' || o.type === 'stop_loss');
+      const triggerOrders = orders.filter((o) => o.type === 'take_profit' || o.type === 'stop_loss');
 
       if (triggerOrders.length === 0) {
         return {
@@ -211,12 +199,7 @@ export const tpSlStatusTool: ToolDefinition = {
         };
       }
 
-      const lines = [
-        '',
-        `  ${chalk.bold('ON-CHAIN TP/SL TARGETS')}`,
-        chalk.dim(`  ${'─'.repeat(44)}`),
-        '',
-      ];
+      const lines = ['', `  ${chalk.bold('ON-CHAIN TP/SL TARGETS')}`, chalk.dim(`  ${'─'.repeat(44)}`), ''];
 
       // Group by market-side
       const grouped = new Map<string, typeof triggerOrders>();
@@ -228,8 +211,8 @@ export const tpSlStatusTool: ToolDefinition = {
 
       for (const [key, ords] of grouped) {
         const [market, side] = key.split('-');
-        const tp = ords.find(o => o.type === 'take_profit');
-        const sl = ords.find(o => o.type === 'stop_loss');
+        const tp = ords.find((o) => o.type === 'take_profit');
+        const sl = ords.find((o) => o.type === 'stop_loss');
         const tpStr = tp ? `TP: $${tp.price.toFixed(2)}` : chalk.dim('TP: —');
         const slStr = sl ? `SL: $${sl.price.toFixed(2)}` : chalk.dim('SL: —');
         lines.push(`  ${chalk.bold(`${market} ${side!.toUpperCase()}`)}`);
@@ -258,15 +241,20 @@ export const limitOrderPlaceTool: ToolDefinition = {
   }),
   async execute(params: Record<string, unknown>, context: ToolContext): Promise<ToolResult> {
     const { market, side, leverage, collateral, limitPrice } = params as {
-      market: string; side: TradeSide; leverage: number; collateral: number; limitPrice: number;
+      market: string;
+      side: TradeSide;
+      leverage: number;
+      collateral: number;
+      limitPrice: number;
     };
 
     if (context.simulationMode) {
       return {
         success: false,
-        message: '  Limit orders are simulated locally in simulation mode.\n' +
-                 '  On-chain limit orders require live mode with a connected wallet.\n' +
-                 chalk.dim('  Switch to live mode with "wallet connect <path>" to place on-chain limit orders.'),
+        message:
+          '  Limit orders are simulated locally in simulation mode.\n' +
+          '  On-chain limit orders require live mode with a connected wallet.\n' +
+          chalk.dim('  Switch to live mode with "wallet connect <path>" to place on-chain limit orders.'),
       };
     }
 
@@ -299,16 +287,19 @@ export const limitOrderPlaceTool: ToolDefinition = {
       const errMsg = getErrorMessage(err);
       // Custom:2003 = ConstraintRaw on oracle account — oracle price update may have failed
       if (errMsg.includes('2003') || errMsg.includes('ConstraintRaw') || errMsg.includes('InvalidArgument')) {
-        return { success: false, message: [
-          '',
-          chalk.red('  Limit order failed: oracle price update rejected.'),
-          '',
-          chalk.dim('  The on-chain oracle data could not be refreshed.'),
-          chalk.dim('  This may be a temporary issue — try again in a few seconds.'),
-          '',
-          chalk.dim('  If the issue persists, use "open" for market orders.'),
-          '',
-        ].join('\n') };
+        return {
+          success: false,
+          message: [
+            '',
+            chalk.red('  Limit order failed: oracle price update rejected.'),
+            '',
+            chalk.dim('  The on-chain oracle data could not be refreshed.'),
+            chalk.dim('  This may be a temporary issue — try again in a few seconds.'),
+            '',
+            chalk.dim('  If the issue persists, use "open" for market orders.'),
+            '',
+          ].join('\n'),
+        };
       }
       return { success: false, message: `  Failed to place limit order: ${errMsg}` };
     }
@@ -325,7 +316,9 @@ export const limitOrderCancelTool: ToolDefinition = {
   }),
   async execute(params: Record<string, unknown>, context: ToolContext): Promise<ToolResult> {
     const { orderId, market, side } = params as {
-      orderId: string; market?: string; side?: TradeSide;
+      orderId: string;
+      market?: string;
+      side?: TradeSide;
     };
 
     if (context.simulationMode) {
@@ -349,9 +342,9 @@ export const limitOrderCancelTool: ToolDefinition = {
       let cancelSide = side;
       if (!cancelMarket || !cancelSide) {
         const orders = await client.getUserOrders();
-        const limitOrders = orders.filter(o => o.type === 'limit');
+        const limitOrders = orders.filter((o) => o.type === 'limit');
         // Find by orderId across all markets
-        const target = limitOrders.find(o => o.orderId === idNum);
+        const target = limitOrders.find((o) => o.orderId === idNum);
         if (!target) {
           return { success: false, message: `  Limit order #${idNum} not found. Use "orders" to see active orders.` };
         }
@@ -363,12 +356,7 @@ export const limitOrderCancelTool: ToolDefinition = {
       const txLink = `https://solscan.io/tx/${result.txSignature}`;
       return {
         success: true,
-        message: [
-          '',
-          chalk.green(`  Limit Order #${idNum} Cancelled`),
-          chalk.dim(`  TX: ${txLink}`),
-          '',
-        ].join('\n'),
+        message: ['', chalk.green(`  Limit Order #${idNum} Cancelled`), chalk.dim(`  TX: ${txLink}`), ''].join('\n'),
       };
     } catch (err: unknown) {
       return { success: false, message: `  Failed to cancel limit order: ${getErrorMessage(err)}` };
@@ -387,7 +375,10 @@ export const limitOrderEditTool: ToolDefinition = {
   }),
   async execute(params: Record<string, unknown>, context: ToolContext): Promise<ToolResult> {
     const { orderId, market, side, limitPrice } = params as {
-      orderId: number; market: string; side: TradeSide; limitPrice?: number;
+      orderId: number;
+      market: string;
+      side: TradeSide;
+      limitPrice?: number;
     };
 
     if (context.simulationMode) {
@@ -459,17 +450,12 @@ export const limitOrderListTool: ToolDefinition = {
         };
       }
 
-      const lines = [
-        '',
-        `  ${chalk.bold('ON-CHAIN ORDERS')}`,
-        chalk.dim(`  ${'─'.repeat(60)}`),
-        '',
-      ];
+      const lines = ['', `  ${chalk.bold('ON-CHAIN ORDERS')}`, chalk.dim(`  ${'─'.repeat(60)}`), ''];
 
       // Separate by type
-      const limitOrders = orders.filter(o => o.type === 'limit');
-      const tpOrders = orders.filter(o => o.type === 'take_profit');
-      const slOrders = orders.filter(o => o.type === 'stop_loss');
+      const limitOrders = orders.filter((o) => o.type === 'limit');
+      const tpOrders = orders.filter((o) => o.type === 'take_profit');
+      const slOrders = orders.filter((o) => o.type === 'stop_loss');
 
       if (limitOrders.length > 0) {
         lines.push(`  ${chalk.bold('Limit Orders')}`);

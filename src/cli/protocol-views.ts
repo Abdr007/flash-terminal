@@ -8,7 +8,13 @@
 import chalk from 'chalk';
 import type { FlashConfig, IFlashClient, Position } from '../types/index.js';
 import { TradeSide } from '../types/index.js';
-import type { FlashClientInternals, PoolCustodyConfig, PoolTokenConfig, PoolMarketConfig, CustodyAccountWithPricing } from '../types/flash-sdk-interfaces.js';
+import type {
+  FlashClientInternals,
+  PoolCustodyConfig,
+  PoolTokenConfig,
+  PoolMarketConfig,
+  CustodyAccountWithPricing,
+} from '../types/flash-sdk-interfaces.js';
 import { RpcManager } from '../network/rpc-manager.js';
 import { WalletManager } from '../wallet/index.js';
 import { theme } from './theme.js';
@@ -46,7 +52,7 @@ export async function protocolFees(deps: ProtocolViewDeps, market: string): Prom
       if (poolName) {
         const pc = PoolConfig.fromIdsByName(poolName, deps.config.network);
         const custodies = pc.custodies as PoolCustodyConfig[];
-        const custody = custodies.find(c => c.symbol.toUpperCase() === upper);
+        const custody = custodies.find((c) => c.symbol.toUpperCase() === upper);
         const perpClient = (deps.flashClient as unknown as Partial<FlashClientInternals>).perpClient;
 
         if (custody && perpClient?.program?.account?.custody) {
@@ -58,9 +64,12 @@ export async function protocolFees(deps: ProtocolViewDeps, market: string): Prom
             const custodyWithPricing = custodyAcct as unknown as CustodyAccountWithPricing;
             const rawMaintenanceMargin = parseFloat(custodyWithPricing.pricing?.maintenanceMargin?.toString() ?? '0');
             const rawMaxLev = custodyWithPricing.pricing?.maxLeverage;
-            const rawMaxLeverage = typeof rawMaxLev === 'object' && rawMaxLev?.toNumber
-              ? rawMaxLev.toNumber()
-              : typeof rawMaxLev === 'number' ? rawMaxLev : 0;
+            const rawMaxLeverage =
+              typeof rawMaxLev === 'object' && rawMaxLev?.toNumber
+                ? rawMaxLev.toNumber()
+                : typeof rawMaxLev === 'number'
+                  ? rawMaxLev
+                  : 0;
 
             console.log(theme.pair('Source', chalk.green('CustodyAccount (on-chain)')));
             console.log(theme.pair('Custody', chalk.dim(custody.custodyAccount.toString())));
@@ -86,7 +95,12 @@ export async function protocolFees(deps: ProtocolViewDeps, market: string): Prom
             console.log(theme.pair('closeFeeRate', `${closeRate} (${(closeRate * 100).toFixed(4)}%)`));
             if (maxLev > 0) {
               console.log(theme.pair('maxLeverage', `${maxLev}x`));
-              console.log(theme.pair('maintMarginRate', `1/${maxLev} = ${derivedMarginRate} (${(derivedMarginRate * 100).toFixed(4)}%)`));
+              console.log(
+                theme.pair(
+                  'maintMarginRate',
+                  `1/${maxLev} = ${derivedMarginRate} (${(derivedMarginRate * 100).toFixed(4)}%)`,
+                ),
+              );
             }
             console.log('');
 
@@ -94,10 +108,19 @@ export async function protocolFees(deps: ProtocolViewDeps, market: string): Prom
             const { getProtocolFeeRates } = await import('../utils/protocol-fees.js');
             const feeRates = await getProtocolFeeRates(upper, perpClient);
             console.log(`  ${theme.section('getProtocolFeeRates() Output')}`);
-            console.log(theme.pair('openFeeRate', `${feeRates.openFeeRate} (${(feeRates.openFeeRate * 100).toFixed(4)}%)`));
-            console.log(theme.pair('closeFeeRate', `${feeRates.closeFeeRate} (${(feeRates.closeFeeRate * 100).toFixed(4)}%)`));
+            console.log(
+              theme.pair('openFeeRate', `${feeRates.openFeeRate} (${(feeRates.openFeeRate * 100).toFixed(4)}%)`),
+            );
+            console.log(
+              theme.pair('closeFeeRate', `${feeRates.closeFeeRate} (${(feeRates.closeFeeRate * 100).toFixed(4)}%)`),
+            );
             console.log(theme.pair('maxLeverage', `${feeRates.maxLeverage}x`));
-            console.log(theme.pair('maintMarginRate', `${feeRates.maintenanceMarginRate} (${(feeRates.maintenanceMarginRate * 100).toFixed(4)}%)`));
+            console.log(
+              theme.pair(
+                'maintMarginRate',
+                `${feeRates.maintenanceMarginRate} (${(feeRates.maintenanceMarginRate * 100).toFixed(4)}%)`,
+              ),
+            );
             console.log(theme.pair('source', feeRates.source));
             console.log('');
 
@@ -112,7 +135,8 @@ export async function protocolFees(deps: ProtocolViewDeps, market: string): Prom
               console.log(chalk.red('  ✗ MISMATCH between CustodyAccount and getProtocolFeeRates()'));
               if (!openMatch) console.log(chalk.red(`    open: ${openRate} vs ${feeRates.openFeeRate}`));
               if (!closeMatch) console.log(chalk.red(`    close: ${closeRate} vs ${feeRates.closeFeeRate}`));
-              if (!marginMatch) console.log(chalk.red(`    margin: ${derivedMarginRate} vs ${feeRates.maintenanceMarginRate}`));
+              if (!marginMatch)
+                console.log(chalk.red(`    margin: ${derivedMarginRate} vs ${feeRates.maintenanceMarginRate}`));
               if (!levMatch) console.log(chalk.red(`    leverage: ${maxLev} vs ${feeRates.maxLeverage}`));
             }
             console.log('');
@@ -134,7 +158,12 @@ export async function protocolFees(deps: ProtocolViewDeps, market: string): Prom
   console.log(`  ${theme.section('Fee Rates (default fallback)')}`);
   console.log(theme.pair('openFeeRate', `${feeRates.openFeeRate} (${(feeRates.openFeeRate * 100).toFixed(4)}%)`));
   console.log(theme.pair('closeFeeRate', `${feeRates.closeFeeRate} (${(feeRates.closeFeeRate * 100).toFixed(4)}%)`));
-  console.log(theme.pair('maintMarginRate', `${feeRates.maintenanceMarginRate} (${(feeRates.maintenanceMarginRate * 100).toFixed(2)}%)`));
+  console.log(
+    theme.pair(
+      'maintMarginRate',
+      `${feeRates.maintenanceMarginRate} (${(feeRates.maintenanceMarginRate * 100).toFixed(2)}%)`,
+    ),
+  );
   console.log('');
   console.log(chalk.yellow('  ⚠ Showing SDK defaults — connect in live mode for on-chain values'));
   console.log('');
@@ -163,9 +192,7 @@ export async function protocolVerify(deps: ProtocolViewDeps): Promise<void> {
   const timedTask = <T>(task: Promise<T>, label: string): Promise<T> =>
     Promise.race([
       task,
-      new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error(`${label} timed out`)), TASK_TIMEOUT_MS),
-      ),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error(`${label} timed out`)), TASK_TIMEOUT_MS)),
     ]);
 
   // ── 1. RPC Health ──
@@ -173,16 +200,18 @@ export async function protocolVerify(deps: ProtocolViewDeps): Promise<void> {
     try {
       const latency = deps.rpcManager.activeLatencyMs;
       const ep = deps.rpcManager.activeEndpoint;
-      const slot = await timedTask(
-        deps.rpcManager.connection.getSlot('processed'),
-        'RPC slot fetch',
-      );
+      const slot = await timedTask(deps.rpcManager.connection.getSlot('processed'), 'RPC slot fetch');
       if (!Number.isFinite(slot) || slot <= 0) {
         return { label: 'RPC', ok: false, detail: '', error: 'Slot not advancing' };
       }
       const latStr = latency > 0 ? `${latency}ms` : 'N/A';
       if (latency > 500) {
-        return { label: 'RPC', ok: false, detail: `${ep.label} — ${latStr}`, error: `Latency ${latStr} exceeds 500ms threshold` };
+        return {
+          label: 'RPC',
+          ok: false,
+          detail: `${ep.label} — ${latStr}`,
+          error: `Latency ${latStr} exceeds 500ms threshold`,
+        };
       }
       return { label: 'RPC', ok: true, detail: `reachable (${ep.label} — ${latStr}, slot ${slot})` };
     } catch (err: unknown) {
@@ -201,7 +230,7 @@ export async function protocolVerify(deps: ProtocolViewDeps): Promise<void> {
         return { label: 'Oracle', ok: false, detail: '', error: 'Failed to fetch SOL price from Pyth Hermes' };
       }
       // Check timestamp freshness (< 5 seconds)
-      const age = price.timestamp ? (Date.now() / 1000 - price.timestamp) : 0;
+      const age = price.timestamp ? Date.now() / 1000 - price.timestamp : 0;
       if (age > 5) {
         return { label: 'Oracle', ok: false, detail: '', error: `Oracle data stale (${age.toFixed(0)}s old)` };
       }
@@ -217,7 +246,9 @@ export async function protocolVerify(deps: ProtocolViewDeps): Promise<void> {
     const passed: string[] = [];
     const failed: string[] = [];
 
-    const perpClient = deps.config.simulationMode ? null : (deps.flashClient as unknown as Partial<FlashClientInternals>).perpClient ?? null;
+    const perpClient = deps.config.simulationMode
+      ? null
+      : ((deps.flashClient as unknown as Partial<FlashClientInternals>).perpClient ?? null);
 
     for (const mkt of markets) {
       try {
@@ -263,7 +294,7 @@ export async function protocolVerify(deps: ProtocolViewDeps): Promise<void> {
         if (!poolName) continue;
         const pc = PoolConfig.fromIdsByName(poolName, deps.config.network);
         const custodies = pc.custodies as PoolCustodyConfig[];
-        const custody = custodies.find(c => c.symbol.toUpperCase() === mkt);
+        const custody = custodies.find((c) => c.symbol.toUpperCase() === mkt);
         if (!custody) continue;
 
         const rawData = await timedTask(
@@ -297,7 +328,9 @@ export async function protocolVerify(deps: ProtocolViewDeps): Promise<void> {
   const verifyLiquidationEngine = async (): Promise<CheckResult> => {
     try {
       const { getProtocolFeeRates } = await import('../utils/protocol-fees.js');
-      const perpClient = deps.config.simulationMode ? null : (deps.flashClient as unknown as Partial<FlashClientInternals>).perpClient ?? null;
+      const perpClient = deps.config.simulationMode
+        ? null
+        : ((deps.flashClient as unknown as Partial<FlashClientInternals>).perpClient ?? null);
       const rates = await getProtocolFeeRates('SOL', perpClient);
 
       // Compute CLI liquidation for a reference position
@@ -305,32 +338,59 @@ export async function protocolVerify(deps: ProtocolViewDeps): Promise<void> {
       const sizeUsd = 1000;
       const collateralUsd = 100; // 10x leverage
       const cliLiqLong = computeSimulationLiquidationPrice(
-        entryPrice, sizeUsd, collateralUsd, TradeSide.Long,
-        rates.maintenanceMarginRate, rates.closeFeeRate,
+        entryPrice,
+        sizeUsd,
+        collateralUsd,
+        TradeSide.Long,
+        rates.maintenanceMarginRate,
+        rates.closeFeeRate,
       );
       const cliLiqShort = computeSimulationLiquidationPrice(
-        entryPrice, sizeUsd, collateralUsd, TradeSide.Short,
-        rates.maintenanceMarginRate, rates.closeFeeRate,
+        entryPrice,
+        sizeUsd,
+        collateralUsd,
+        TradeSide.Short,
+        rates.maintenanceMarginRate,
+        rates.closeFeeRate,
       );
 
       // Sanity checks: long liq < entry, short liq > entry
       if (cliLiqLong <= 0 || cliLiqLong >= entryPrice) {
-        return { label: 'Liquidation engine', ok: false, detail: '', error: `Long liq price ${cliLiqLong} invalid for entry ${entryPrice}` };
+        return {
+          label: 'Liquidation engine',
+          ok: false,
+          detail: '',
+          error: `Long liq price ${cliLiqLong} invalid for entry ${entryPrice}`,
+        };
       }
       if (cliLiqShort <= entryPrice) {
-        return { label: 'Liquidation engine', ok: false, detail: '', error: `Short liq price ${cliLiqShort} invalid for entry ${entryPrice}` };
+        return {
+          label: 'Liquidation engine',
+          ok: false,
+          detail: '',
+          error: `Short liq price ${cliLiqShort} invalid for entry ${entryPrice}`,
+        };
       }
 
       // Verify symmetry: |longDist - shortDist| should be ~0
       const longDist = entryPrice - cliLiqLong;
       const shortDist = cliLiqShort - entryPrice;
       if (Math.abs(longDist - shortDist) > 0.001) {
-        return { label: 'Liquidation engine', ok: false, detail: '', error: `Asymmetric liq distances: long=${longDist.toFixed(4)}, short=${shortDist.toFixed(4)}` };
+        return {
+          label: 'Liquidation engine',
+          ok: false,
+          detail: '',
+          error: `Asymmetric liq distances: long=${longDist.toFixed(4)}, short=${shortDist.toFixed(4)}`,
+        };
       }
 
       // If live mode with SDK, compare against SDK helper
       const divStatus = isDivergenceOk() ? 'aligned' : 'divergence detected';
-      return { label: 'Liquidation engine', ok: isDivergenceOk(), detail: `${divStatus} (long liq=$${cliLiqLong.toFixed(2)}, short liq=$${cliLiqShort.toFixed(2)})` };
+      return {
+        label: 'Liquidation engine',
+        ok: isDivergenceOk(),
+        detail: `${divStatus} (long liq=$${cliLiqLong.toFixed(2)}, short liq=$${cliLiqShort.toFixed(2)})`,
+      };
     } catch (err: unknown) {
       return { label: 'Liquidation engine', ok: false, detail: '', error: getErrorMessage(err) };
     }
@@ -340,7 +400,9 @@ export async function protocolVerify(deps: ProtocolViewDeps): Promise<void> {
   const validateProtocolParameters = async (): Promise<CheckResult> => {
     try {
       const { getProtocolFeeRates } = await import('../utils/protocol-fees.js');
-      const perpClient = deps.config.simulationMode ? null : (deps.flashClient as unknown as Partial<FlashClientInternals>).perpClient ?? null;
+      const perpClient = deps.config.simulationMode
+        ? null
+        : ((deps.flashClient as unknown as Partial<FlashClientInternals>).perpClient ?? null);
       const violations: string[] = [];
 
       for (const mkt of ['SOL', 'BTC', 'ETH']) {
@@ -430,7 +492,9 @@ export async function sourceVerify(deps: ProtocolViewDeps, market: string): Prom
         try {
           const res = await fetch(rawUrl, { signal: controller.signal, headers: { Accept: 'application/json' } });
           if (res.ok) {
-            const raw = await res.json() as { parsed?: Array<{ price: { price: string; expo: number; publish_time: number; conf: string } }> };
+            const raw = (await res.json()) as {
+              parsed?: Array<{ price: { price: string; expo: number; publish_time: number; conf: string } }>;
+            };
             const entry = raw.parsed?.[0];
             if (entry) {
               const price = parseInt(entry.price.price, 10) * Math.pow(10, entry.price.expo);
@@ -468,7 +532,9 @@ export async function sourceVerify(deps: ProtocolViewDeps, market: string): Prom
   console.log(theme.titleBlock('Protocol Fees'));
   try {
     const { getProtocolFeeRates } = await import('../utils/protocol-fees.js');
-    const perpClient = deps.config.simulationMode ? null : (deps.flashClient as unknown as Partial<FlashClientInternals>).perpClient ?? null;
+    const perpClient = deps.config.simulationMode
+      ? null
+      : ((deps.flashClient as unknown as Partial<FlashClientInternals>).perpClient ?? null);
     const rates = await getProtocolFeeRates(upper, perpClient);
 
     // Get custody account address
@@ -480,7 +546,7 @@ export async function sourceVerify(deps: ProtocolViewDeps, market: string): Prom
       if (poolName) {
         const pc = PoolConfig.fromIdsByName(poolName, 'mainnet-beta');
         const custodies = pc.custodies as PoolCustodyConfig[];
-        const custody = custodies.find(c => c.symbol.toUpperCase() === upper);
+        const custody = custodies.find((c) => c.symbol.toUpperCase() === upper);
         if (custody) {
           custodyAddress = custody.custodyAccount.toString();
         }
@@ -493,9 +559,14 @@ export async function sourceVerify(deps: ProtocolViewDeps, market: string): Prom
     console.log(theme.pair('Open Fee', `${(rates.openFeeRate * 100).toFixed(4)}%`));
     console.log(theme.pair('Close Fee', `${(rates.closeFeeRate * 100).toFixed(4)}%`));
     console.log(theme.pair('Max Leverage', `${rates.maxLeverage}x`));
-    console.log(theme.pair('Source', rates.source === 'on-chain'
-      ? theme.positive('On-chain protocol data')
-      : theme.warning('SDK defaults (simulation mode)')));
+    console.log(
+      theme.pair(
+        'Source',
+        rates.source === 'on-chain'
+          ? theme.positive('On-chain protocol data')
+          : theme.warning('SDK defaults (simulation mode)'),
+      ),
+    );
     checks.push('Protocol fees ' + (rates.source === 'on-chain' ? 'on-chain' : 'sdk-default'));
   } catch (err: unknown) {
     console.log(chalk.red(`  Fee fetch error: ${getErrorMessage(err)}`));
@@ -599,7 +670,7 @@ export async function positionDebug(deps: ProtocolViewDeps, market: string): Pro
     return;
   }
 
-  const pos = positions.find(p => p.market.toUpperCase() === upper);
+  const pos = positions.find((p) => p.market.toUpperCase() === upper);
   if (!pos) {
     console.log('');
     console.log(chalk.yellow(`  No open position found for ${upper}`));
@@ -643,20 +714,20 @@ export async function positionDebug(deps: ProtocolViewDeps, market: string): Pro
         const pc = SDKPoolConfig.fromIdsByName(poolName, deps.config.network);
         const custodies = pc.custodies as PoolCustodyConfig[];
         const tokens = pc.tokens as PoolTokenConfig[];
-        const targetToken = tokens.find(t => t.symbol.toUpperCase() === upper);
+        const targetToken = tokens.find((t) => t.symbol.toUpperCase() === upper);
         const perpClient = (deps.flashClient as unknown as Partial<FlashClientInternals>).perpClient;
 
         if (targetToken && perpClient) {
           sdkPerpClient = perpClient;
-          const custodyInfo = custodies.find(c => c.symbol === targetToken.symbol);
+          const custodyInfo = custodies.find((c) => c.symbol === targetToken.symbol);
           if (custodyInfo) {
             // Fetch on-chain custody account for fee and margin data
             const custodyData = await perpClient.program?.account?.custody?.fetch(custodyInfo.custodyAccount);
             if (custodyData) {
               const custodyAcct = SDKCustodyAccount.from(custodyInfo.custodyAccount, custodyData);
               sdkCustodyAcct = custodyAcct;
-              openFeePct = parseFloat(custodyAcct.fees.openPosition.toString()) / RATE_POWER * 100;
-              closeFeePct = parseFloat(custodyAcct.fees.closePosition.toString()) / RATE_POWER * 100;
+              openFeePct = (parseFloat(custodyAcct.fees.openPosition.toString()) / RATE_POWER) * 100;
+              closeFeePct = (parseFloat(custodyAcct.fees.closePosition.toString()) / RATE_POWER) * 100;
               // Maintenance margin from pricing params.
               // pricing.maxLeverage is a u32 in BPS units (e.g. 10000000 = 1000x leverage).
               // SDK formula: liabilities = sizeUsd * BPS_POWER / maxLeverage
@@ -664,9 +735,12 @@ export async function positionDebug(deps: ProtocolViewDeps, market: string): Pro
               // Maintenance margin % = BPS_POWER / maxLeverage * 100
               const BPS_POWER = 10_000;
               const rawMaxLev = (custodyAcct as unknown as CustodyAccountWithPricing).pricing?.maxLeverage;
-              const rawNum = typeof rawMaxLev === 'object' && rawMaxLev?.toNumber
-                ? rawMaxLev.toNumber()
-                : typeof rawMaxLev === 'number' ? rawMaxLev : 0;
+              const rawNum =
+                typeof rawMaxLev === 'object' && rawMaxLev?.toNumber
+                  ? rawMaxLev.toNumber()
+                  : typeof rawMaxLev === 'number'
+                    ? rawMaxLev
+                    : 0;
               if (Number.isFinite(rawNum) && rawNum > 0) {
                 const humanMaxLev = rawNum / BPS_POWER;
                 if (humanMaxLev > 0 && humanMaxLev <= 2000) {
@@ -682,9 +756,7 @@ export async function positionDebug(deps: ProtocolViewDeps, market: string): Pro
           const markets = pc.markets as PoolMarketConfig[];
           const positionSide = pos.side === TradeSide.Long ? SDKSide.Long : SDKSide.Short;
           sdkSide = positionSide;
-          const marketConfig = markets.find(
-            m => m.targetMint.equals(targetToken.mintKey) && m.side === positionSide,
-          );
+          const marketConfig = markets.find((m) => m.targetMint.equals(targetToken.mintKey) && m.side === positionSide);
 
           if (marketConfig && perpClient.program?.account?.position) {
             try {
@@ -699,7 +771,12 @@ export async function positionDebug(deps: ProtocolViewDeps, market: string): Pro
                   if (raw.market?.equals?.(marketConfig.marketAccount)) {
                     sdkRawPosition = { ...raw, pubkey: rawPos.publicKey };
                     // Build entry oracle price from raw position
-                    if (raw.entryPrice && typeof raw.entryPrice === 'object' && 'price' in raw.entryPrice && 'exponent' in raw.entryPrice) {
+                    if (
+                      raw.entryPrice &&
+                      typeof raw.entryPrice === 'object' &&
+                      'price' in raw.entryPrice &&
+                      'exponent' in raw.entryPrice
+                    ) {
                       sdkEntryOraclePrice = SDKOraclePrice.from({
                         price: raw.entryPrice.price,
                         exponent: new BN(String(raw.entryPrice.exponent)),
@@ -735,9 +812,10 @@ export async function positionDebug(deps: ProtocolViewDeps, market: string): Pro
   const canUseSDK = !!(sdkPerpClient && sdkCustodyAcct && sdkEntryOraclePrice && sdkRawPosition && sdkSide !== null);
 
   // ─── 3. Derived values ──────────────────────────────────────────
-  const distToLiq = pos.liquidationPrice > 0 && pos.currentPrice > 0
-    ? Math.abs(pos.currentPrice - pos.liquidationPrice) / pos.currentPrice * 100
-    : 0;
+  const distToLiq =
+    pos.liquidationPrice > 0 && pos.currentPrice > 0
+      ? (Math.abs(pos.currentPrice - pos.liquidationPrice) / pos.currentPrice) * 100
+      : 0;
 
   const pnlPct = pos.collateralUsd > 0 ? (pos.unrealizedPnl / pos.collateralUsd) * 100 : 0;
   const sideLabel = pos.side === TradeSide.Long ? 'Long' : 'Short';
@@ -806,24 +884,25 @@ export async function positionDebug(deps: ProtocolViewDeps, market: string): Pro
     const simPnl = pos.entryPrice > 0 ? (priceDelta / pos.entryPrice) * pos.sizeUsd * mult : 0;
 
     // Check if this scenario would be liquidated
-    const isLiquidated = pos.liquidationPrice > 0 && (
-      (pos.side === TradeSide.Long && simPrice <= pos.liquidationPrice) ||
-      (pos.side === TradeSide.Short && simPrice >= pos.liquidationPrice)
-    );
+    const isLiquidated =
+      pos.liquidationPrice > 0 &&
+      ((pos.side === TradeSide.Long && simPrice <= pos.liquidationPrice) ||
+        (pos.side === TradeSide.Short && simPrice >= pos.liquidationPrice));
 
     if (isLiquidated) {
-      const _liqDistAtScenario = Math.abs(simPrice - pos.liquidationPrice) / simPrice * 100;
+      const _liqDistAtScenario = (Math.abs(simPrice - pos.liquidationPrice) / simPrice) * 100;
       lines.push(`  Price ${pctMove > 0 ? '+' : ''}${pctMove}%     → ${chalk.red('LIQUIDATED')}`);
     } else {
-      const scenarioLiqDist = pos.liquidationPrice > 0
-        ? Math.abs(simPrice - pos.liquidationPrice) / simPrice * 100
-        : 0;
+      const scenarioLiqDist =
+        pos.liquidationPrice > 0 ? (Math.abs(simPrice - pos.liquidationPrice) / simPrice) * 100 : 0;
       // Pad the raw PnL string BEFORE colorizing to avoid ANSI codes breaking alignment
       const rawPnl = simPnl >= 0 ? `$${simPnl.toFixed(2)}` : `-$${Math.abs(simPnl).toFixed(2)}`;
       const paddedPnl = rawPnl.padEnd(12);
       const pnlStr = simPnl >= 0 ? chalk.green(paddedPnl) : chalk.red(paddedPnl);
       const liqStr = scenarioLiqDist > 0 ? `Liq Distance: ${scenarioLiqDist.toFixed(1)}%` : '';
-      lines.push(`  Price ${(pctMove > 0 ? '+' : '') + pctMove + '%'}${' '.repeat(Math.max(1, 6 - String(pctMove).length))} → PnL: ${pnlStr}  ${liqStr}`);
+      lines.push(
+        `  Price ${(pctMove > 0 ? '+' : '') + pctMove + '%'}${' '.repeat(Math.max(1, 6 - String(pctMove).length))} → PnL: ${pnlStr}  ${liqStr}`,
+      );
     }
   }
   lines.push('');
@@ -856,11 +935,17 @@ export async function positionDebug(deps: ProtocolViewDeps, market: string): Pro
           );
           const unsettledFees = sdkRawPosition.unsettledFeesUsd ?? new BN(0);
           const liqOraclePrice = sdkPerpClient.getLiquidationPriceContractHelper(
-            sdkEntryOraclePrice, unsettledFees, sdkSide, sdkCustodyAcct, modPosAcct,
+            sdkEntryOraclePrice,
+            unsettledFees,
+            sdkSide,
+            sdkCustodyAcct,
+            modPosAcct,
           );
           const liqUi = parseFloat(liqOraclePrice.toUiPrice(8));
           if (Number.isFinite(liqUi) && liqUi > 0) {
-            lines.push(`  Add ${formatUsd(addAmt).padEnd(8)} → Liq Price: ${chalk.yellow(formatPrice(liqUi))}  (${newLeverage.toFixed(1)}x leverage)`);
+            lines.push(
+              `  Add ${formatUsd(addAmt).padEnd(8)} → Liq Price: ${chalk.yellow(formatPrice(liqUi))}  (${newLeverage.toFixed(1)}x leverage)`,
+            );
             continue;
           }
         } catch {
@@ -871,13 +956,22 @@ export async function positionDebug(deps: ProtocolViewDeps, market: string): Pro
       // Fallback: use protocol-aligned formula (matches getLiquidationPriceContractHelper)
       if (newLeverage < 1) {
         // Fully collateralized — collateral exceeds position size, no liquidation risk
-        lines.push(`  Add ${formatUsd(addAmt).padEnd(8)} → ${chalk.green('Liquidation: None')}  ${dim(`(fully collateralized, ${newLeverage.toFixed(2)}x effective leverage)`)}`);
+        lines.push(
+          `  Add ${formatUsd(addAmt).padEnd(8)} → ${chalk.green('Liquidation: None')}  ${dim(`(fully collateralized, ${newLeverage.toFixed(2)}x effective leverage)`)}`,
+        );
       } else if (pos.sizeUsd > 0 && pos.entryPrice > 0) {
         const fallbackLiqPrice = computeSimulationLiquidationPrice(
-          pos.entryPrice, pos.sizeUsd, newCollateral, pos.side, debugFeeRates.maintenanceMarginRate, debugFeeRates.closeFeeRate,
+          pos.entryPrice,
+          pos.sizeUsd,
+          newCollateral,
+          pos.side,
+          debugFeeRates.maintenanceMarginRate,
+          debugFeeRates.closeFeeRate,
         );
         if (Number.isFinite(fallbackLiqPrice) && fallbackLiqPrice > 0) {
-          lines.push(`  Add ${formatUsd(addAmt).padEnd(8)} → Liq Price: ${chalk.yellow(formatPrice(fallbackLiqPrice))}  (${newLeverage.toFixed(1)}x leverage)`);
+          lines.push(
+            `  Add ${formatUsd(addAmt).padEnd(8)} → Liq Price: ${chalk.yellow(formatPrice(fallbackLiqPrice))}  (${newLeverage.toFixed(1)}x leverage)`,
+          );
         }
       }
     }
@@ -921,11 +1015,17 @@ export async function positionDebug(deps: ProtocolViewDeps, market: string): Pro
             );
             const unsettledFees = sdkRawPosition.unsettledFeesUsd ?? new BN(0);
             const liqOraclePrice = sdkPerpClient.getLiquidationPriceContractHelper(
-              sdkEntryOraclePrice, unsettledFees, sdkSide, sdkCustodyAcct, modPosAcct,
+              sdkEntryOraclePrice,
+              unsettledFees,
+              sdkSide,
+              sdkCustodyAcct,
+              modPosAcct,
             );
             const liqUi = parseFloat(liqOraclePrice.toUiPrice(8));
             if (Number.isFinite(liqUi) && liqUi > 0) {
-              lines.push(`  Reduce to ${targetLev}x → Size: ${formatUsd(newSizeUsd).padEnd(10)} → Liq Price: ${chalk.yellow(formatPrice(liqUi))}`);
+              lines.push(
+                `  Reduce to ${targetLev}x → Size: ${formatUsd(newSizeUsd).padEnd(10)} → Liq Price: ${chalk.yellow(formatPrice(liqUi))}`,
+              );
               continue;
             }
           } catch {
@@ -936,10 +1036,17 @@ export async function positionDebug(deps: ProtocolViewDeps, market: string): Pro
         // Fallback: use protocol-aligned liquidation formula
         if (targetLev >= 1 && pos.entryPrice > 0) {
           const fallbackLiq = computeSimulationLiquidationPrice(
-            pos.entryPrice, newSizeUsd, pos.collateralUsd, pos.side, debugFeeRates.maintenanceMarginRate, debugFeeRates.closeFeeRate,
+            pos.entryPrice,
+            newSizeUsd,
+            pos.collateralUsd,
+            pos.side,
+            debugFeeRates.maintenanceMarginRate,
+            debugFeeRates.closeFeeRate,
           );
           if (Number.isFinite(fallbackLiq) && fallbackLiq > 0) {
-            lines.push(`  Reduce to ${targetLev}x → Size: ${formatUsd(newSizeUsd).padEnd(10)} → Liq Price: ${chalk.yellow(formatPrice(fallbackLiq))}`);
+            lines.push(
+              `  Reduce to ${targetLev}x → Size: ${formatUsd(newSizeUsd).padEnd(10)} → Liq Price: ${chalk.yellow(formatPrice(fallbackLiq))}`,
+            );
           }
         }
       }
@@ -950,9 +1057,17 @@ export async function positionDebug(deps: ProtocolViewDeps, market: string): Pro
   // ─── 8. Data source labels ──────────────────────────────────────
   lines.push(`  ${sep(44)}`);
   lines.push(dim(`  Price Source:       Pyth Hermes`));
-  const sdkLabel = canUseSDK ? ' (on-chain CustodyAccount + getLiquidationPriceContractHelper)' : protocolParamsAvailable ? ' (on-chain CustodyAccount)' : '';
+  const sdkLabel = canUseSDK
+    ? ' (on-chain CustodyAccount + getLiquidationPriceContractHelper)'
+    : protocolParamsAvailable
+      ? ' (on-chain CustodyAccount)'
+      : '';
   lines.push(dim(`  Liquidation Math:  Flash SDK${sdkLabel}`));
-  lines.push(dim(`  Position Data:     ${deps.config.simulationMode ? 'Simulation' : 'Flash SDK perpClient.getUserPositions()'}`));
+  lines.push(
+    dim(
+      `  Position Data:     ${deps.config.simulationMode ? 'Simulation' : 'Flash SDK perpClient.getUserPositions()'}`,
+    ),
+  );
   lines.push('');
 
   console.log(lines.join('\n'));

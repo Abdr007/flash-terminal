@@ -19,8 +19,8 @@ export interface LiquidityResult {
   volumeNormalized: number;
   oiNormalized: number;
   tradeCountNormalized: number;
-  liquidityScore: number;     // 0-1
-  isLowLiquidity: boolean;    // score < 0.3
+  liquidityScore: number; // 0-1
+  isLowLiquidity: boolean; // score < 0.3
 }
 
 /**
@@ -43,20 +43,17 @@ export function computeLiquidity(input: LiquidityInput): LiquidityResult {
     volume24h,
     openInterest,
     tradeCount,
-    volumeRef = 5_000_000,  // $5M daily volume = fully liquid
-    oiRef = 10_000_000,     // $10M OI = fully liquid
-    tradeRef = 1000,        // 1000 trades/day = fully liquid
+    volumeRef = 5_000_000, // $5M daily volume = fully liquid
+    oiRef = 10_000_000, // $10M OI = fully liquid
+    tradeRef = 1000, // 1000 trades/day = fully liquid
   } = input;
 
-  const safeDiv = (a: number, b: number): number => (b > 0 && Number.isFinite(a)) ? a / b : 0;
+  const safeDiv = (a: number, b: number): number => (b > 0 && Number.isFinite(a) ? a / b : 0);
   const volumeNormalized = Math.min(1, Math.max(0, safeDiv(volume24h, volumeRef)));
   const oiNormalized = Math.min(1, Math.max(0, safeDiv(openInterest, oiRef)));
   const tradeCountNormalized = Math.min(1, Math.max(0, safeDiv(tradeCount, tradeRef)));
 
-  const liquidityScore =
-    volumeNormalized * 0.5 +
-    oiNormalized * 0.3 +
-    tradeCountNormalized * 0.2;
+  const liquidityScore = volumeNormalized * 0.5 + oiNormalized * 0.3 + tradeCountNormalized * 0.2;
 
   return {
     volumeNormalized,

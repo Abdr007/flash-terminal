@@ -13,9 +13,9 @@ import { safeJsonParse } from '../utils/safe-json.js';
 // So the first file to set a key wins → load highest priority first.
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const envPaths = [
-  resolve(process.cwd(), '.env'),             // 1. Current working directory (highest)
-  resolve(homedir(), '.flash', '.env'),       // 2. ~/.flash/.env (user config)
-  resolve(__dirname, '..', '.env'),           // 3. Package install directory (lowest)
+  resolve(process.cwd(), '.env'), // 1. Current working directory (highest)
+  resolve(homedir(), '.flash', '.env'), // 2. ~/.flash/.env (user config)
+  resolve(__dirname, '..', '.env'), // 3. Package install directory (lowest)
 ];
 for (const envPath of envPaths) {
   if (existsSync(envPath)) {
@@ -79,9 +79,10 @@ function validateRpcUrl(url: string): string {
     // IPv6 private/internal ranges
     if (
       host === '::1' ||
-      host.startsWith('fc') || host.startsWith('fd') ||  // unique-local (fc00::/7)
-      host.startsWith('fe80') ||                          // link-local (fe80::/10)
-      host.startsWith('::ffff:')                          // IPv4-mapped IPv6 (check mapped addr)
+      host.startsWith('fc') ||
+      host.startsWith('fd') || // unique-local (fc00::/7)
+      host.startsWith('fe80') || // link-local (fe80::/10)
+      host.startsWith('::ffff:') // IPv4-mapped IPv6 (check mapped addr)
     ) {
       throw new Error(`RPC URL points to a private/internal IP (${host}). This is not allowed.`);
     }
@@ -89,8 +90,13 @@ function validateRpcUrl(url: string): string {
     const v4Mapped = host.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/i);
     if (v4Mapped) {
       const ipv4 = v4Mapped[1];
-      if (ipv4.startsWith('169.254.') || ipv4.startsWith('10.') || ipv4.startsWith('192.168.') ||
-          ipv4 === '0.0.0.0' || /^172\.(1[6-9]|2\d|3[01])\./.test(ipv4)) {
+      if (
+        ipv4.startsWith('169.254.') ||
+        ipv4.startsWith('10.') ||
+        ipv4.startsWith('192.168.') ||
+        ipv4 === '0.0.0.0' ||
+        /^172\.(1[6-9]|2\d|3[01])\./.test(ipv4)
+      ) {
         throw new Error(`RPC URL points to a private/internal IP (${host}). This is not allowed.`);
       }
     }
@@ -146,7 +152,9 @@ export function saveConfigField(key: string, value: string | number | boolean | 
         data = parsed as Record<string, unknown>;
       }
     }
-  } catch { /* start fresh */ }
+  } catch {
+    /* start fresh */
+  }
 
   if (value === undefined) {
     delete data[key];
@@ -172,9 +180,10 @@ export function loadConfig(): FlashConfig {
     }
   }
 
-  const rpcDefault = typeof file.rpc_url === 'string' && file.rpc_url.length > 0
-    ? validateRpcUrl(file.rpc_url)
-    : 'https://api.mainnet-beta.solana.com';
+  const rpcDefault =
+    typeof file.rpc_url === 'string' && file.rpc_url.length > 0
+      ? validateRpcUrl(file.rpc_url)
+      : 'https://api.mainnet-beta.solana.com';
 
   return {
     rpcUrl: validateRpcUrl(process.env.RPC_URL || rpcDefault),
@@ -186,22 +195,55 @@ export function loadConfig(): FlashConfig {
     defaultPool: process.env.DEFAULT_POOL || (typeof file.default_pool === 'string' ? file.default_pool : 'Crypto.1'),
     network: parseNetwork(process.env.NETWORK || (typeof file.network === 'string' ? file.network : undefined)),
     simulationMode: (process.env.SIMULATION_MODE ?? 'true').toLowerCase() !== 'false',
-    defaultSlippageBps: parseIntSafe(process.env.DEFAULT_SLIPPAGE_BPS, typeof file.default_slippage_bps === 'number' ? file.default_slippage_bps : 150),
-    computeUnitLimit: parseIntSafe(process.env.COMPUTE_UNIT_LIMIT, typeof file.compute_unit_limit === 'number' ? file.compute_unit_limit : 220000),
-    computeUnitPrice: parseIntSafe(process.env.COMPUTE_UNIT_PRICE, typeof file.compute_unit_price === 'number' ? file.compute_unit_price : 100000),
+    defaultSlippageBps: parseIntSafe(
+      process.env.DEFAULT_SLIPPAGE_BPS,
+      typeof file.default_slippage_bps === 'number' ? file.default_slippage_bps : 150,
+    ),
+    computeUnitLimit: parseIntSafe(
+      process.env.COMPUTE_UNIT_LIMIT,
+      typeof file.compute_unit_limit === 'number' ? file.compute_unit_limit : 220000,
+    ),
+    computeUnitPrice: parseIntSafe(
+      process.env.COMPUTE_UNIT_PRICE,
+      typeof file.compute_unit_price === 'number' ? file.compute_unit_price : 100000,
+    ),
     logFile: process.env.LOG_FILE || null,
     // Signing guard limits (0 = unlimited / use market defaults)
-    maxCollateralPerTrade: parseIntSafe(process.env.MAX_COLLATERAL_PER_TRADE, typeof file.max_collateral_per_trade === 'number' ? file.max_collateral_per_trade : 0),
-    maxPositionSize: parseIntSafe(process.env.MAX_POSITION_SIZE, typeof file.max_position_size === 'number' ? file.max_position_size : 0),
+    maxCollateralPerTrade: parseIntSafe(
+      process.env.MAX_COLLATERAL_PER_TRADE,
+      typeof file.max_collateral_per_trade === 'number' ? file.max_collateral_per_trade : 0,
+    ),
+    maxPositionSize: parseIntSafe(
+      process.env.MAX_POSITION_SIZE,
+      typeof file.max_position_size === 'number' ? file.max_position_size : 0,
+    ),
     maxLeverage: parseIntSafe(process.env.MAX_LEVERAGE, typeof file.max_leverage === 'number' ? file.max_leverage : 0),
-    maxTradesPerMinute: parseIntSafe(process.env.MAX_TRADES_PER_MINUTE, typeof file.max_trades_per_minute === 'number' ? file.max_trades_per_minute : 10),
-    minDelayBetweenTradesMs: parseIntSafe(process.env.MIN_DELAY_BETWEEN_TRADES_MS, typeof file.min_delay_between_trades_ms === 'number' ? file.min_delay_between_trades_ms : 3000),
-    defaultLeverage: parseIntSafe(process.env.DEFAULT_LEVERAGE, typeof file.default_leverage === 'number' ? file.default_leverage : 2),
-    dynamicCompute: (process.env.FLASH_DYNAMIC_CU ?? (file.dynamic_compute !== undefined ? String(file.dynamic_compute) : 'true')).toLowerCase() !== 'false',
-    computeBufferPercent: parseIntSafe(process.env.FLASH_CU_BUFFER_PCT, typeof file.compute_buffer_percent === 'number' ? file.compute_buffer_percent : 20),
-    leaderRouting: (process.env.FLASH_LEADER_ROUTING ?? '1').toLowerCase() !== '0' && (process.env.FLASH_LEADER_ROUTING ?? '1').toLowerCase() !== 'false',
+    maxTradesPerMinute: parseIntSafe(
+      process.env.MAX_TRADES_PER_MINUTE,
+      typeof file.max_trades_per_minute === 'number' ? file.max_trades_per_minute : 10,
+    ),
+    minDelayBetweenTradesMs: parseIntSafe(
+      process.env.MIN_DELAY_BETWEEN_TRADES_MS,
+      typeof file.min_delay_between_trades_ms === 'number' ? file.min_delay_between_trades_ms : 3000,
+    ),
+    defaultLeverage: parseIntSafe(
+      process.env.DEFAULT_LEVERAGE,
+      typeof file.default_leverage === 'number' ? file.default_leverage : 2,
+    ),
+    dynamicCompute:
+      (
+        process.env.FLASH_DYNAMIC_CU ?? (file.dynamic_compute !== undefined ? String(file.dynamic_compute) : 'true')
+      ).toLowerCase() !== 'false',
+    computeBufferPercent: parseIntSafe(
+      process.env.FLASH_CU_BUFFER_PCT,
+      typeof file.compute_buffer_percent === 'number' ? file.compute_buffer_percent : 20,
+    ),
+    leaderRouting:
+      (process.env.FLASH_LEADER_ROUTING ?? '1').toLowerCase() !== '0' &&
+      (process.env.FLASH_LEADER_ROUTING ?? '1').toLowerCase() !== 'false',
     rebroadcastIntervalMs: parseIntSafe(process.env.FLASH_REBROADCAST_MS, 800),
-    referrerAddress: process.env.REFERRER_ADDRESS || (typeof file.referrer_address === 'string' ? file.referrer_address : undefined),
+    referrerAddress:
+      process.env.REFERRER_ADDRESS || (typeof file.referrer_address === 'string' ? file.referrer_address : undefined),
   };
 }
 
@@ -239,12 +281,10 @@ function discoverPoolsFromSdk(): { names: string[]; markets: Record<string, stri
 
     const seen = new Set<string>();
     for (const pool of raw.pools) {
-      if (SKIP_POOL_PREFIXES.some(p => pool.poolName.startsWith(p))) continue;
+      if (SKIP_POOL_PREFIXES.some((p) => pool.poolName.startsWith(p))) continue;
       if (seen.has(pool.poolName)) continue; // Deduplicate (SDK JSON has duplicates)
       seen.add(pool.poolName);
-      const syms = (pool.tokens || [])
-        .map(t => t.symbol.toUpperCase())
-        .filter(s => !SKIP_TOKENS.has(s));
+      const syms = (pool.tokens || []).map((t) => t.symbol.toUpperCase()).filter((s) => !SKIP_TOKENS.has(s));
       if (syms.length === 0) continue;
       names.push(pool.poolName);
       markets[pool.poolName] = syms;
@@ -303,7 +343,9 @@ export function getPoolForMarket(symbol: string): string | null {
 }
 
 export function getAllMarkets(): string[] {
-  return Object.values(POOL_MARKETS).flat().map((m) => m.toUpperCase());
+  return Object.values(POOL_MARKETS)
+    .flat()
+    .map((m) => m.toUpperCase());
 }
 
 // ─── Per-Market Leverage Limits (loaded dynamically from Flash SDK PoolConfig) ─
@@ -334,9 +376,9 @@ function loadSdkLeverage(): Record<string, MarketLeverage> {
     const raw = JSON.parse(readFileSync(configPath, 'utf8')) as SdkPoolData;
 
     for (const pool of raw.pools) {
-      if (SKIP_POOL_PREFIXES.some(p => pool.poolName.startsWith(p))) continue;
+      if (SKIP_POOL_PREFIXES.some((p) => pool.poolName.startsWith(p))) continue;
       for (const m of pool.markets) {
-        const token = (pool.tokens || []).find(t => t.mintKey === m.targetMint);
+        const token = (pool.tokens || []).find((t) => t.mintKey === m.targetMint);
         if (!token) continue;
         const sym = token.symbol.toUpperCase();
         if (SKIP_TOKENS.has(sym)) continue;
@@ -361,14 +403,17 @@ function loadSdkLeverage(): Record<string, MarketLeverage> {
         const pc = PoolConfig.fromIdsByName(poolName, 'mainnet-beta');
         const markets = pc.markets as unknown as Array<{
           targetMint: { toBase58(): string };
-          maxLev: number; degenMinLev: number; degenMaxLev: number;
+          maxLev: number;
+          degenMinLev: number;
+          degenMaxLev: number;
         }>;
         const tokens = pc.tokens as unknown as Array<{
-          symbol: string; mintKey: { toBase58(): string };
+          symbol: string;
+          mintKey: { toBase58(): string };
         }>;
         for (const m of markets) {
           const targetMintStr = m.targetMint.toBase58();
-          const token = tokens.find(t => t.mintKey.toBase58() === targetMintStr);
+          const token = tokens.find((t) => t.mintKey.toBase58() === targetMintStr);
           if (!token) continue;
           const sym = token.symbol.toUpperCase();
           if (SKIP_TOKENS.has(sym)) continue;

@@ -46,12 +46,8 @@ const helloTool: ToolDefinition = {
   execute: async (_params: Record<string, unknown>, context: ToolContext): Promise<ToolResult> => {
     const mode = context.simulationMode ? 'Simulation' : 'Live';
     const wallet = context.walletAddress;
-    const walletShort = wallet.length > 8
-      ? `${wallet.slice(0, 4)}...${wallet.slice(-4)}`
-      : wallet;
-    const uptime = initTimestamp
-      ? `${Math.round((Date.now() - initTimestamp) / 1000)}s`
-      : 'unknown';
+    const walletShort = wallet.length > 8 ? `${wallet.slice(0, 4)}...${wallet.slice(-4)}` : wallet;
+    const uptime = initTimestamp ? `${Math.round((Date.now() - initTimestamp) / 1000)}s` : 'unknown';
 
     const lines = [
       '',

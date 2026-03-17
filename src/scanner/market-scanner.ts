@@ -1,11 +1,4 @@
-import {
-  MarketData,
-  VolumeData,
-  OpenInterestData,
-  Opportunity,
-  TradeSide,
-  StrategySignal,
-} from '../types/index.js';
+import { MarketData, VolumeData, OpenInterestData, Opportunity, TradeSide, StrategySignal } from '../types/index.js';
 import { SolanaInspector } from '../agent/solana-inspector.js';
 import { computeMomentumSignal } from '../strategies/momentum.js';
 import { computeMeanReversionSignal } from '../strategies/mean-reversion.js';
@@ -32,12 +25,7 @@ function computeScore(
   oiTrend: number,
   whaleActivity: number,
 ): number {
-  return (
-    signalConfidence * 0.5 +
-    volumeStrength * 0.2 +
-    oiTrend * 0.2 +
-    whaleActivity * 0.1
-  );
+  return signalConfidence * 0.5 + volumeStrength * 0.2 + oiTrend * 0.2 + whaleActivity * 0.1;
 }
 
 /**
@@ -62,9 +50,7 @@ function computeVolumeStrength(volume: VolumeData): number {
  * Higher skew (imbalance) = higher score.
  */
 function computeOiScore(market: MarketData, openInterest: OpenInterestData): number {
-  const oi = openInterest.markets.find(
-    (m) => m.market.toUpperCase() === market.symbol.toUpperCase(),
-  );
+  const oi = openInterest.markets.find((m) => m.market.toUpperCase() === market.symbol.toUpperCase());
   if (!oi) return 0.5;
 
   const total = oi.longOi + oi.shortOi;
@@ -146,9 +132,7 @@ export class MarketScanner {
     try {
       return await Promise.race([
         this.doScan(balance, topN),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('scan timeout')), SCAN_TIMEOUT_MS),
-        ),
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error('scan timeout')), SCAN_TIMEOUT_MS)),
       ]);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'unknown';
@@ -217,16 +201,19 @@ export class MarketScanner {
     // Total volume per market from daily data
     const totalVolumeByMarket = new Map<string, number>();
     // Use 24h volume from last day as proxy for total
-    const lastDayVol = volume.dailyVolumes.length > 0
-      ? volume.dailyVolumes[volume.dailyVolumes.length - 1].volumeUsd
-      : 0;
+    const lastDayVol =
+      volume.dailyVolumes.length > 0 ? volume.dailyVolumes[volume.dailyVolumes.length - 1].volumeUsd : 0;
     for (const m of validMarkets) {
       totalVolumeByMarket.set(m.symbol.toUpperCase(), lastDayVol / Math.max(1, validMarkets.length));
     }
 
     // Detect regimes for all markets in a single pass
     const regimes = this.regimeDetector.detectAll(
-      validMarkets, volume, openInterest, whaleVolumeByMarket, totalVolumeByMarket,
+      validMarkets,
+      volume,
+      openInterest,
+      whaleVolumeByMarket,
+      totalVolumeByMarket,
     );
 
     // Evaluate each market
@@ -247,7 +234,7 @@ export class MarketScanner {
       const regimeState = regimes.get(market.symbol.toUpperCase());
       const regime = regimeState?.regime ?? MarketRegime.RANGING;
       const weights = this.regimeDetector.getWeights(regime);
-      const safeW = (v: number, fb: number) => Number.isFinite(v) ? v : fb;
+      const safeW = (v: number, fb: number) => (Number.isFinite(v) ? v : fb);
 
       // Regime-weighted direction consensus (guard NaN from upstream)
       const strategyWeights = [
@@ -310,11 +297,17 @@ export class MarketScanner {
     this.cacheExpiry = Date.now() + SCAN_CACHE_TTL;
 
     const elapsed = Date.now() - startTime;
-    logger.info('SCANNER', `Scanned ${validMarkets.length} markets in ${elapsed}ms — ${results.length} opportunities found`);
+    logger.info(
+      'SCANNER',
+      `Scanned ${validMarkets.length} markets in ${elapsed}ms — ${results.length} opportunities found`,
+    );
 
     // Log top opportunities
     for (const opp of results.slice(0, 5)) {
-      logger.info('SCANNER', `${opp.market} ${opp.direction.toUpperCase()} confidence=${opp.confidence.toFixed(2)} score=${opp.totalScore.toFixed(2)}`);
+      logger.info(
+        'SCANNER',
+        `${opp.market} ${opp.direction.toUpperCase()} confidence=${opp.confidence.toFixed(2)} score=${opp.totalScore.toFixed(2)}`,
+      );
     }
 
     return results;

@@ -59,7 +59,9 @@ export function registerSlackConsumer(config: SlackConsumerConfig): () => void {
     } catch (err) {
       try {
         getLogger().debug('SLACK', `Alert delivery failed: ${err}`);
-      } catch { /* never throw */ }
+      } catch {
+        /* never throw */
+      }
     }
   });
 }
@@ -75,7 +77,9 @@ export function autoRegisterSlack(): (() => void) | null {
 
   try {
     getLogger().info('SLACK', 'Slack alert consumer registered');
-  } catch { /* never throw */ }
+  } catch {
+    /* never throw */
+  }
 
   return registerSlackConsumer({ webhookUrl: url, minSeverity });
 }

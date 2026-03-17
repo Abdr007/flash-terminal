@@ -37,15 +37,14 @@ function buildOrderedIxs(
   cuPriceIx: TransactionInstruction,
   instructions: readonly TransactionInstruction[],
 ): TransactionInstruction[] {
-  const ed25519 = instructions.filter(ix => ix.programId.toBase58() === ED25519_PROGRAM_ID);
-  const rest = instructions.filter(ix => ix.programId.toBase58() !== ED25519_PROGRAM_ID);
+  const ed25519 = instructions.filter((ix) => ix.programId.toBase58() === ED25519_PROGRAM_ID);
+  const rest = instructions.filter((ix) => ix.programId.toBase58() !== ED25519_PROGRAM_ID);
   return [...ed25519, cuLimitIx, cuPriceIx, ...rest];
 }
 import { getRpcManagerInstance } from '../network/rpc-manager.js';
 import { getErrorMessage } from '../utils/retry.js';
 import { getLeaderRouter, initLeaderRouter, shutdownLeaderRouter } from './leader-router.js';
 import { getTpuClient } from '../network/tpu-client.js';
-
 
 // ─── Configuration ───────────────────────────────────────────────────────────
 
@@ -80,7 +79,7 @@ const DEFAULT_CU_LIMIT = 220_000;
 const PRIORITY_FEE_CACHE_MS = 5_000;
 
 /** Congestion detection: uplift % when >50% of recent fees exceed baseline */
-const CONGESTION_UPLIFT_PCT = 0.20;
+const CONGESTION_UPLIFT_PCT = 0.2;
 
 /** Broadcast quorum: minimum endpoints that must accept for success */
 const BROADCAST_QUORUM = 2;
@@ -175,7 +174,7 @@ export function getUltraTxEngine(): UltraTxEngine | null {
 export function initUltraTxEngine(
   primaryConnection: Connection,
   wallet: Keypair,
-  config: Partial<TxEngineConfig> = {}
+  config: Partial<TxEngineConfig> = {},
 ): UltraTxEngine {
   if (_instance) {
     _instance.shutdown();
@@ -217,11 +216,7 @@ export class UltraTxEngine {
   // Metrics
   private metricsHistory: TxMetrics[] = [];
 
-  constructor(
-    primaryConnection: Connection,
-    wallet: Keypair,
-    config: Partial<TxEngineConfig> = {}
-  ) {
+  constructor(primaryConnection: Connection, wallet: Keypair, config: Partial<TxEngineConfig> = {}) {
     this.primaryConnection = primaryConnection;
     this.wallet = wallet;
     this.config = {
@@ -274,9 +269,14 @@ export class UltraTxEngine {
 
         // Fork protection: reject if block height drops significantly
         // (indicates RPC returned stale data or a fork occurred)
-        if (this.cachedBlockhash &&
-            result.lastValidBlockHeight < this.cachedBlockhash.lastValidBlockHeight - BLOCKHASH_FORK_SLOT_DROP) {
-          getLogger().warn('TX-ENGINE', `Blockhash fork detected: height dropped from ${this.cachedBlockhash.lastValidBlockHeight} to ${result.lastValidBlockHeight}`);
+        if (
+          this.cachedBlockhash &&
+          result.lastValidBlockHeight < this.cachedBlockhash.lastValidBlockHeight - BLOCKHASH_FORK_SLOT_DROP
+        ) {
+          getLogger().warn(
+            'TX-ENGINE',
+            `Blockhash fork detected: height dropped from ${this.cachedBlockhash.lastValidBlockHeight} to ${result.lastValidBlockHeight}`,
+          );
           // Keep the existing (newer) blockhash
           return this.cachedBlockhash;
         }
@@ -301,8 +301,7 @@ export class UltraTxEngine {
    * otherwise fetches on-demand. Returns fetch latency for metrics.
    */
   private async getBlockhash(forceRefresh = false): Promise<{ blockhash: CachedBlockhash; fetchLatencyMs: number }> {
-    if (!forceRefresh && this.cachedBlockhash &&
-        (Date.now() - this.cachedBlockhash.fetchedAt) < BLOCKHASH_MAX_AGE_MS) {
+    if (!forceRefresh && this.cachedBlockhash && Date.now() - this.cachedBlockhash.fetchedAt < BLOCKHASH_MAX_AGE_MS) {
       return { blockhash: this.cachedBlockhash, fetchLatencyMs: 0 };
     }
 
@@ -324,8 +323,7 @@ export class UltraTxEngine {
     }
 
     // Return cached if fresh
-    if (this.cachedPriorityFee &&
-        (Date.now() - this.cachedPriorityFee.fetchedAt) < PRIORITY_FEE_CACHE_MS) {
+    if (this.cachedPriorityFee && Date.now() - this.cachedPriorityFee.fetchedAt < PRIORITY_FEE_CACHE_MS) {
       return this.cachedPriorityFee.fee;
     }
 
@@ -344,8 +342,8 @@ export class UltraTxEngine {
 
         // Sort by fee, take the 75th percentile
         const sorted = fees
-          .map(f => f.prioritizationFee)
-          .filter(f => f > 0)
+          .map((f) => f.prioritizationFee)
+          .filter((f) => f > 0)
           .sort((a, b) => a - b);
 
         if (sorted.length === 0) {
@@ -353,15 +351,12 @@ export class UltraTxEngine {
           return this.config.computeUnitPrice;
         }
 
-        const p75Index = Math.min(
-          Math.floor(sorted.length * 0.75),
-          sorted.length - 1
-        );
+        const p75Index = Math.min(Math.floor(sorted.length * 0.75), sorted.length - 1);
         const p75Fee = sorted[p75Index];
 
         // Congestion detection: if >50% of non-zero fees exceed our baseline, apply uplift
         const baseline = this.config.computeUnitPrice;
-        const aboveBaseline = sorted.filter(f => f > baseline).length;
+        const aboveBaseline = sorted.filter((f) => f > baseline).length;
         const congested = aboveBaseline > sorted.length * 0.5;
 
         // Clamp between floor and ceiling, with congestion uplift
@@ -412,16 +407,16 @@ export class UltraTxEngine {
 
     for (const ep of allEndpoints) {
       if (ep.url !== activeUrl) {
-          try {
-            const conn = new Connection(ep.url, {
-              commitment: 'confirmed',
-              disableRetryOnRateLimit: true,
-            });
-            connections.push(conn);
-          } catch {
-            // Skip invalid endpoints
-          }
+        try {
+          const conn = new Connection(ep.url, {
+            commitment: 'confirmed',
+            disableRetryOnRateLimit: true,
+          });
+          connections.push(conn);
+        } catch {
+          // Skip invalid endpoints
         }
+      }
     }
 
     this.broadcastConnections = connections;
@@ -437,17 +432,16 @@ export class UltraTxEngine {
    * Falls back to parallel broadcast if leader routing is unavailable.
    * Returns the number of endpoints that accepted the broadcast.
    */
-  private async broadcastToAll(txBytes: Buffer): Promise<{ signature: string; broadcastCount: number; leaderRouted: boolean }> {
+  private async broadcastToAll(
+    txBytes: Buffer,
+  ): Promise<{ signature: string; broadcastCount: number; leaderRouted: boolean }> {
     const router = getLeaderRouter();
     let leaderRouted = false;
     let connections = this.broadcastConnections;
 
     // Apply leader-aware ordering if available
     if (router) {
-      const order = router.getBroadcastOrder(
-        this.primaryConnection,
-        this.broadcastConnections,
-      );
+      const order = router.getBroadcastOrder(this.primaryConnection, this.broadcastConnections);
       connections = order.connections;
       leaderRouted = order.leaderRouted;
     }
@@ -476,16 +470,18 @@ export class UltraTxEngine {
       // Fan out to remaining endpoints in parallel (non-blocking)
       const remaining = connections.slice(1);
       const remainingResults = await Promise.allSettled(
-        remaining.map(conn => {
+        remaining.map((conn) => {
           const t0 = Date.now();
-          return conn.sendRawTransaction(txBytes, {
-            skipPreflight: true,
-            maxRetries: 0,
-          }).then(sig => {
-            metrics.record('tx_broadcast_latency_ms', Date.now() - t0);
-            return sig;
-          });
-        })
+          return conn
+            .sendRawTransaction(txBytes, {
+              skipPreflight: true,
+              maxRetries: 0,
+            })
+            .then((sig) => {
+              metrics.record('tx_broadcast_latency_ms', Date.now() - t0);
+              return sig;
+            });
+        }),
       );
 
       for (const result of remainingResults) {
@@ -497,16 +493,18 @@ export class UltraTxEngine {
     } else {
       // Standard parallel broadcast (no leader data)
       const results = await Promise.allSettled(
-        connections.map(conn => {
+        connections.map((conn) => {
           const t0 = Date.now();
-          return conn.sendRawTransaction(txBytes, {
-            skipPreflight: true,
-            maxRetries: 0,
-          }).then(sig => {
-            metrics.record('tx_broadcast_latency_ms', Date.now() - t0);
-            return sig;
-          });
-        })
+          return conn
+            .sendRawTransaction(txBytes, {
+              skipPreflight: true,
+              maxRetries: 0,
+            })
+            .then((sig) => {
+              metrics.record('tx_broadcast_latency_ms', Date.now() - t0);
+              return sig;
+            });
+        }),
       );
 
       for (const result of results) {
@@ -535,7 +533,7 @@ export class UltraTxEngine {
     signature: string,
     txBytes: Buffer,
     conn: Connection,
-    timeoutMs: number
+    timeoutMs: number,
   ): Promise<{ confirmedViaWs: boolean; rebroadcastCount: number }> {
     const logger = getLogger();
     let _confirmedViaWs = false;
@@ -589,7 +587,7 @@ export class UltraTxEngine {
                 onConfirmed(true);
               }
             },
-            'confirmed'
+            'confirmed',
           );
           wsSubscriptionId = subId;
         } catch {
@@ -632,10 +630,12 @@ export class UltraTxEngine {
         }
 
         for (const broadcastConn of targets) {
-          broadcastConn.sendRawTransaction(txBytes, {
-            skipPreflight: true,
-            maxRetries: 0,
-          }).catch(() => {});
+          broadcastConn
+            .sendRawTransaction(txBytes, {
+              skipPreflight: true,
+              maxRetries: 0,
+            })
+            .catch(() => {});
         }
       }, this.config.rebroadcastIntervalMs ?? DEFAULT_REBROADCAST_INTERVAL_MS);
 
@@ -643,11 +643,15 @@ export class UltraTxEngine {
       const timeoutTimer = setTimeout(() => {
         if (settled) return;
         // One final status check before declaring timeout
-        conn.getSignatureStatuses([signature])
+        conn
+          .getSignatureStatuses([signature])
           .then(({ value }) => {
             const status = value?.[0];
-            if (status && !status.err &&
-                (status.confirmationStatus === 'confirmed' || status.confirmationStatus === 'finalized')) {
+            if (
+              status &&
+              !status.err &&
+              (status.confirmationStatus === 'confirmed' || status.confirmationStatus === 'finalized')
+            ) {
               onConfirmed(false);
             } else {
               onError(new Error(`Not confirmed within ${timeoutMs / 1000}s`));
@@ -681,7 +685,9 @@ export class UltraTxEngine {
         const simErr = JSON.stringify(simResult.value.err);
         getLogger().warn('TX-ENGINE', `Simulation error: ${simErr}`);
         if (simResult.value.logs) {
-          const programLogs = simResult.value.logs.filter((l: string) => l.includes('Error') || l.includes('failed') || l.includes('custom program error'));
+          const programLogs = simResult.value.logs.filter(
+            (l: string) => l.includes('Error') || l.includes('failed') || l.includes('custom program error'),
+          );
           if (programLogs.length > 0) {
             getLogger().warn('TX-ENGINE', `Program logs: ${programLogs.join(' | ')}`);
           }
@@ -698,7 +704,11 @@ export class UltraTxEngine {
     } catch (simError: unknown) {
       const simMsg = getErrorMessage(simError);
       // Re-throw program errors
-      if (simMsg.includes('simulation failed') || simMsg.includes('Trade rejected') || simMsg.includes('Transaction rejected')) {
+      if (
+        simMsg.includes('simulation failed') ||
+        simMsg.includes('Trade rejected') ||
+        simMsg.includes('Transaction rejected')
+      ) {
         throw simError;
       }
       // Non-critical simulation failures (RPC timeout etc) — proceed with send
@@ -735,7 +745,12 @@ export class UltraTxEngine {
     this.submitInProgress = true;
 
     try {
-      return await this._submitTransactionInner(instructions, additionalSigners, addressLookupTableAccounts, computeUnitLimitOverride);
+      return await this._submitTransactionInner(
+        instructions,
+        additionalSigners,
+        addressLookupTableAccounts,
+        computeUnitLimitOverride,
+      );
     } finally {
       this.submitInProgress = false;
     }
@@ -776,19 +791,38 @@ export class UltraTxEngine {
         try {
           const { value } = await conn.getSignatureStatuses([lastSignature]);
           const status = value?.[0];
-          if (status && !status.err &&
-              (status.confirmationStatus === 'confirmed' || status.confirmationStatus === 'finalized')) {
+          if (
+            status &&
+            !status.err &&
+            (status.confirmationStatus === 'confirmed' || status.confirmationStatus === 'finalized')
+          ) {
             logger.info('TX-ENGINE', `Previous tx confirmed (late detection): ${lastSignature}`);
             const metrics = this.buildMetrics({
-              blockhashLatencyMs, buildTimeMs,
-              compileTimeMs, signTimeMs, broadcastTimeMs,
+              blockhashLatencyMs,
+              buildTimeMs,
+              compileTimeMs,
+              signTimeMs,
+              broadcastTimeMs,
               confirmLatencyMs: Date.now() - pipelineStart - buildTimeMs - blockhashLatencyMs,
               totalLatencyMs: Date.now() - pipelineStart,
-              broadcastCount: totalBroadcastCount, rebroadcastCount,
-              confirmedViaWs: false, priorityFee, successAttempt: attempt - 1,
-              leaderRouted, submittedAtSlot, submissionLatencyMs, tpuForwarded, rpcEndpointsUsed: totalBroadcastCount,
+              broadcastCount: totalBroadcastCount,
+              rebroadcastCount,
+              confirmedViaWs: false,
+              priorityFee,
+              successAttempt: attempt - 1,
+              leaderRouted,
+              submittedAtSlot,
+              submissionLatencyMs,
+              tpuForwarded,
+              rpcEndpointsUsed: totalBroadcastCount,
             });
-            return { signature: lastSignature, confirmationTimeMs: Date.now() - pipelineStart, attempts: attempt - 1, broadcastEndpoints: totalBroadcastCount, metrics };
+            return {
+              signature: lastSignature,
+              confirmationTimeMs: Date.now() - pipelineStart,
+              attempts: attempt - 1,
+              broadcastEndpoints: totalBroadcastCount,
+              metrics,
+            };
           }
         } catch {
           // Best-effort — proceed with retry
@@ -840,9 +874,13 @@ export class UltraTxEngine {
           const txSize = vtx.serialize().length;
           const altLookups = message.addressTableLookups ?? [];
           const altLookupCount = altLookups.reduce(
-            (sum, l) => sum + l.readonlyIndexes.length + l.writableIndexes.length, 0,
+            (sum, l) => sum + l.readonlyIndexes.length + l.writableIndexes.length,
+            0,
           );
-          logger.info('TX', `Size: ${txSize}b | ALT: ${altLookups.length > 0 ? `${altLookups.length} table(s), ${altLookupCount} accounts` : 'none'} | Static: ${message.staticAccountKeys.length} | CU: ${effectiveCuLimit} | Fee: ${priorityFee} µL | IXs: ${allIxs.length}`);
+          logger.info(
+            'TX',
+            `Size: ${txSize}b | ALT: ${altLookups.length > 0 ? `${altLookups.length} table(s), ${altLookupCount} accounts` : 'none'} | Static: ${message.staticAccountKeys.length} | CU: ${effectiveCuLimit} | Fee: ${priorityFee} µL | IXs: ${allIxs.length}`,
+          );
         }
 
         // ── Step 4: Simulate (first attempt only) ──
@@ -857,11 +895,14 @@ export class UltraTxEngine {
         let finalVtx = vtx;
         if (simUnitsConsumed && simUnitsConsumed > 0 && this.config.dynamicCompute !== false) {
           const bufferPct = this.config.computeBufferPercent ?? 20;
-          const rawLimit = Math.ceil(simUnitsConsumed * (1 + bufferPct / 100) / 10_000) * 10_000;
+          const rawLimit = Math.ceil((simUnitsConsumed * (1 + bufferPct / 100)) / 10_000) * 10_000;
           // Safety clamp: never below 120k (floor) or above configured limit
           const dynamicLimit = Math.max(120_000, Math.min(rawLimit, effectiveCuLimit));
           if (dynamicLimit < effectiveCuLimit && dynamicLimit >= simUnitsConsumed) {
-            getLogger().debug('TX-ENGINE', `Dynamic CU: ${simUnitsConsumed} used → ${dynamicLimit} limit (was ${effectiveCuLimit})`);
+            getLogger().debug(
+              'TX-ENGINE',
+              `Dynamic CU: ${simUnitsConsumed} used → ${dynamicLimit} limit (was ${effectiveCuLimit})`,
+            );
             const tightCuLimitIx = ComputeBudgetProgram.setComputeUnitLimit({ units: dynamicLimit });
             const tightCuPriceIx = ComputeBudgetProgram.setComputeUnitPrice({ microLamports: priorityFee });
             const tightIxs = [tightCuLimitIx, tightCuPriceIx, ...instructions];
@@ -887,7 +928,7 @@ export class UltraTxEngine {
           // Wait up to 5s for partition to clear
           let partitionCleared = false;
           for (let wait = 0; wait < 5; wait++) {
-            await new Promise(r => setTimeout(r, 1_000));
+            await new Promise((r) => setTimeout(r, 1_000));
             rpcMgr.detectPartition();
             if (!rpcMgr.partitionDetected) {
               partitionCleared = true;
@@ -915,8 +956,9 @@ export class UltraTxEngine {
           const tpuClient = getTpuClient();
           if (tpuClient?.isOperational) {
             // Non-blocking — don't await, just fire
-            tpuClient.forwardToUpcomingLeaders(txBytes)
-              .then(result => {
+            tpuClient
+              .forwardToUpcomingLeaders(txBytes)
+              .then((result) => {
                 if (result.attempted) tpuForwarded = true;
               })
               .catch(() => {}); // TPU is best-effort
@@ -931,7 +973,11 @@ export class UltraTxEngine {
           leaderRouted = result.leaderRouted;
 
           // ── Broadcast Quorum Check ──
-          if (this.config.requireQuorum && broadcastCount < BROADCAST_QUORUM && this.broadcastConnections.length >= BROADCAST_QUORUM) {
+          if (
+            this.config.requireQuorum &&
+            broadcastCount < BROADCAST_QUORUM &&
+            this.broadcastConnections.length >= BROADCAST_QUORUM
+          ) {
             logger.warn('TX-ENGINE', `Broadcast quorum not met: ${broadcastCount}/${BROADCAST_QUORUM} — retrying`);
             // One retry attempt for quorum
             const retry = await this.broadcastToAll(txBytes).catch(() => null);
@@ -951,19 +997,19 @@ export class UltraTxEngine {
 
         lastSignature = signature;
         totalBroadcastCount = broadcastCount;
-        logger.info('TX-ENGINE', `Tx broadcast: ${signature} (${txBytes.length}B, ${broadcastCount} endpoints, attempt ${attempt}, priority ${priorityFee}µL${leaderRouted ? ', leader-routed' : ''})`);
+        logger.info(
+          'TX-ENGINE',
+          `Tx broadcast: ${signature} (${txBytes.length}B, ${broadcastCount} endpoints, attempt ${attempt}, priority ${priorityFee}µL${leaderRouted ? ', leader-routed' : ''})`,
+        );
 
         // ── Step 6: Wait for Confirmation ──
         // Reduce timeout if blockhash fetch was slow
-        const effectiveTimeout = bhLatency > 5_000
-          ? Math.max(CONFIRM_TIMEOUT_MS - bhLatency, 20_000)
-          : CONFIRM_TIMEOUT_MS;
+        const effectiveTimeout =
+          bhLatency > 5_000 ? Math.max(CONFIRM_TIMEOUT_MS - bhLatency, 20_000) : CONFIRM_TIMEOUT_MS;
 
         process.stdout.write('  Awaiting confirmation... \r');
 
-        const confirmResult = await this.waitForConfirmation(
-          signature, txBytes, conn, effectiveTimeout
-        );
+        const confirmResult = await this.waitForConfirmation(signature, txBytes, conn, effectiveTimeout);
 
         confirmLatencyMs = Date.now() - confirmStart;
         rebroadcastCount = confirmResult.rebroadcastCount;
@@ -971,17 +1017,29 @@ export class UltraTxEngine {
 
         // Success!
         process.stdout.write('                              \r');
-        logger.info('TX-ENGINE', `Tx confirmed: ${signature} (${confirmLatencyMs}ms, ${confirmedViaWs ? 'WS' : 'HTTP'}, ${rebroadcastCount} rebroadcasts)`);
+        logger.info(
+          'TX-ENGINE',
+          `Tx confirmed: ${signature} (${confirmLatencyMs}ms, ${confirmedViaWs ? 'WS' : 'HTTP'}, ${rebroadcastCount} rebroadcasts)`,
+        );
 
         const metrics = this.buildMetrics({
-          blockhashLatencyMs, buildTimeMs,
-          compileTimeMs, signTimeMs, broadcastTimeMs,
+          blockhashLatencyMs,
+          buildTimeMs,
+          compileTimeMs,
+          signTimeMs,
+          broadcastTimeMs,
           confirmLatencyMs,
           totalLatencyMs: Date.now() - pipelineStart,
-          broadcastCount: totalBroadcastCount, rebroadcastCount,
-          confirmedViaWs, priorityFee, successAttempt: attempt,
-          leaderRouted, submittedAtSlot, submissionLatencyMs,
-          tpuForwarded, rpcEndpointsUsed: totalBroadcastCount,
+          broadcastCount: totalBroadcastCount,
+          rebroadcastCount,
+          confirmedViaWs,
+          priorityFee,
+          successAttempt: attempt,
+          leaderRouted,
+          submittedAtSlot,
+          submissionLatencyMs,
+          tpuForwarded,
+          rpcEndpointsUsed: totalBroadcastCount,
         });
 
         return {
@@ -991,12 +1049,15 @@ export class UltraTxEngine {
           broadcastEndpoints: broadcastCount,
           metrics,
         };
-
       } catch (e: unknown) {
         const eMsg = getErrorMessage(e);
 
         // Program errors are terminal — don't retry
-        if (eMsg.includes('failed on-chain') || eMsg.includes('Trade rejected') || eMsg.includes('Transaction rejected')) {
+        if (
+          eMsg.includes('failed on-chain') ||
+          eMsg.includes('Trade rejected') ||
+          eMsg.includes('Transaction rejected')
+        ) {
           process.stdout.write('                              \r');
           throw e;
         }
@@ -1028,8 +1089,8 @@ export class UltraTxEngine {
     process.stdout.write('                              \r');
     throw new Error(
       `Transaction failed after ${MAX_ATTEMPTS} attempts.\n` +
-      `  Last error: ${lastError}\n` +
-      (lastSignature ? `  Last signature: ${lastSignature}\n  Check https://solscan.io/tx/${lastSignature}` : '')
+        `  Last error: ${lastError}\n` +
+        (lastSignature ? `  Last signature: ${lastSignature}\n  Check https://solscan.io/tx/${lastSignature}` : ''),
     );
   }
 
@@ -1137,10 +1198,10 @@ export class UltraTxEngine {
 
     return {
       blockhashAge: () => Date.now() - builtAt,
-      isExpired: () => (Date.now() - builtAt) > 30_000, // ~60 slots ≈ 24s + margin
+      isExpired: () => Date.now() - builtAt > 30_000, // ~60 slots ≈ 24s + margin
       submit: async () => {
         // If the prebuilt tx is too old, rebuild with fresh blockhash
-        if ((Date.now() - builtAt) > 30_000) {
+        if (Date.now() - builtAt > 30_000) {
           getLogger().info('TX-ENGINE', 'Prebuilt tx expired — rebuilding with fresh blockhash');
           return this.submitTransaction(instructions, additionalSigners, addressLookupTableAccounts);
         }
@@ -1177,21 +1238,32 @@ export class UltraTxEngine {
           }
 
           const confirmResult = await this.waitForConfirmation(
-            signature, txBytes, this.primaryConnection, CONFIRM_TIMEOUT_MS
+            signature,
+            txBytes,
+            this.primaryConnection,
+            CONFIRM_TIMEOUT_MS,
           );
 
           const totalLatencyMs = Date.now() - pipelineStart;
 
           const metrics = this.buildMetrics({
-            blockhashLatencyMs: 0, buildTimeMs: 0,
-            compileTimeMs: 0, signTimeMs: 0, broadcastTimeMs: 0,
+            blockhashLatencyMs: 0,
+            buildTimeMs: 0,
+            compileTimeMs: 0,
+            signTimeMs: 0,
+            broadcastTimeMs: 0,
             confirmLatencyMs: totalLatencyMs,
             totalLatencyMs,
-            broadcastCount, rebroadcastCount: confirmResult.rebroadcastCount,
+            broadcastCount,
+            rebroadcastCount: confirmResult.rebroadcastCount,
             confirmedViaWs: confirmResult.confirmedViaWs,
-            priorityFee, successAttempt: 1,
-            leaderRouted, submittedAtSlot, submissionLatencyMs: 0,
-            tpuForwarded: false, rpcEndpointsUsed: broadcastCount,
+            priorityFee,
+            successAttempt: 1,
+            leaderRouted,
+            submittedAtSlot,
+            submissionLatencyMs: 0,
+            tpuForwarded: false,
+            rpcEndpointsUsed: broadcastCount,
           });
 
           return {
@@ -1218,7 +1290,7 @@ export class UltraTxEngine {
     if (accounts.length === 0) return;
 
     const { PublicKey } = await import('@solana/web3.js');
-    const pubkeys = accounts.map(a => new PublicKey(a));
+    const pubkeys = accounts.map((a) => new PublicKey(a));
 
     // Fire-and-forget — just warm the cache
     this.primaryConnection.getMultipleAccountsInfo(pubkeys, 'confirmed').catch(() => {});
@@ -1260,13 +1332,24 @@ export class UltraTxEngine {
     const h = this.metricsHistory;
     if (h.length === 0) {
       return {
-        totalTxs: 0, avgTotalLatencyMs: 0, avgConfirmLatencyMs: 0,
-        avgBlockhashLatencyMs: 0, avgBuildTimeMs: 0,
-        avgCompileTimeMs: 0, avgSignTimeMs: 0, avgBroadcastTimeMs: 0, avgSubmissionLatencyMs: 0,
-        p50ConfirmMs: 0, p95ConfirmMs: 0, wsConfirmPct: 0,
-        avgBroadcastCount: 0, avgRebroadcastCount: 0,
-        leaderRoutedPct: 0, tpuForwardedPct: 0,
-        avgSlotDelay: 0, fastestEndpoint: null,
+        totalTxs: 0,
+        avgTotalLatencyMs: 0,
+        avgConfirmLatencyMs: 0,
+        avgBlockhashLatencyMs: 0,
+        avgBuildTimeMs: 0,
+        avgCompileTimeMs: 0,
+        avgSignTimeMs: 0,
+        avgBroadcastTimeMs: 0,
+        avgSubmissionLatencyMs: 0,
+        p50ConfirmMs: 0,
+        p95ConfirmMs: 0,
+        wsConfirmPct: 0,
+        avgBroadcastCount: 0,
+        avgRebroadcastCount: 0,
+        leaderRoutedPct: 0,
+        tpuForwardedPct: 0,
+        avgSlotDelay: 0,
+        fastestEndpoint: null,
       };
     }
 
@@ -1277,9 +1360,9 @@ export class UltraTxEngine {
       return sorted[idx];
     };
 
-    const confirmTimes = h.map(m => m.confirmLatencyMs);
-    const wsCount = h.filter(m => m.confirmedViaWs).length;
-    const leaderCount = h.filter(m => m.leaderRouted).length;
+    const confirmTimes = h.map((m) => m.confirmLatencyMs);
+    const wsCount = h.filter((m) => m.confirmedViaWs).length;
+    const leaderCount = h.filter((m) => m.leaderRouted).length;
 
     // Get leader router metrics
     const router = getLeaderRouter();
@@ -1287,21 +1370,21 @@ export class UltraTxEngine {
 
     return {
       totalTxs: h.length,
-      avgTotalLatencyMs: Math.round(avg(h.map(m => m.totalLatencyMs))),
+      avgTotalLatencyMs: Math.round(avg(h.map((m) => m.totalLatencyMs))),
       avgConfirmLatencyMs: Math.round(avg(confirmTimes)),
-      avgBlockhashLatencyMs: Math.round(avg(h.map(m => m.blockhashLatencyMs))),
-      avgBuildTimeMs: Math.round(avg(h.map(m => m.buildTimeMs))),
-      avgCompileTimeMs: Math.round(avg(h.map(m => m.compileTimeMs))),
-      avgSignTimeMs: Math.round(avg(h.map(m => m.signTimeMs))),
-      avgBroadcastTimeMs: Math.round(avg(h.map(m => m.broadcastTimeMs))),
-      avgSubmissionLatencyMs: Math.round(avg(h.map(m => m.submissionLatencyMs))),
+      avgBlockhashLatencyMs: Math.round(avg(h.map((m) => m.blockhashLatencyMs))),
+      avgBuildTimeMs: Math.round(avg(h.map((m) => m.buildTimeMs))),
+      avgCompileTimeMs: Math.round(avg(h.map((m) => m.compileTimeMs))),
+      avgSignTimeMs: Math.round(avg(h.map((m) => m.signTimeMs))),
+      avgBroadcastTimeMs: Math.round(avg(h.map((m) => m.broadcastTimeMs))),
+      avgSubmissionLatencyMs: Math.round(avg(h.map((m) => m.submissionLatencyMs))),
       p50ConfirmMs: Math.round(percentile(confirmTimes, 0.5)),
       p95ConfirmMs: Math.round(percentile(confirmTimes, 0.95)),
       wsConfirmPct: Math.round((wsCount / h.length) * 100),
-      avgBroadcastCount: Math.round(avg(h.map(m => m.broadcastCount)) * 10) / 10,
-      avgRebroadcastCount: Math.round(avg(h.map(m => m.rebroadcastCount)) * 10) / 10,
+      avgBroadcastCount: Math.round(avg(h.map((m) => m.broadcastCount)) * 10) / 10,
+      avgRebroadcastCount: Math.round(avg(h.map((m) => m.rebroadcastCount)) * 10) / 10,
       leaderRoutedPct: Math.round((leaderCount / h.length) * 100),
-      tpuForwardedPct: Math.round((h.filter(m => m.tpuForwarded).length / h.length) * 100),
+      tpuForwardedPct: Math.round((h.filter((m) => m.tpuForwarded).length / h.length) * 100),
       avgSlotDelay: routerMetrics?.avgSlotDelay ?? 0,
       fastestEndpoint: routerMetrics?.fastestEndpoint ?? null,
     };
@@ -1336,7 +1419,8 @@ export class UltraTxEngine {
 
   private isNetworkError(msg: string): boolean {
     const lower = msg.toLowerCase();
-    return lower.includes('timeout') ||
+    return (
+      lower.includes('timeout') ||
       lower.includes('econnrefused') ||
       lower.includes('econnreset') ||
       lower.includes('enotfound') ||
@@ -1345,7 +1429,8 @@ export class UltraTxEngine {
       lower.includes('socket hang up') ||
       lower.includes('429') ||
       lower.includes('503') ||
-      lower.includes('502');
+      lower.includes('502')
+    );
   }
 
   private mapProgramError(rawError: string): string {

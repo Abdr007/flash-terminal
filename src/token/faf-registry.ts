@@ -28,20 +28,68 @@ export interface VipTier {
   level: number;
   name: string;
   fafRequired: number;
-  feeDiscount: number;      // percentage
-  referralRebate: number;   // percentage
-  spotLoDiscount: number;   // percentage
-  dcaDiscount: number;      // percentage
+  feeDiscount: number; // percentage
+  referralRebate: number; // percentage
+  spotLoDiscount: number; // percentage
+  dcaDiscount: number; // percentage
 }
 
 export const VIP_TIERS: VipTier[] = [
-  { level: 0, name: 'None',       fafRequired: 0,         feeDiscount: 0,    referralRebate: 2,   spotLoDiscount: 10, dcaDiscount: 10 },
-  { level: 1, name: 'Level 1',    fafRequired: 20_000,    feeDiscount: 2.5,  referralRebate: 2.5, spotLoDiscount: 10, dcaDiscount: 10 },
-  { level: 2, name: 'Level 2',    fafRequired: 40_000,    feeDiscount: 3.5,  referralRebate: 3,   spotLoDiscount: 15, dcaDiscount: 15 },
-  { level: 3, name: 'Level 3',    fafRequired: 100_000,   feeDiscount: 5,    referralRebate: 4,   spotLoDiscount: 20, dcaDiscount: 20 },
-  { level: 4, name: 'Level 4',    fafRequired: 200_000,   feeDiscount: 7,    referralRebate: 5.5, spotLoDiscount: 25, dcaDiscount: 25 },
-  { level: 5, name: 'Level 5',    fafRequired: 1_000_000, feeDiscount: 9.5,  referralRebate: 7.5, spotLoDiscount: 30, dcaDiscount: 30 },
-  { level: 6, name: 'Level 6',    fafRequired: 2_000_000, feeDiscount: 12,   referralRebate: 10,  spotLoDiscount: 35, dcaDiscount: 35 },
+  { level: 0, name: 'None', fafRequired: 0, feeDiscount: 0, referralRebate: 2, spotLoDiscount: 10, dcaDiscount: 10 },
+  {
+    level: 1,
+    name: 'Level 1',
+    fafRequired: 20_000,
+    feeDiscount: 2.5,
+    referralRebate: 2.5,
+    spotLoDiscount: 10,
+    dcaDiscount: 10,
+  },
+  {
+    level: 2,
+    name: 'Level 2',
+    fafRequired: 40_000,
+    feeDiscount: 3.5,
+    referralRebate: 3,
+    spotLoDiscount: 15,
+    dcaDiscount: 15,
+  },
+  {
+    level: 3,
+    name: 'Level 3',
+    fafRequired: 100_000,
+    feeDiscount: 5,
+    referralRebate: 4,
+    spotLoDiscount: 20,
+    dcaDiscount: 20,
+  },
+  {
+    level: 4,
+    name: 'Level 4',
+    fafRequired: 200_000,
+    feeDiscount: 7,
+    referralRebate: 5.5,
+    spotLoDiscount: 25,
+    dcaDiscount: 25,
+  },
+  {
+    level: 5,
+    name: 'Level 5',
+    fafRequired: 1_000_000,
+    feeDiscount: 9.5,
+    referralRebate: 7.5,
+    spotLoDiscount: 30,
+    dcaDiscount: 30,
+  },
+  {
+    level: 6,
+    name: 'Level 6',
+    fafRequired: 2_000_000,
+    feeDiscount: 12,
+    referralRebate: 10,
+    spotLoDiscount: 35,
+    dcaDiscount: 35,
+  },
 ];
 
 // ─── Voltage Point Tiers ────────────────────────────────────────────────────
@@ -52,12 +100,12 @@ export interface VoltageTier {
 }
 
 export const VOLTAGE_TIERS: VoltageTier[] = [
-  { name: 'Rookie',      multiplier: 1.0 },
-  { name: 'Degenerate',  multiplier: 1.2 },
+  { name: 'Rookie', multiplier: 1.0 },
+  { name: 'Degenerate', multiplier: 1.2 },
   { name: 'Flow Master', multiplier: 1.4 },
-  { name: 'Ape Trade',   multiplier: 1.6 },
-  { name: 'Perp King',   multiplier: 1.8 },
-  { name: 'Giga Chad',   multiplier: 2.0 },
+  { name: 'Ape Trade', multiplier: 1.6 },
+  { name: 'Perp King', multiplier: 1.8 },
+  { name: 'Giga Chad', multiplier: 2.0 },
 ];
 
 // ─── Helpers ────────────────────────────────────────────────────────────────

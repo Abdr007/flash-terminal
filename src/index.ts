@@ -146,7 +146,7 @@ program
       const entries = await fstats.getLeaderboard(
         opts.metric,
         parseInt(opts.days ?? '30'),
-        parseInt(opts.limit ?? '10')
+        parseInt(opts.limit ?? '10'),
       );
       if (IS_AGENT) {
         const { agentOutput } = await import('./no-dna.js');
@@ -154,8 +154,12 @@ program
           action: 'leaderboard',
           metric: opts.metric ?? 'pnl',
           days: parseInt(opts.days ?? '30'),
-          entries: entries.map(e => ({
-            rank: e.rank, address: e.address, pnl: e.pnl, volume: e.volume, trades: e.trades,
+          entries: entries.map((e) => ({
+            rank: e.rank,
+            address: e.address,
+            pnl: e.pnl,
+            volume: e.volume,
+            trades: e.trades,
           })),
         });
         return;
@@ -211,7 +215,7 @@ program
           body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'getHealth' }),
           signal: AbortSignal.timeout(5000),
         });
-        const data = await res.json() as { result?: string };
+        const data = (await res.json()) as { result?: string };
         checks.push({
           name: 'rpc',
           status: data.result === 'ok' ? 'ok' : 'warn',
@@ -254,8 +258,14 @@ program
     // 5. AI provider
     const hasPrimaryAi = !!config.anthropicApiKey && config.anthropicApiKey !== 'sk-ant-...';
     const hasGroq = !!config.groqApiKey;
-    const aiDetail = hasPrimaryAi && hasGroq ? 'Primary + Groq'
-      : hasPrimaryAi ? 'Primary' : hasGroq ? 'Groq' : 'None (local parsing only)';
+    const aiDetail =
+      hasPrimaryAi && hasGroq
+        ? 'Primary + Groq'
+        : hasPrimaryAi
+          ? 'Primary'
+          : hasGroq
+            ? 'Groq'
+            : 'None (local parsing only)';
     checks.push({
       name: 'ai_provider',
       status: hasPrimaryAi || hasGroq ? 'ok' : 'warn',
@@ -271,21 +281,24 @@ program
       checks.push({
         name: 'wallet',
         status: defaultWallet ? 'ok' : wallets.length > 0 ? 'warn' : 'warn',
-        detail: defaultWallet ? `Default: ${defaultWallet}`
-          : wallets.length > 0 ? `${wallets.length} saved, none set as default` : 'Not configured',
+        detail: defaultWallet
+          ? `Default: ${defaultWallet}`
+          : wallets.length > 0
+            ? `${wallets.length} saved, none set as default`
+            : 'Not configured',
       });
     } catch {
       checks.push({ name: 'wallet', status: 'warn', detail: 'Not configured' });
     }
 
-    const allOk = checks.every(c => c.status !== 'fail');
+    const allOk = checks.every((c) => c.status !== 'fail');
 
     // Agent mode: structured JSON
     if (IS_AGENT) {
       agentOutput({
         action: 'doctor',
         healthy: allOk,
-        checks: checks.map(c => ({ name: c.name, status: c.status, detail: c.detail })),
+        checks: checks.map((c) => ({ name: c.name, status: c.status, detail: c.detail })),
       });
       return;
     }
@@ -376,7 +389,8 @@ program
   .description('Generate shell completion script (bash, zsh, fish)')
   .action(async (shell: string) => {
     try {
-      const { generateBashCompletion, generateZshCompletion, generateFishCompletion } = await import('./cli/shell-completion.js');
+      const { generateBashCompletion, generateZshCompletion, generateFishCompletion } =
+        await import('./cli/shell-completion.js');
       switch (shell.toLowerCase()) {
         case 'bash':
           process.stdout.write(generateBashCompletion());
@@ -431,7 +445,9 @@ program
     console.log(`  ${chalk.dim('Commit:')}    ${BUILD_INFO.gitHash}`);
     console.log(`  ${chalk.dim('Branch:')}    ${BUILD_INFO.branch}`);
     console.log(`  ${chalk.dim('Built:')}     ${BUILD_INFO.buildDate}`);
-    console.log(`  ${chalk.dim('Platform:')}  ${BUILD_INFO.platform ?? process.platform}/${BUILD_INFO.arch ?? process.arch}`);
+    console.log(
+      `  ${chalk.dim('Platform:')}  ${BUILD_INFO.platform ?? process.platform}/${BUILD_INFO.arch ?? process.arch}`,
+    );
     console.log(`  ${chalk.dim('Node:')}      v${process.versions.node}`);
     console.log(`  ${chalk.dim('Network:')}   Solana Mainnet`);
     console.log('');
@@ -456,14 +472,19 @@ program
       if (!res.ok) {
         // Package may not be published yet
         if (IS_AGENT) {
-          agentOutput({ action: 'update', status: 'unavailable', current_version: currentVersion, detail: 'Package not found on npm registry' });
+          agentOutput({
+            action: 'update',
+            status: 'unavailable',
+            current_version: currentVersion,
+            detail: 'Package not found on npm registry',
+          });
         } else {
           console.log('  Package not yet published to npm.');
           console.log(chalk.dim('  Update manually: git pull && npm run build'));
         }
         return;
       }
-      const data = await res.json() as { version: string };
+      const data = (await res.json()) as { version: string };
       latestVersion = data.version;
     } catch (error: unknown) {
       if (IS_AGENT) {
@@ -490,7 +511,12 @@ program
     // New version available
     if (opts.check) {
       if (IS_AGENT) {
-        agentOutput({ action: 'update', status: 'available', current_version: currentVersion, latest_version: latestVersion });
+        agentOutput({
+          action: 'update',
+          status: 'available',
+          current_version: currentVersion,
+          latest_version: latestVersion,
+        });
       } else {
         console.log(`  New version available: v${latestVersion} (current: v${currentVersion})`);
         console.log(chalk.dim(`  Run "flash update" to install.`));
@@ -521,7 +547,12 @@ program
       });
 
       if (IS_AGENT) {
-        agentOutput({ action: 'update', status: 'updated', previous_version: currentVersion, new_version: latestVersion });
+        agentOutput({
+          action: 'update',
+          status: 'updated',
+          previous_version: currentVersion,
+          new_version: latestVersion,
+        });
       } else {
         console.log('');
         console.log(chalk.green(`  Updated to v${latestVersion}.`));
@@ -530,7 +561,11 @@ program
       }
     } catch (error: unknown) {
       if (IS_AGENT) {
-        agentError('update_failed', { current_version: currentVersion, target_version: latestVersion, detail: getErrorMessage(error) });
+        agentError('update_failed', {
+          current_version: currentVersion,
+          target_version: latestVersion,
+          detail: getErrorMessage(error),
+        });
       } else {
         console.error(chalk.red(`  Update failed: ${getErrorMessage(error)}`));
         console.log(chalk.dim('  Try manually: npm install -g flash-terminal@latest'));

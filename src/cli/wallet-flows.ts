@@ -49,10 +49,7 @@ export interface WalletFlowState {
 // ─── tryConnectWallet ─────────────────────────────────────────────
 
 /** Try to connect a wallet from a file path. Returns info on success, null on failure. */
-export function tryConnectWallet(
-  walletManager: WalletManager,
-  path: string,
-): { address: string } | null {
+export function tryConnectWallet(walletManager: WalletManager, path: string): { address: string } | null {
   try {
     const result = walletManager.loadFromFile(path);
     return { address: result.address };
@@ -69,9 +66,7 @@ export function tryConnectWallet(
  * Auto-connects if a default or single wallet exists.
  * Returns wallet info on success, null if user chose exit.
  */
-export async function setupLiveMode(
-  deps: WalletFlowDeps,
-): Promise<{ address: string; name: string } | null> {
+export async function setupLiveMode(deps: WalletFlowDeps): Promise<{ address: string; name: string } | null> {
   const store = new WalletStore();
   const wallets = store.listWallets();
   let defaultWallet = store.getDefault();
@@ -334,9 +329,7 @@ export async function handleWalletCreateFlow(
   const rawSavePath = (await deps.ask(`  ${chalk.yellow('Save path:')} `)).trim();
   const savePath = rawSavePath || defaultPath;
 
-  const expandedPath = savePath.startsWith('~')
-    ? join(homedir(), savePath.slice(1))
-    : resolve(savePath);
+  const expandedPath = savePath.startsWith('~') ? join(homedir(), savePath.slice(1)) : resolve(savePath);
 
   try {
     const { Keypair } = await import('@solana/web3.js');
@@ -400,10 +393,7 @@ export async function handleWalletCreateFlow(
  * Interactive wallet import: prompts for name and wallet file path.
  * Registers the path in ~/.flash/wallets.json — never copies the private key.
  */
-export async function handleWalletImportFlow(
-  deps: WalletFlowDeps,
-  store: WalletStore,
-): Promise<string | null> {
+export async function handleWalletImportFlow(deps: WalletFlowDeps, store: WalletStore): Promise<string | null> {
   console.log('');
 
   const name = (await deps.ask(`  ${chalk.yellow('Wallet name:')} `)).trim();
@@ -458,9 +448,7 @@ export async function handleWalletImportFlow(
  * Interactive wallet connect: prompts for keypair file path,
  * validates, and connects.
  */
-export async function handleWalletConnectFlow(
-  deps: WalletFlowDeps,
-): Promise<boolean> {
+export async function handleWalletConnectFlow(deps: WalletFlowDeps): Promise<boolean> {
   console.log('');
 
   console.log(chalk.dim('  Enter path to your Solana wallet JSON file'));
@@ -472,9 +460,7 @@ export async function handleWalletConnectFlow(
   }
 
   // Expand ~ to home directory
-  const expandedPath = rawPath.startsWith('~')
-    ? join(homedir(), rawPath.slice(1))
-    : resolve(rawPath);
+  const expandedPath = rawPath.startsWith('~') ? join(homedir(), rawPath.slice(1)) : resolve(rawPath);
 
   if (!existsSync(expandedPath)) {
     console.log(chalk.red(`  File not found: ${expandedPath}`));
@@ -515,10 +501,7 @@ export function handleWalletDisconnected(): void {
  * Handle wallet reconnected in live mode.
  * Reinitialize the live client with the new wallet.
  */
-export async function handleWalletReconnected(
-  deps: WalletFlowDeps,
-  state: WalletFlowState,
-): Promise<void> {
+export async function handleWalletReconnected(deps: WalletFlowDeps, state: WalletFlowState): Promise<void> {
   // Only relevant in live mode — rebuild client with new wallet
   if (deps.config.simulationMode) return;
 

@@ -20,7 +20,7 @@
  */
 
 const RATE_POWER = 1_000_000_000; // Flash SDK RATE_DECIMALS = 9
-const BPS_POWER = 10_000;         // Flash SDK BPS_DECIMALS = 4
+const BPS_POWER = 10_000; // Flash SDK BPS_DECIMALS = 4
 
 /**
  * Thrown when CustodyAccount returns invalid or corrupted protocol parameters.
@@ -34,10 +34,10 @@ export class ProtocolParameterError extends Error {
 }
 
 export interface ProtocolFeeRates {
-  openFeeRate: number;            // e.g. 0.00051 = 0.051% (SOL)
-  closeFeeRate: number;           // e.g. 0.00051 = 0.051% (SOL)
-  maintenanceMarginRate: number;  // e.g. 0.001 = 0.1% — derived as 1/maxLeverage
-  maxLeverage: number;            // e.g. 1000 — from custody.pricing.maxLeverage / BPS_POWER
+  openFeeRate: number; // e.g. 0.00051 = 0.051% (SOL)
+  closeFeeRate: number; // e.g. 0.00051 = 0.051% (SOL)
+  maintenanceMarginRate: number; // e.g. 0.001 = 0.1% — derived as 1/maxLeverage
+  maxLeverage: number; // e.g. 1000 — from custody.pricing.maxLeverage / BPS_POWER
   source: 'on-chain' | 'sdk-default';
 }
 
@@ -86,11 +86,11 @@ async function getCurrentSlot(): Promise<number> {
  */
 function isCacheFresh(entry: CacheEntry, currentSlot: number): boolean {
   if (currentSlot > 0 && entry.cachedAtSlot > 0) {
-    return (currentSlot - entry.cachedAtSlot) < SLOT_STALE_THRESHOLD;
+    return currentSlot - entry.cachedAtSlot < SLOT_STALE_THRESHOLD;
   }
   // Fallback: time-based using last slot fetch time
   if (lastSlotFetchTime > 0) {
-    return (Date.now() - lastSlotFetchTime) < FALLBACK_TTL_MS;
+    return Date.now() - lastSlotFetchTime < FALLBACK_TTL_MS;
   }
   // No slot info at all — treat as stale
   return false;
@@ -107,10 +107,7 @@ function isCacheFresh(entry: CacheEntry, currentSlot: number): boolean {
  * @param perpClient - Flash SDK PerpetualsClient (or null for default)
  * @returns ProtocolFeeRates with source annotation
  */
-export async function getProtocolFeeRates(
-  market: string,
-  perpClient: unknown | null,
-): Promise<ProtocolFeeRates> {
+export async function getProtocolFeeRates(market: string, perpClient: unknown | null): Promise<ProtocolFeeRates> {
   const upper = market.toUpperCase();
 
   // Check cache with slot-based invalidation
@@ -131,9 +128,11 @@ export async function getProtocolFeeRates(
       if (poolName) {
         const pc = PoolConfig.fromIdsByName(poolName, 'mainnet-beta');
         const custodies = pc.custodies as unknown as Array<Record<string, unknown> & { symbol: string }>;
-        const custody = custodies.find(c => c.symbol.toUpperCase() === upper);
+        const custody = custodies.find((c) => c.symbol.toUpperCase() === upper);
         if (custody) {
-          const client = perpClient as unknown as { program: { account: { custody: { fetch: (key: unknown) => Promise<unknown> } } } };
+          const client = perpClient as unknown as {
+            program: { account: { custody: { fetch: (key: unknown) => Promise<unknown> } } };
+          };
           const custodyKey = custody.custodyAccount as Parameters<typeof CustodyAccount.from>[0];
           const rawData = await client.program.account.custody.fetch(custodyKey);
           // Must wrap with CustodyAccount.from() to get proper field structure
@@ -146,9 +145,7 @@ export async function getProtocolFeeRates(
           const closeFeeRate = closeFeeRaw / RATE_POWER;
 
           if (!Number.isFinite(openFeeRate) || openFeeRate < 0) {
-            throw new ProtocolParameterError(
-              `Invalid openFeeRate from CustodyAccount for ${upper}: raw=${openFeeRaw}`,
-            );
+            throw new ProtocolParameterError(`Invalid openFeeRate from CustodyAccount for ${upper}: raw=${openFeeRaw}`);
           }
           if (!Number.isFinite(closeFeeRate) || closeFeeRate < 0) {
             throw new ProtocolParameterError(
@@ -157,33 +154,31 @@ export async function getProtocolFeeRates(
           }
 
           // ── Max leverage validation ──
-          const rawMaxLev = (custodyAcct as unknown as Record<string, Record<string, unknown>>).pricing?.maxLeverage as unknown;
-          const maxLevRaw = typeof rawMaxLev === 'object' && rawMaxLev !== null && 'toNumber' in rawMaxLev
-            ? (rawMaxLev as { toNumber: () => number }).toNumber()
-            : typeof rawMaxLev === 'number' ? rawMaxLev : 0;
+          const rawMaxLev = (custodyAcct as unknown as Record<string, Record<string, unknown>>).pricing
+            ?.maxLeverage as unknown;
+          const maxLevRaw =
+            typeof rawMaxLev === 'object' && rawMaxLev !== null && 'toNumber' in rawMaxLev
+              ? (rawMaxLev as { toNumber: () => number }).toNumber()
+              : typeof rawMaxLev === 'number'
+                ? rawMaxLev
+                : 0;
 
           const maxLeverage = maxLevRaw / BPS_POWER;
 
           if (!Number.isFinite(maxLeverage) || maxLeverage <= 0) {
-            throw new ProtocolParameterError(
-              `Invalid maxLeverage from CustodyAccount for ${upper}: raw=${maxLevRaw}`,
-            );
+            throw new ProtocolParameterError(`Invalid maxLeverage from CustodyAccount for ${upper}: raw=${maxLevRaw}`);
           }
 
           // ── Maintenance margin validation ──
           const maintenanceMarginRate = 1 / maxLeverage;
 
           if (!Number.isFinite(maintenanceMarginRate) || maintenanceMarginRate <= 0) {
-            throw new ProtocolParameterError(
-              `Invalid maintenanceMarginRate derived for ${upper}: 1/${maxLeverage}`,
-            );
+            throw new ProtocolParameterError(`Invalid maintenanceMarginRate derived for ${upper}: 1/${maxLeverage}`);
           }
 
           // ── Protocol invariant checks ──
           if (maintenanceMarginRate >= 1) {
-            throw new ProtocolParameterError(
-              `Protocol invariant violation: maintenance margin ≥ 100% for ${upper}`,
-            );
+            throw new ProtocolParameterError(`Protocol invariant violation: maintenance margin ≥ 100% for ${upper}`);
           }
           if (openFeeRate > 0.1 || closeFeeRate > 0.1) {
             throw new ProtocolParameterError(
@@ -220,16 +215,26 @@ export async function getProtocolFeeRates(
       if (stale && stale.rates.source === 'on-chain') {
         try {
           const { getLogger } = await import('../utils/logger.js');
-          getLogger().warn('FEES', `RPC fetch failed for ${upper}, using cached on-chain rates (slot ${stale.cachedAtSlot}): ${err instanceof Error ? err.message : 'unknown'}`);
-        } catch { /* logger not available — continue silently */ }
+          getLogger().warn(
+            'FEES',
+            `RPC fetch failed for ${upper}, using cached on-chain rates (slot ${stale.cachedAtSlot}): ${err instanceof Error ? err.message : 'unknown'}`,
+          );
+        } catch {
+          /* logger not available — continue silently */
+        }
         return stale.rates;
       }
 
       // No cached on-chain data — fall through to SDK defaults with warning
       try {
         const { getLogger } = await import('../utils/logger.js');
-        getLogger().warn('FEES', `RPC fetch failed for ${upper}, using SDK defaults: ${err instanceof Error ? err.message : 'unknown'}`);
-      } catch { /* logger not available — continue silently */ }
+        getLogger().warn(
+          'FEES',
+          `RPC fetch failed for ${upper}, using SDK defaults: ${err instanceof Error ? err.message : 'unknown'}`,
+        );
+      } catch {
+        /* logger not available — continue silently */
+      }
     }
   }
 
@@ -265,7 +270,7 @@ export function sweepExpiredCache(): void {
   const now = Date.now();
   // If we have no slot info, use time-based expiry
   for (const [key, entry] of feeCache) {
-    if (entry.cachedAtSlot === 0 && lastSlotFetchTime > 0 && (now - lastSlotFetchTime) > FALLBACK_TTL_MS * 2) {
+    if (entry.cachedAtSlot === 0 && lastSlotFetchTime > 0 && now - lastSlotFetchTime > FALLBACK_TTL_MS * 2) {
       feeCache.delete(key);
     }
   }

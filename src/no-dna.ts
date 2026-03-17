@@ -30,11 +30,7 @@ export function restoreOutputMode(): void {
 }
 
 /** Write a structured JSON error to stderr and optionally exit. */
-export function agentError(
-  error: string,
-  details?: Record<string, unknown>,
-  exitCode?: number,
-): void {
+export function agentError(error: string, details?: Record<string, unknown>, exitCode?: number): void {
   const payload = { error, timestamp: new Date().toISOString(), ...details };
   process.stderr.write(JSON.stringify(payload) + '\n');
   if (exitCode !== undefined) {

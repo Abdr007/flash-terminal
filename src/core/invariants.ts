@@ -20,21 +20,15 @@ export class InvariantViolationError extends Error {
  */
 export function validatePosition(p: Position): void {
   if (!Number.isFinite(p.entryPrice) || p.entryPrice <= 0) {
-    throw new InvariantViolationError(
-      `${p.market} ${p.side}: entry price must be positive, got ${p.entryPrice}`,
-    );
+    throw new InvariantViolationError(`${p.market} ${p.side}: entry price must be positive, got ${p.entryPrice}`);
   }
 
   if (!Number.isFinite(p.sizeUsd) || p.sizeUsd <= 0) {
-    throw new InvariantViolationError(
-      `${p.market} ${p.side}: position size must be positive, got ${p.sizeUsd}`,
-    );
+    throw new InvariantViolationError(`${p.market} ${p.side}: position size must be positive, got ${p.sizeUsd}`);
   }
 
   if (!Number.isFinite(p.collateralUsd) || p.collateralUsd <= 0) {
-    throw new InvariantViolationError(
-      `${p.market} ${p.side}: collateral must be positive, got ${p.collateralUsd}`,
-    );
+    throw new InvariantViolationError(`${p.market} ${p.side}: collateral must be positive, got ${p.collateralUsd}`);
   }
 
   if (!Number.isFinite(p.totalFees) || p.totalFees < 0) {
@@ -44,9 +38,7 @@ export function validatePosition(p: Position): void {
   }
 
   if (!Number.isFinite(p.leverage) || p.leverage <= 0) {
-    throw new InvariantViolationError(
-      `${p.market} ${p.side}: leverage must be positive, got ${p.leverage}`,
-    );
+    throw new InvariantViolationError(`${p.market} ${p.side}: leverage must be positive, got ${p.leverage}`);
   }
 }
 
@@ -83,8 +75,6 @@ export function assertFinite(value: number, label: string): void {
 export function assertPercentageSum(a: number, b: number, label: string, tolerance = 2): void {
   const sum = a + b;
   if (Math.abs(sum - 100) > tolerance) {
-    throw new InvariantViolationError(
-      `${label}: ${a}% + ${b}% = ${sum}% (expected ~100%)`,
-    );
+    throw new InvariantViolationError(`${label}: ${a}% + ${b}% = ${sum}% (expected ~100%)`);
   }
 }

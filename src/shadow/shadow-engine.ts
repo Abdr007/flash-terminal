@@ -206,7 +206,9 @@ export class ShadowEngine {
     this.enabled = true;
     try {
       getLogger().info('SHADOW', 'Shadow trading enabled');
-    } catch { /* never throw */ }
+    } catch {
+      /* never throw */
+    }
   }
 
   /** Disable shadow trading at runtime. */
@@ -214,7 +216,9 @@ export class ShadowEngine {
     this.enabled = false;
     try {
       getLogger().info('SHADOW', 'Shadow trading disabled');
-    } catch { /* never throw */ }
+    } catch {
+      /* never throw */
+    }
   }
 }
 

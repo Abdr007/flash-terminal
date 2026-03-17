@@ -67,10 +67,7 @@ export class RiskMirror {
    * Compare live positions against shadow positions.
    * Returns detected divergences (empty = aligned).
    */
-  async compare(
-    liveClient: IFlashClient,
-    shadowEngine: ShadowEngine,
-  ): Promise<RiskMirrorSnapshot> {
+  async compare(liveClient: IFlashClient, shadowEngine: ShadowEngine): Promise<RiskMirrorSnapshot> {
     const now = new Date().toISOString();
     const divergences: RiskDivergence[] = [];
 
@@ -117,10 +114,8 @@ export class RiskMirror {
     }
 
     // Exposure divergence
-    const liveExposure = livePositions.reduce((s, p) =>
-      s + (Number.isFinite(p.sizeUsd) ? p.sizeUsd : 0), 0);
-    const shadowExposure = shadowPositions.reduce((s, p) =>
-      s + (Number.isFinite(p.sizeUsd) ? p.sizeUsd : 0), 0);
+    const liveExposure = livePositions.reduce((s, p) => s + (Number.isFinite(p.sizeUsd) ? p.sizeUsd : 0), 0);
+    const shadowExposure = shadowPositions.reduce((s, p) => s + (Number.isFinite(p.sizeUsd) ? p.sizeUsd : 0), 0);
 
     if (Math.abs(liveExposure - shadowExposure) > this.config.exposureThresholdUsd) {
       divergences.push({
@@ -135,9 +130,7 @@ export class RiskMirror {
 
     // Per-position PnL and liquidation divergence
     for (const livePos of livePositions) {
-      const shadowPos = shadowPositions.find(
-        p => p.market === livePos.market && p.side === livePos.side,
-      );
+      const shadowPos = shadowPositions.find((p) => p.market === livePos.market && p.side === livePos.side);
       if (!shadowPos) continue;
 
       // PnL divergence
@@ -155,8 +148,8 @@ export class RiskMirror {
 
       // Liquidation price divergence
       if (livePos.liquidationPrice > 0 && shadowPos.liquidationPrice > 0) {
-        const liqDeltaPct = Math.abs(livePos.liquidationPrice - shadowPos.liquidationPrice)
-          / livePos.liquidationPrice * 100;
+        const liqDeltaPct =
+          (Math.abs(livePos.liquidationPrice - shadowPos.liquidationPrice) / livePos.liquidationPrice) * 100;
         if (liqDeltaPct > this.config.liqThresholdPercent) {
           divergences.push({
             type: 'liquidation',
@@ -182,7 +175,9 @@ export class RiskMirror {
             delta: d.delta,
           });
         }
-      } catch { /* logging must never throw */ }
+      } catch {
+        /* logging must never throw */
+      }
 
       // Store in history (bounded)
       for (const d of divergences) {

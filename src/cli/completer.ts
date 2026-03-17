@@ -21,7 +21,13 @@ import { loadTemplates } from './trade-templates.js';
 const COMMANDS: string[] = getAutocompleteCommands();
 
 /** All market symbols from POOL_MARKETS (uppercase) */
-const ALL_MARKETS: string[] = [...new Set(Object.values(POOL_MARKETS).flat().map(s => s.toUpperCase()))];
+const ALL_MARKETS: string[] = [
+  ...new Set(
+    Object.values(POOL_MARKETS)
+      .flat()
+      .map((s) => s.toUpperCase()),
+  ),
+];
 
 /** Pool names for 'inspect pool' completion */
 const POOL_NAMES: string[] = Object.keys(POOL_MARKETS);
@@ -29,41 +35,15 @@ const POOL_NAMES: string[] = Object.keys(POOL_MARKETS);
 // ─── Usage Examples ──────────────────────────────────────────────────────────
 
 const USAGE_EXAMPLES: Record<string, string[]> = {
-  'open': [
-    'open 5x long SOL $500',
-    'open 3x short ETH $200',
-    'open 10x long BTC $1000',
-  ],
-  'close': [
-    'close SOL long',
-    'close ETH short',
-  ],
-  'add': [
-    'add $100 to SOL long',
-    'add $50 to BTC short',
-  ],
-  'remove': [
-    'remove $100 from SOL long',
-    'remove $50 from BTC short',
-  ],
-  'analyze': [
-    'analyze SOL',
-    'analyze BTC',
-    'analyze ETH',
-  ],
-  'dryrun': [
-    'dryrun open 5x long SOL $500',
-    'dryrun close ETH short',
-  ],
-  'monitor': [],
-  'inspect pool': [
-    ...POOL_NAMES.map(p => `inspect pool ${p}`),
-  ],
-  'inspect market': [
-    'inspect market SOL',
-    'inspect market BTC',
-    'inspect market ETH',
-  ],
+  open: ['open 5x long SOL $500', 'open 3x short ETH $200', 'open 10x long BTC $1000'],
+  close: ['close SOL long', 'close ETH short'],
+  add: ['add $100 to SOL long', 'add $50 to BTC short'],
+  remove: ['remove $100 from SOL long', 'remove $50 from BTC short'],
+  analyze: ['analyze SOL', 'analyze BTC', 'analyze ETH'],
+  dryrun: ['dryrun open 5x long SOL $500', 'dryrun close ETH short'],
+  monitor: [],
+  'inspect pool': [...POOL_NAMES.map((p) => `inspect pool ${p}`)],
+  'inspect market': ['inspect market SOL', 'inspect market BTC', 'inspect market ETH'],
 };
 
 // ─── Completer Function ──────────────────────────────────────────────────────
@@ -83,11 +63,9 @@ export function completer(line: string): [string[], string] {
   // 2. Pool name completion for 'inspect pool'
   if (lower.startsWith('inspect pool ')) {
     const partial = trimmed.slice('inspect pool '.length).trim();
-    const matches = POOL_NAMES.filter(p =>
-      p.toLowerCase().startsWith(partial.toLowerCase()),
-    );
+    const matches = POOL_NAMES.filter((p) => p.toLowerCase().startsWith(partial.toLowerCase()));
     if (matches.length > 0) {
-      return [matches.map(m => `inspect pool ${m}`), trimmed];
+      return [matches.map((m) => `inspect pool ${m}`), trimmed];
     }
     return [[], trimmed];
   }
@@ -95,9 +73,9 @@ export function completer(line: string): [string[], string] {
   // 3. Market completion for 'inspect market'
   if (lower.startsWith('inspect market ')) {
     const partial = trimmed.slice('inspect market '.length).trim().toUpperCase();
-    const matches = ALL_MARKETS.filter(m => m.startsWith(partial));
+    const matches = ALL_MARKETS.filter((m) => m.startsWith(partial));
     if (matches.length > 0) {
-      return [matches.map(m => `inspect market ${m}`), trimmed];
+      return [matches.map((m) => `inspect market ${m}`), trimmed];
     }
     return [[], trimmed];
   }
@@ -109,7 +87,9 @@ export function completer(line: string): [string[], string] {
       if (predictions.length > 0) {
         return [predictions, trimmed];
       }
-    } catch { /* non-critical */ }
+    } catch {
+      /* non-critical */
+    }
   }
 
   // 5. Template + learned alias prefix matching
@@ -117,21 +97,23 @@ export function completer(line: string): [string[], string] {
     const aliases = loadAliases();
     const templates = loadTemplates();
     const allShortcuts = { ...aliases, ...templates };
-    const shortcutMatches = Object.keys(allShortcuts).filter(a => a.startsWith(lower));
+    const shortcutMatches = Object.keys(allShortcuts).filter((a) => a.startsWith(lower));
     if (shortcutMatches.length > 0) {
       return [shortcutMatches, trimmed];
     }
-  } catch { /* non-critical */ }
+  } catch {
+    /* non-critical */
+  }
 
   // 6. Command prefix matching
-  const matches = COMMANDS.filter(cmd => cmd.startsWith(lower));
+  const matches = COMMANDS.filter((cmd) => cmd.startsWith(lower));
 
   if (matches.length > 0) {
     return [matches, trimmed];
   }
 
   // 7. Fuzzy fallback — find commands containing the typed text
-  const fuzzy = COMMANDS.filter(cmd => cmd.includes(lower));
+  const fuzzy = COMMANDS.filter((cmd) => cmd.includes(lower));
   return [fuzzy, trimmed];
 }
 
@@ -147,8 +129,8 @@ function matchMarketContext(lower: string, original: string): [string[], string]
   if (openMatch) {
     const partial = openMatch[2].toUpperCase();
     const prefix = original.slice(0, original.length - openMatch[2].length);
-    const matches = ALL_MARKETS.filter(m => m.startsWith(partial));
-    return [matches.map(m => prefix + m), original];
+    const matches = ALL_MARKETS.filter((m) => m.startsWith(partial));
+    return [matches.map((m) => prefix + m), original];
   }
 
   // "close s" → suggest SOL
@@ -156,9 +138,9 @@ function matchMarketContext(lower: string, original: string): [string[], string]
   if (closeMatch) {
     const partial = closeMatch[1].toUpperCase();
     const prefix = original.slice(0, original.length - closeMatch[1].length);
-    const matches = ALL_MARKETS.filter(m => m.startsWith(partial));
+    const matches = ALL_MARKETS.filter((m) => m.startsWith(partial));
     if (matches.length > 0) {
-      return [matches.map(m => prefix + m), original];
+      return [matches.map((m) => prefix + m), original];
     }
   }
 
@@ -167,9 +149,9 @@ function matchMarketContext(lower: string, original: string): [string[], string]
   if (analyzeMatch) {
     const partial = analyzeMatch[1].toUpperCase();
     const prefix = original.slice(0, original.length - analyzeMatch[1].length);
-    const matches = ALL_MARKETS.filter(m => m.startsWith(partial));
+    const matches = ALL_MARKETS.filter((m) => m.startsWith(partial));
     if (matches.length > 0) {
-      return [matches.map(m => prefix + m), original];
+      return [matches.map((m) => prefix + m), original];
     }
   }
 
@@ -178,9 +160,9 @@ function matchMarketContext(lower: string, original: string): [string[], string]
   if (addMatch) {
     const partial = addMatch[1].toUpperCase();
     const prefix = original.slice(0, original.length - addMatch[1].length);
-    const matches = ALL_MARKETS.filter(m => m.startsWith(partial));
+    const matches = ALL_MARKETS.filter((m) => m.startsWith(partial));
     if (matches.length > 0) {
-      return [matches.map(m => prefix + m), original];
+      return [matches.map((m) => prefix + m), original];
     }
   }
 
@@ -189,9 +171,9 @@ function matchMarketContext(lower: string, original: string): [string[], string]
   if (removeMatch) {
     const partial = removeMatch[1].toUpperCase();
     const prefix = original.slice(0, original.length - removeMatch[1].length);
-    const matches = ALL_MARKETS.filter(m => m.startsWith(partial));
+    const matches = ALL_MARKETS.filter((m) => m.startsWith(partial));
     if (matches.length > 0) {
-      return [matches.map(m => prefix + m), original];
+      return [matches.map((m) => prefix + m), original];
     }
   }
 
@@ -200,9 +182,9 @@ function matchMarketContext(lower: string, original: string): [string[], string]
   if (posDebugMatch) {
     const partial = posDebugMatch[1].toUpperCase();
     const prefix = original.slice(0, original.length - posDebugMatch[1].length);
-    const matches = ALL_MARKETS.filter(m => m.startsWith(partial));
+    const matches = ALL_MARKETS.filter((m) => m.startsWith(partial));
     if (matches.length > 0) {
-      return [matches.map(m => prefix + m), original];
+      return [matches.map((m) => prefix + m), original];
     }
   }
 
@@ -211,9 +193,9 @@ function matchMarketContext(lower: string, original: string): [string[], string]
   if (observabilityMatch) {
     const partial = observabilityMatch[2].toUpperCase();
     const prefix = original.slice(0, original.length - observabilityMatch[2].length);
-    const matches = ALL_MARKETS.filter(m => m.startsWith(partial));
+    const matches = ALL_MARKETS.filter((m) => m.startsWith(partial));
     if (matches.length > 0) {
-      return [matches.map(m => prefix + m), original];
+      return [matches.map((m) => prefix + m), original];
     }
   }
 
@@ -222,9 +204,9 @@ function matchMarketContext(lower: string, original: string): [string[], string]
   if (inspectMatch && !['protocol', 'pool', 'market'].includes(inspectMatch[1])) {
     const partial = inspectMatch[1].toUpperCase();
     const prefix = original.slice(0, original.length - inspectMatch[1].length);
-    const matches = ALL_MARKETS.filter(m => m.startsWith(partial));
+    const matches = ALL_MARKETS.filter((m) => m.startsWith(partial));
     if (matches.length > 0) {
-      return [matches.map(m => prefix + m), original];
+      return [matches.map((m) => prefix + m), original];
     }
   }
 
@@ -273,23 +255,17 @@ function getPositionAwareSuggestions(
   positions: { market: string; side: string; sizeUsd: number }[],
 ): string | null {
   if (lower === 'close' && positions.length > 0) {
-    const examples = positions.slice(0, 3).map(p =>
-      `close ${p.market} ${p.side.toLowerCase()}`,
-    );
+    const examples = positions.slice(0, 3).map((p) => `close ${p.market} ${p.side.toLowerCase()}`);
     return formatSuggestions(examples);
   }
 
   if (lower === 'add' && positions.length > 0) {
-    const examples = positions.slice(0, 3).map(p =>
-      `add $50 to ${p.market} ${p.side.toLowerCase()}`,
-    );
+    const examples = positions.slice(0, 3).map((p) => `add $50 to ${p.market} ${p.side.toLowerCase()}`);
     return formatSuggestions(examples);
   }
 
   if (lower === 'remove' && positions.length > 0) {
-    const examples = positions.slice(0, 3).map(p =>
-      `remove $50 from ${p.market} ${p.side.toLowerCase()}`,
-    );
+    const examples = positions.slice(0, 3).map((p) => `remove $50 from ${p.market} ${p.side.toLowerCase()}`);
     return formatSuggestions(examples);
   }
 
@@ -305,7 +281,7 @@ function findDidYouMean(input: string): string | null {
     // Strip non-alpha and try matching
     const cleaned = input.replace(/[^a-z0-9\s-]/g, '').trim();
     if (cleaned) {
-      const exact = COMMANDS.find(c => c === cleaned);
+      const exact = COMMANDS.find((c) => c === cleaned);
       if (exact) {
         return formatDidYouMean([exact]);
       }
@@ -313,7 +289,7 @@ function findDidYouMean(input: string): string | null {
   }
 
   // Find commands within edit distance 2
-  const close = COMMANDS.filter(cmd => {
+  const close = COMMANDS.filter((cmd) => {
     if (Math.abs(cmd.length - input.length) > 2) return false;
     return editDistance(input, cmd) <= 2;
   });
@@ -323,7 +299,7 @@ function findDidYouMean(input: string): string | null {
   }
 
   // Prefix match fallback
-  const prefixed = COMMANDS.filter(cmd => cmd.startsWith(input.slice(0, 3)));
+  const prefixed = COMMANDS.filter((cmd) => cmd.startsWith(input.slice(0, 3)));
   if (prefixed.length > 0 && prefixed.length <= 5) {
     return formatDidYouMean(prefixed);
   }
@@ -363,21 +339,11 @@ function editDistance(a: string, b: string): number {
 // ─── Formatting Helpers ──────────────────────────────────────────────────────
 
 function formatSuggestions(examples: string[]): string {
-  const lines = [
-    '',
-    `  ${theme.section('Suggestions')}`,
-    ...examples.map(e => `    ${theme.command(e)}`),
-    '',
-  ];
+  const lines = ['', `  ${theme.section('Suggestions')}`, ...examples.map((e) => `    ${theme.command(e)}`), ''];
   return lines.join('\n');
 }
 
 function formatDidYouMean(matches: string[]): string {
-  const lines = [
-    '',
-    `  ${theme.section('Did you mean?')}`,
-    ...matches.map(m => `    ${theme.command(m)}`),
-    '',
-  ];
+  const lines = ['', `  ${theme.section('Did you mean?')}`, ...matches.map((m) => `    ${theme.command(m)}`), ''];
   return lines.join('\n');
 }

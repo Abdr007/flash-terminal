@@ -144,7 +144,7 @@ export class RpcManager {
   getFailureRate(url: string): number {
     const history = this.failureHistory.get(url);
     if (!history || history.length === 0) return 0;
-    const failures = history.filter(s => !s).length;
+    const failures = history.filter((s) => !s).length;
     return failures / history.length;
   }
 
@@ -181,8 +181,7 @@ export class RpcManager {
       const conn = new Connection(endpoint.url, {
         commitment: 'confirmed',
         disableRetryOnRateLimit: true,
-        fetch: (url, options) =>
-          fetch(url, { ...options, signal: AbortSignal.timeout(HEALTH_CHECK_TIMEOUT_MS) }),
+        fetch: (url, options) => fetch(url, { ...options, signal: AbortSignal.timeout(HEALTH_CHECK_TIMEOUT_MS) }),
       });
       const start = Date.now();
       await conn.getLatestBlockhash('confirmed');
@@ -200,7 +199,10 @@ export class RpcManager {
           const MAX_SLOT_JUMP = 1000;
           if (maxKnownSlot > 0 && slot > maxKnownSlot + MAX_SLOT_JUMP) {
             const logger = getLogger();
-            logger.warn('RPC', `Suspicious slot ${slot} from ${endpoint.label} (max known: ${maxKnownSlot}, jump: ${slot - maxKnownSlot}) — ignoring`);
+            logger.warn(
+              'RPC',
+              `Suspicious slot ${slot} from ${endpoint.label} (max known: ${maxKnownSlot}, jump: ${slot - maxKnownSlot}) — ignoring`,
+            );
             // Don't update slotHistory with suspicious value
           } else {
             this.slotHistory.set(endpoint.url, slot);
@@ -239,7 +241,7 @@ export class RpcManager {
    * Check health of all configured endpoints.
    */
   async checkAllHealth(): Promise<RpcHealthResult[]> {
-    return Promise.all(this.endpoints.map(ep => this.checkHealth(ep)));
+    return Promise.all(this.endpoints.map((ep) => this.checkHealth(ep)));
   }
 
   /**
@@ -356,7 +358,10 @@ export class RpcManager {
     const failureRate = this.getFailureRate(this.activeEndpoint.url);
     if (failureRate >= FAILURE_RATE_THRESHOLD && this.fallbackCount > 0) {
       const logger = getLogger();
-      logger.warn('RPC', `High failure rate (${(failureRate * 100).toFixed(0)}%) on ${this.activeEndpoint.label} — attempting failover`);
+      logger.warn(
+        'RPC',
+        `High failure rate (${(failureRate * 100).toFixed(0)}%) on ${this.activeEndpoint.label} — attempting failover`,
+      );
       const didFailover = await this.failover();
       if (didFailover) return this._connection;
     }
@@ -403,17 +408,26 @@ export class RpcManager {
           this.consecutiveMonitorFailures++;
           // Suppress log spam during prolonged outages — log every 5th failure
           if (this.consecutiveMonitorFailures <= 3 || this.consecutiveMonitorFailures % 5 === 0) {
-            logger.warn('RPC', `Active RPC ${this.activeEndpoint.label} unhealthy (${this.consecutiveMonitorFailures} consecutive) — attempting failover`);
+            logger.warn(
+              'RPC',
+              `Active RPC ${this.activeEndpoint.label} unhealthy (${this.consecutiveMonitorFailures} consecutive) — attempting failover`,
+            );
           }
           await this.failover();
         } else if (health.latencyMs > LATENCY_THRESHOLD_MS) {
-          logger.warn('RPC', `Active RPC ${this.activeEndpoint.label} latency ${health.latencyMs}ms > ${LATENCY_THRESHOLD_MS}ms threshold`);
+          logger.warn(
+            'RPC',
+            `Active RPC ${this.activeEndpoint.label} latency ${health.latencyMs}ms > ${LATENCY_THRESHOLD_MS}ms threshold`,
+          );
           if (this.fallbackCount > 0) {
             await this.failover();
           }
           this.consecutiveMonitorFailures = 0;
         } else if (health.slotLag !== undefined && health.slotLag > SLOT_LAG_THRESHOLD) {
-          logger.warn('RPC', `Active RPC ${this.activeEndpoint.label} is ${health.slotLag} slots behind (threshold: ${SLOT_LAG_THRESHOLD}) — attempting failover`);
+          logger.warn(
+            'RPC',
+            `Active RPC ${this.activeEndpoint.label} is ${health.slotLag} slots behind (threshold: ${SLOT_LAG_THRESHOLD}) — attempting failover`,
+          );
           if (this.fallbackCount > 0) {
             await this.failover();
           }
@@ -421,7 +435,10 @@ export class RpcManager {
         } else {
           // Healthy — reset consecutive failure counter and degraded flag
           if (this.consecutiveMonitorFailures > 0) {
-            logger.info('RPC', `Active RPC ${this.activeEndpoint.label} recovered after ${this.consecutiveMonitorFailures} consecutive failures`);
+            logger.info(
+              'RPC',
+              `Active RPC ${this.activeEndpoint.label} recovered after ${this.consecutiveMonitorFailures} consecutive failures`,
+            );
           }
           this.consecutiveMonitorFailures = 0;
           this._allEndpointsDown = false;
@@ -463,8 +480,7 @@ export class RpcManager {
         const conn = new Connection(ep.url, {
           commitment: 'processed',
           disableRetryOnRateLimit: true,
-          fetch: (url, options) =>
-            fetch(url, { ...options, signal: AbortSignal.timeout(HEALTH_CHECK_TIMEOUT_MS) }),
+          fetch: (url, options) => fetch(url, { ...options, signal: AbortSignal.timeout(HEALTH_CHECK_TIMEOUT_MS) }),
         });
         const start = Date.now();
         const slot = await conn.getSlot('processed');
@@ -565,7 +581,7 @@ export class RpcManager {
     }
 
     // Clear partition state only after cooldown
-    if (this._partitionDetected && (Date.now() - this.partitionDetectedAt) > PARTITION_COOLDOWN_MS) {
+    if (this._partitionDetected && Date.now() - this.partitionDetectedAt > PARTITION_COOLDOWN_MS) {
       this._partitionDetected = false;
       getLogger().info('RPC', `Network partition cleared: slot divergence ${divergence}`);
     }
@@ -596,10 +612,12 @@ export class RpcManager {
           connections.push(this._connection);
         } else {
           try {
-            connections.push(new Connection(ep.url, {
-              commitment: 'confirmed',
-              disableRetryOnRateLimit: true,
-            }));
+            connections.push(
+              new Connection(ep.url, {
+                commitment: 'confirmed',
+                disableRetryOnRateLimit: true,
+              }),
+            );
           } catch {
             // Skip invalid endpoints
           }
@@ -676,7 +694,7 @@ export class RpcManager {
       const parsed = new URL(url);
       // Mask path segments that look like API keys (long alphanumeric strings)
       const parts = parsed.pathname.split('/');
-      const masked = parts.map(p => p.length > 20 ? p.slice(0, 6) + '***' : p);
+      const masked = parts.map((p) => (p.length > 20 ? p.slice(0, 6) + '***' : p));
       parsed.pathname = masked.join('/');
       // Remove query params that might contain keys
       if (parsed.search) {
@@ -715,9 +733,7 @@ export class RpcManager {
  * Accepts the primary URL and optional backup URLs from the config.
  */
 export function buildRpcEndpoints(primaryUrl: string, backupUrls?: string[]): RpcEndpoint[] {
-  const endpoints: RpcEndpoint[] = [
-    { url: primaryUrl, label: labelFromUrl(primaryUrl) },
-  ];
+  const endpoints: RpcEndpoint[] = [{ url: primaryUrl, label: labelFromUrl(primaryUrl) }];
 
   if (backupUrls) {
     for (const url of backupUrls) {

@@ -45,16 +45,17 @@ export class Logger {
   /** Correlation ID for the current request/command. */
   private static _requestId: string | null = null;
 
-  static setRequestId(id: string): void { Logger._requestId = id; }
-  static clearRequestId(): void { Logger._requestId = null; }
-  static get requestId(): string | null { return Logger._requestId; }
+  static setRequestId(id: string): void {
+    Logger._requestId = id;
+  }
+  static clearRequestId(): void {
+    Logger._requestId = null;
+  }
+  static get requestId(): string | null {
+    return Logger._requestId;
+  }
 
-  constructor(opts?: {
-    level?: LogLevel;
-    logFile?: string;
-    showInCli?: boolean;
-    format?: LogFormat;
-  }) {
+  constructor(opts?: { level?: LogLevel; logFile?: string; showInCli?: boolean; format?: LogFormat }) {
     this.level = opts?.level ?? LogLevel.Info;
     this.logFilePath = opts?.logFile ?? null;
     this.showInCli = opts?.showInCli ?? false;
@@ -107,16 +108,19 @@ export class Logger {
     this.info('TRADE', `${action}`, details);
   }
 
-  tradeStructured(action: string, details: {
-    market?: string;
-    side?: string;
-    leverage?: number;
-    collateral?: number;
-    sizeUsd?: number;
-    txSignature?: string;
-    latencyMs?: number;
-    error?: string;
-  }): void {
+  tradeStructured(
+    action: string,
+    details: {
+      market?: string;
+      side?: string;
+      leverage?: number;
+      collateral?: number;
+      sizeUsd?: number;
+      txSignature?: string;
+      latencyMs?: number;
+      error?: string;
+    },
+  ): void {
     this.info('TRADE', action, details as Record<string, unknown>);
   }
 
@@ -124,12 +128,7 @@ export class Logger {
     this.debug('API', endpoint, details);
   }
 
-  private log(
-    level: LogLevel,
-    category: string,
-    message: string,
-    data?: Record<string, unknown>
-  ): void {
+  private log(level: LogLevel, category: string, message: string, data?: Record<string, unknown>): void {
     if (level < this.level) return;
 
     const entry: LogEntry = {
@@ -153,12 +152,14 @@ export class Logger {
 
   /** Scrub sensitive data from strings before writing to logs. */
   private scrub(text: string): string {
-    return text
-      .replace(/api[_-]?key=[^&\s"]+/gi, 'api_key=***')
-      .replace(/sk-ant-[^\s"]+/g, 'sk-ant-***')
-      .replace(/gsk_[^\s"]+/g, 'gsk_***')
-      // [L-12] Mask base58 private keys (64-88 chars of base58 alphabet)
-      .replace(/[1-9A-HJ-NP-Za-km-z]{64,88}/g, (m) => m.slice(0, 8) + '***REDACTED***');
+    return (
+      text
+        .replace(/api[_-]?key=[^&\s"]+/gi, 'api_key=***')
+        .replace(/sk-ant-[^\s"]+/g, 'sk-ant-***')
+        .replace(/gsk_[^\s"]+/g, 'gsk_***')
+        // [L-12] Mask base58 private keys (64-88 chars of base58 alphabet)
+        .replace(/[1-9A-HJ-NP-Za-km-z]{64,88}/g, (m) => m.slice(0, 8) + '***REDACTED***')
+    );
   }
 
   private logRotationChecked = 0;
@@ -196,11 +197,17 @@ export class Logger {
         const size = statSync(this.logFilePath).size;
         if (size > MAX_LOG_FILE_BYTES) {
           const rotated = this.logFilePath + '.old';
-          try { renameSync(rotated, rotated + '.2'); } catch { /* ignore */ }
+          try {
+            renameSync(rotated, rotated + '.2');
+          } catch {
+            /* ignore */
+          }
           renameSync(this.logFilePath, rotated);
           writeFileSync(this.logFilePath, '', { mode: 0o600 });
         }
-      } catch { /* best-effort rotation */ }
+      } catch {
+        /* best-effort rotation */
+      }
     }
 
     appendFile(this.logFilePath, line, () => {

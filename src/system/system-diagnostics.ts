@@ -35,12 +35,7 @@ export class SystemDiagnostics {
    * Full system status report.
    */
   async systemStatus(): Promise<string> {
-    const lines: string[] = [
-      '',
-      chalk.bold('  SYSTEM STATUS'),
-      chalk.dim('  ────────────────────────────'),
-      '',
-    ];
+    const lines: string[] = ['', chalk.bold('  SYSTEM STATUS'), chalk.dim('  ────────────────────────────'), ''];
 
     // Build
     lines.push(chalk.bold('  Build'));
@@ -55,7 +50,9 @@ export class SystemDiagnostics {
     let latency = -1;
     try {
       latency = await this.rpcManager.measureLatency();
-    } catch { /* best-effort */ }
+    } catch {
+      /* best-effort */
+    }
 
     lines.push(chalk.bold('  RPC'));
     lines.push(`    Active:    ${chalk.cyan(activeRpc.label)}`);
@@ -132,7 +129,7 @@ export class SystemDiagnostics {
     ];
 
     // Find highest slot across all healthy endpoints for sync comparison
-    const healthySlots = results.filter(r => r.healthy && r.slot).map(r => r.slot!);
+    const healthySlots = results.filter((r) => r.healthy && r.slot).map((r) => r.slot!);
     const maxSlot = healthySlots.length > 0 ? Math.max(...healthySlots) : 0;
 
     let bestIdx = -1;
@@ -150,11 +147,12 @@ export class SystemDiagnostics {
         lines.push(`    Latency:  ${this.colorLatency(r.latencyMs)}`);
         if (r.slot) {
           const slotDelta = maxSlot - r.slot;
-          const syncStatus = slotDelta === 0
-            ? chalk.green('synced')
-            : slotDelta <= 50
-              ? chalk.yellow(`${slotDelta} slots behind`)
-              : chalk.red(`${slotDelta} slots behind — stale`);
+          const syncStatus =
+            slotDelta === 0
+              ? chalk.green('synced')
+              : slotDelta <= 50
+                ? chalk.yellow(`${slotDelta} slots behind`)
+                : chalk.red(`${slotDelta} slots behind — stale`);
           lines.push(`    Slot:     ${r.slot.toLocaleString()} (${syncStatus})`);
         }
         const fr = this.rpcManager.getFailureRate(r.url);
@@ -192,7 +190,7 @@ export class SystemDiagnostics {
     }
 
     // Tip for users with only public RPC
-    const healthyCount = results.filter(r => r.healthy).length;
+    const healthyCount = results.filter((r) => r.healthy).length;
     if (healthyCount <= 1 && results.length <= 1) {
       lines.push('');
       lines.push(chalk.dim('  Tip: Add BACKUP_RPC_1 and BACKUP_RPC_2 in .env for automatic failover.'));
@@ -231,7 +229,10 @@ export class SystemDiagnostics {
       `  ${theme.accentBold('Transaction Debug')}`,
       `  ${sep(52)}`,
       '',
-      pair('Signature', chalk.dim(signature.length > 20 ? signature.slice(0, 8) + '...' + signature.slice(-4) : signature)),
+      pair(
+        'Signature',
+        chalk.dim(signature.length > 20 ? signature.slice(0, 8) + '...' + signature.slice(-4) : signature),
+      ),
       '',
     ];
 
@@ -276,13 +277,13 @@ export class SystemDiagnostics {
       if (cu !== undefined) {
         // Try to extract CU limit from ComputeBudget instructions in logs
         let cuLimit = 200_000; // default
-        const cuLimitLog = tx.meta?.logMessages?.find(l => l.includes('SetComputeUnitLimit'));
+        const cuLimitLog = tx.meta?.logMessages?.find((l) => l.includes('SetComputeUnitLimit'));
         if (cuLimitLog) {
           const match = cuLimitLog.match(/units\s*=?\s*(\d+)/i);
           if (match) cuLimit = parseInt(match[1], 10);
         }
         lines.push(`  ${sec('Compute Units')}`);
-        const utilPct = cuLimit > 0 ? (cu / cuLimit * 100).toFixed(1) : '?';
+        const utilPct = cuLimit > 0 ? ((cu / cuLimit) * 100).toFixed(1) : '?';
         const cuColor = cu / cuLimit > 0.9 ? chalk.red : cu / cuLimit > 0.7 ? chalk.yellow : chalk.green;
         lines.push(pair('Used', cuColor(`${cu.toLocaleString()} / ${cuLimit.toLocaleString()} (${utilPct}%)`)));
         lines.push('');
@@ -309,9 +310,7 @@ export class SystemDiagnostics {
         const programId = programKey?.toBase58() ?? 'unknown';
         const isFlash = flashProgramIds.has(programId);
 
-        const programLabel = isFlash
-          ? chalk.cyan('Flash Program')
-          : this.labelProgram(programId);
+        const programLabel = isFlash ? chalk.cyan('Flash Program') : this.labelProgram(programId);
 
         lines.push(`  ${chalk.bold(`${i + 1}.`)} ${programLabel}`);
         lines.push(dim(`     ${programId}`));
@@ -328,7 +327,7 @@ export class SystemDiagnostics {
         }
 
         // Show inner instructions count
-        const inner = innerInstructions.find(ii => ii.index === i);
+        const inner = innerInstructions.find((ii) => ii.index === i);
         if (inner && inner.instructions.length > 0) {
           lines.push(dim(`     Inner instructions: ${inner.instructions.length}`));
         }
@@ -399,7 +398,6 @@ export class SystemDiagnostics {
       if (showState) {
         lines.push(dim(`  Protocol Config:   Flash SDK PoolConfig + CustodyAccount`));
       }
-
     } catch (e: unknown) {
       lines.push(chalk.red(`  Error: ${getErrorMessage(e)}`));
     }
@@ -422,9 +420,13 @@ export class SystemDiagnostics {
           const pc = SDKPoolConfig.fromIdsByName(poolName, network);
           if (pc.programId) ids.add(pc.programId.toBase58());
           if (pc.perpComposibilityProgramId) ids.add(pc.perpComposibilityProgramId.toBase58());
-        } catch { /* skip unknown pools */ }
+        } catch {
+          /* skip unknown pools */
+        }
       }
-    } catch { /* SDK not available */ }
+    } catch {
+      /* SDK not available */
+    }
     return ids;
   }
 
@@ -434,12 +436,12 @@ export class SystemDiagnostics {
   private labelProgram(programId: string): string {
     const known: Record<string, string> = {
       '11111111111111111111111111111111': 'System Program',
-      'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA': 'Token Program',
-      'ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL': 'Associated Token Program',
-      'ComputeBudget111111111111111111111111111111': 'Compute Budget',
-      'JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4': 'Jupiter',
-      'SysvarRent111111111111111111111111111111111': 'Sysvar: Rent',
-      'SysvarC1ock11111111111111111111111111111111': 'Sysvar: Clock',
+      TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA: 'Token Program',
+      ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL: 'Associated Token Program',
+      ComputeBudget111111111111111111111111111111: 'Compute Budget',
+      JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4: 'Jupiter',
+      SysvarRent111111111111111111111111111111111: 'Sysvar: Rent',
+      SysvarC1ock11111111111111111111111111111111: 'Sysvar: Clock',
     };
     return known[programId] ?? chalk.dim('Unknown Program');
   }
@@ -448,10 +450,7 @@ export class SystemDiagnostics {
    * Attempt to decode Flash instruction name and details from program logs.
    * Matches patterns like "Program log: Instruction: OpenPosition" in log output.
    */
-  private decodeFlashInstruction(
-    logs: string[],
-    instructionIndex: number,
-  ): { name: string | null; details: string[] } {
+  private decodeFlashInstruction(logs: string[], instructionIndex: number): { name: string | null; details: string[] } {
     const details: string[] = [];
     let name: string | null = null;
 
@@ -509,18 +508,18 @@ export class SystemDiagnostics {
    */
   private decodeFlashError(logs: string[]): { code: string; explanation: string } | null {
     const errorMap: Record<string, string> = {
-      'InsufficientCollateral': 'Collateral does not meet maintenance margin requirement.',
-      'InsufficientMargin': 'Collateral does not meet maintenance margin requirement.',
-      'MaxLeverageExceeded': 'Requested leverage exceeds the maximum allowed for this market.',
-      'PositionNotFound': 'No open position found for the specified market and side.',
-      'StaleOracle': 'Oracle price data is too old. Pyth feed may be stale.',
-      'SlippageExceeded': 'Price slippage exceeded the allowed tolerance.',
-      'MaxUtilizationExceeded': 'Pool utilization would exceed the maximum allowed.',
-      'InsufficientPoolAmount': 'Pool does not have enough liquidity for this trade size.',
-      'InvalidPositionState': 'Position is in an invalid state for this operation.',
-      'MaxOpenInterestExceeded': 'Open interest cap for this market has been reached.',
-      'BorrowRateExceeded': 'Current borrow rate exceeds the acceptable threshold.',
-      'InstructionFallbackNotFound': 'Unknown instruction — may be an unsupported operation.',
+      InsufficientCollateral: 'Collateral does not meet maintenance margin requirement.',
+      InsufficientMargin: 'Collateral does not meet maintenance margin requirement.',
+      MaxLeverageExceeded: 'Requested leverage exceeds the maximum allowed for this market.',
+      PositionNotFound: 'No open position found for the specified market and side.',
+      StaleOracle: 'Oracle price data is too old. Pyth feed may be stale.',
+      SlippageExceeded: 'Price slippage exceeded the allowed tolerance.',
+      MaxUtilizationExceeded: 'Pool utilization would exceed the maximum allowed.',
+      InsufficientPoolAmount: 'Pool does not have enough liquidity for this trade size.',
+      InvalidPositionState: 'Position is in an invalid state for this operation.',
+      MaxOpenInterestExceeded: 'Open interest cap for this market has been reached.',
+      BorrowRateExceeded: 'Current borrow rate exceeds the acceptable threshold.',
+      InstructionFallbackNotFound: 'Unknown instruction — may be an unsupported operation.',
     };
 
     for (const log of logs) {
@@ -589,52 +588,71 @@ export class SystemDiagnostics {
           stateLines.push(`  ${chalk.bold(poolName)}`);
           stateLines.push(`    Program:  ${chalk.dim(pc.programId.toBase58())}`);
 
-          const markets = (pc.markets as Array<{ targetMint: unknown; side: unknown }>);
+          const markets = pc.markets as Array<{ targetMint: unknown; side: unknown }>;
           stateLines.push(`    Markets:  ${markets.length}`);
 
           // If we detected a market, show its custody config
           if (detectedMarket) {
             const tokens = pc.tokens as Array<{ symbol: string; mintKey: unknown }>;
-            const targetToken = tokens.find(t => t.symbol.toUpperCase() === detectedMarket);
+            const targetToken = tokens.find((t) => t.symbol.toUpperCase() === detectedMarket);
             if (targetToken) {
               const custodies = pc.custodies as unknown as Array<Record<string, unknown> & { symbol: string }>;
-              const custodyInfo = custodies.find(c => c.symbol === targetToken.symbol);
+              const custodyInfo = custodies.find((c) => c.symbol === targetToken.symbol);
               if (custodyInfo) {
                 try {
                   const custodyKey = custodyInfo.custodyAccount as Parameters<typeof SDKCustodyAccount.from>[0];
-                  const perpClient = ((this.context as unknown as Record<string, unknown>).flashClient as Record<string, unknown> | undefined)?.perpClient;
+                  const perpClient = (
+                    (this.context as unknown as Record<string, unknown>).flashClient as
+                      | Record<string, unknown>
+                      | undefined
+                  )?.perpClient;
                   const custodyData = perpClient
-                    ? await (perpClient as { program?: { account?: { custody?: { fetch: (key: unknown) => Promise<unknown> } } } }).program?.account?.custody?.fetch(custodyKey)
+                    ? await (
+                        perpClient as {
+                          program?: { account?: { custody?: { fetch: (key: unknown) => Promise<unknown> } } };
+                        }
+                      ).program?.account?.custody?.fetch(custodyKey)
                     : null;
                   if (custodyData) {
-                    const custodyAcct = SDKCustodyAccount.from(custodyKey, custodyData as Parameters<typeof SDKCustodyAccount.from>[1]);
+                    const custodyAcct = SDKCustodyAccount.from(
+                      custodyKey,
+                      custodyData as Parameters<typeof SDKCustodyAccount.from>[1],
+                    );
                     stateLines.push('');
                     stateLines.push(`  ${chalk.bold(`${detectedMarket} Custody`)}`);
 
-                    const openFee = parseFloat(custodyAcct.fees.openPosition.toString()) / RATE_POWER * 100;
-                    const closeFee = parseFloat(custodyAcct.fees.closePosition.toString()) / RATE_POWER * 100;
+                    const openFee = (parseFloat(custodyAcct.fees.openPosition.toString()) / RATE_POWER) * 100;
+                    const closeFee = (parseFloat(custodyAcct.fees.closePosition.toString()) / RATE_POWER) * 100;
                     stateLines.push(`    Open Fee:   ${openFee.toFixed(4)}%`);
                     stateLines.push(`    Close Fee:  ${closeFee.toFixed(4)}%`);
 
                     const BPS_POWER = 10_000;
-                    const rawMaxLev = (custodyAcct as unknown as Record<string, Record<string, unknown>>).pricing?.maxLeverage as unknown;
-                    const rawNum = typeof rawMaxLev === 'object' && rawMaxLev !== null && 'toNumber' in rawMaxLev
-                      ? (rawMaxLev as { toNumber: () => number }).toNumber()
-                      : typeof rawMaxLev === 'number' ? rawMaxLev : 0;
+                    const rawMaxLev = (custodyAcct as unknown as Record<string, Record<string, unknown>>).pricing
+                      ?.maxLeverage as unknown;
+                    const rawNum =
+                      typeof rawMaxLev === 'object' && rawMaxLev !== null && 'toNumber' in rawMaxLev
+                        ? (rawMaxLev as { toNumber: () => number }).toNumber()
+                        : typeof rawMaxLev === 'number'
+                          ? rawMaxLev
+                          : 0;
                     if (Number.isFinite(rawNum) && rawNum > 0) {
                       const humanMaxLev = rawNum / BPS_POWER;
                       if (humanMaxLev > 0 && humanMaxLev <= 2000) {
                         stateLines.push(`    Max Leverage: ${humanMaxLev}x`);
-                        stateLines.push(`    Maint. Margin: ${(BPS_POWER / rawNum * 100).toFixed(2)}%`);
+                        stateLines.push(`    Maint. Margin: ${((BPS_POWER / rawNum) * 100).toFixed(2)}%`);
                       }
                     }
                   }
-                } catch { /* custody fetch is best-effort */ }
+                } catch {
+                  /* custody fetch is best-effort */
+                }
               }
             }
           }
           stateLines.push('');
-        } catch { /* skip unknown pools */ }
+        } catch {
+          /* skip unknown pools */
+        }
       }
     } catch {
       stateLines.push(chalk.dim('  Flash SDK not available — cannot load protocol state'));

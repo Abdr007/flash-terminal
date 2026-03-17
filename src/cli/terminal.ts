@@ -6,7 +6,15 @@ import { join } from 'path';
 import chalk from 'chalk';
 import { AIInterpreter, OfflineInterpreter, localParse } from '../ai/interpreter.js';
 import { ToolEngine } from '../tools/engine.js';
-import { ToolContext, ToolResult, FlashConfig, IFlashClient, ActionType, ParsedIntent, TradeSide } from '../types/index.js';
+import {
+  ToolContext,
+  ToolResult,
+  FlashConfig,
+  IFlashClient,
+  ActionType,
+  ParsedIntent,
+  TradeSide,
+} from '../types/index.js';
 import type { FlashClientInternals, InterpreterWithContext } from '../types/flash-sdk-interfaces.js';
 import { SimulatedFlashClient } from '../client/simulation.js';
 import { FStatsClient } from '../data/fstats.js';
@@ -66,7 +74,6 @@ import {
   WalletFlowState,
 } from './wallet-flows.js';
 
-
 /** Alias for backward compat — delegates to centralized resolver */
 function resolveMarketAlias(input: string): string {
   return resolveMarket(input);
@@ -77,12 +84,14 @@ function resolveMarketAlias(input: string): string {
  * Does NOT lowercase — callers decide casing.
  */
 function normalizeInput(raw: string): string {
-  return raw
-    // eslint-disable-next-line no-control-regex
-    .replace(/[\x00-\x1f\x7f]/g, ' ')  // strip control chars
-    .replace(/\s+/g, ' ')               // collapse whitespace
-    .trim()
-    .replace(/[.!?]+$/, '');             // strip trailing punctuation
+  return (
+    raw
+      // eslint-disable-next-line no-control-regex
+      .replace(/[\x00-\x1f\x7f]/g, ' ') // strip control chars
+      .replace(/\s+/g, ' ') // collapse whitespace
+      .trim()
+      .replace(/[.!?]+$/, '')
+  ); // strip trailing punctuation
 }
 
 const COMMAND_TIMEOUT_MS = 120_000;
@@ -151,13 +160,16 @@ const TRADE_ACTIONS = new Set<string>([
 /** Timeout wrapper for command execution */
 function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
   return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(
-      () => reject(new Error(`Command timed out after ${ms / 1000}s: ${label}`)),
-      ms,
-    );
+    const timer = setTimeout(() => reject(new Error(`Command timed out after ${ms / 1000}s: ${label}`)), ms);
     promise.then(
-      (val) => { clearTimeout(timer); resolve(val); },
-      (err) => { clearTimeout(timer); reject(err); },
+      (val) => {
+        clearTimeout(timer);
+        resolve(val);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      },
     );
   });
 }
@@ -266,16 +278,24 @@ export class FlashTerminal {
         }
         console.log('');
       }
-    } catch { /* config validation is non-critical */ }
+    } catch {
+      /* config validation is non-critical */
+    }
 
     // ─── SDK Compatibility Check ─────────────────────────────────────
     try {
       const { checkSdkCompatibility } = await import('../config/sdk-compat.js');
       const sdkCompat = checkSdkCompatibility();
       if (!sdkCompat.compatible) {
-        console.log(chalk.yellow(`  ⚠ Incompatible Flash SDK detected (v${sdkCompat.installed}). Expected ${sdkCompat.expected}. Upgrade recommended.`));
+        console.log(
+          chalk.yellow(
+            `  ⚠ Incompatible Flash SDK detected (v${sdkCompat.installed}). Expected ${sdkCompat.expected}. Upgrade recommended.`,
+          ),
+        );
       }
-    } catch { /* sdk compat check is non-critical */ }
+    } catch {
+      /* sdk compat check is non-critical */
+    }
 
     // ─── Alert Consumers ──────────────────────────────────────────────
     try {
@@ -283,7 +303,9 @@ export class FlashTerminal {
       const { autoRegisterSlack } = await import('../observability/alert-consumers/slack-consumer.js');
       autoRegisterWebhook();
       autoRegisterSlack();
-    } catch { /* alert consumers are non-critical */ }
+    } catch {
+      /* alert consumers are non-critical */
+    }
 
     // ─── Welcome Screen & Mode Selection ──────────────────────────────
     const mode = await this.showModeSelection();
@@ -330,7 +352,6 @@ export class FlashTerminal {
     this.rpcManager = initRpcManager(rpcEndpoints);
     const connection = this.rpcManager.connection;
 
-
     // Warn if using public RPC for live trading
     if (!this.config.simulationMode && this.config.rpcUrl.includes('api.mainnet-beta.solana.com')) {
       console.log(chalk.yellow('\n  ⚠ Using default public RPC — transactions may be slow or fail.'));
@@ -347,7 +368,9 @@ export class FlashTerminal {
             console.log(chalk.dim('    Transaction confirmations may be slower.'));
             console.log(chalk.dim('    Consider switching to a faster RPC provider.\n'));
           }
-        } catch { /* non-critical */ }
+        } catch {
+          /* non-critical */
+        }
       })();
     }
 
@@ -401,22 +424,24 @@ export class FlashTerminal {
       Promise.race([
         this.flashClient.getPositions(),
         new Promise<never[]>((resolve) => setTimeout(() => resolve([]), 3_000)),
-      ]).then((existingPositions) => {
-        for (const pos of existingPositions) {
-          sessionTrades.push({
-            action: 'open',
-            market: pos.market,
-            side: pos.side,
-            leverage: pos.leverage,
-            sizeUsd: pos.sizeUsd,
-            entryPrice: pos.entryPrice,
-            openFeePaid: pos.openFee > 0 ? pos.openFee : undefined,
-            timestamp: pos.timestamp ? pos.timestamp * 1000 : Date.now(),
-          });
-        }
-      }).catch(() => {
-        // Non-critical: proceed with empty session history
-      });
+      ])
+        .then((existingPositions) => {
+          for (const pos of existingPositions) {
+            sessionTrades.push({
+              action: 'open',
+              market: pos.market,
+              side: pos.side,
+              leverage: pos.leverage,
+              sizeUsd: pos.sizeUsd,
+              entryPrice: pos.entryPrice,
+              openFeePaid: pos.openFee > 0 ? pos.openFee : undefined,
+              timestamp: pos.timestamp ? pos.timestamp * 1000 : Date.now(),
+            });
+          }
+        })
+        .catch(() => {
+          // Non-critical: proceed with empty session history
+        });
     }
 
     // Build tool context
@@ -442,7 +467,9 @@ export class FlashTerminal {
     try {
       const { setPoolDataConnection } = await import('../earn/pool-data.js');
       setPoolDataConnection(connection);
-    } catch { /* non-critical */ }
+    } catch {
+      /* non-critical */
+    }
 
     // TP/SL and limit orders are now on-chain via Flash SDK.
     // No local engine initialization needed — orders are managed via
@@ -490,7 +517,9 @@ export class FlashTerminal {
       try {
         const { startMetricsServer } = await import('../observability/metrics-export.js');
         startMetricsServer();
-      } catch { /* non-critical */ }
+      } catch {
+        /* non-critical */
+      }
 
       // Crash recovery — start after 3s
       setTimeout(async () => {
@@ -665,11 +694,15 @@ export class FlashTerminal {
         try {
           const { getSessionMetrics } = await import('../core/session-metrics.js');
           getSessionMetrics().recordCommand(this.lastCommandMs, !cmdFailed);
-        } catch { /* non-critical */ }
+        } catch {
+          /* non-critical */
+        }
         try {
           const { getMetrics, METRIC } = await import('../observability/metrics.js');
           getMetrics().record(METRIC.COMMAND_LATENCY, this.lastCommandMs);
-        } catch { /* non-critical */ }
+        } catch {
+          /* non-critical */
+        }
         Logger.clearRequestId();
         this.renderExecutionTimer();
         this.statusBar?.resume();
@@ -780,7 +813,10 @@ export class FlashTerminal {
     return showSavedWalletsMenuFlow(this.walletFlowDeps(), store, wallets, targetWallet);
   }
 
-  private async showWalletPicker(store: WalletStore, wallets: string[]): Promise<{ address: string; name: string } | null> {
+  private async showWalletPicker(
+    store: WalletStore,
+    wallets: string[],
+  ): Promise<{ address: string; name: string } | null> {
     return showWalletPickerFlow(this.walletFlowDeps(), store, wallets);
   }
 
@@ -828,9 +864,7 @@ export class FlashTerminal {
     try {
       const tokenData = await this.walletManager.getTokenBalances();
       console.log(`  SOL Balance:  ${chalk.green(tokenData.sol.toFixed(4))} SOL`);
-      const usdcToken = tokenData.tokens.find(
-        (t) => t.mint === 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
-      );
+      const usdcToken = tokenData.tokens.find((t) => t.mint === 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v');
       usdcBal = usdcToken?.amount ?? 0;
       const usdcColor = usdcBal > 0 ? chalk.green : chalk.yellow;
       console.log(`  USDC Balance: ${usdcColor(usdcBal.toFixed(2))} USDC`);
@@ -882,7 +916,7 @@ export class FlashTerminal {
           if (client.perpClient && client.poolConfig) {
             const info = await Promise.race([
               getFafStakeInfo(client.perpClient, client.poolConfig, new PublicKey(this.walletManager.address)),
-              new Promise<null>(r => setTimeout(() => r(null), 3000)),
+              new Promise<null>((r) => setTimeout(() => r(null), 3000)),
             ]);
             if (info && info.stakedAmount > 0) {
               readyData.faf_staked = info.stakedAmount;
@@ -890,7 +924,9 @@ export class FlashTerminal {
               readyData.fee_discount = info.tier.feeDiscount;
             }
           }
-        } catch { /* non-critical */ }
+        } catch {
+          /* non-critical */
+        }
       }
       agentOutput(readyData);
       return;
@@ -927,9 +963,7 @@ export class FlashTerminal {
       const tokenData = prefetchedBalances as { sol: number; tokens: Array<{ mint: string; amount: number }> } | null;
       if (tokenData) {
         solBal = tokenData.sol;
-        const usdcToken = tokenData.tokens.find(
-          (t) => t.mint === 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
-        );
+        const usdcToken = tokenData.tokens.find((t) => t.mint === 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v');
         usdcBal = usdcToken?.amount ?? 0;
       }
 
@@ -937,7 +971,8 @@ export class FlashTerminal {
         console.log(theme.pair('SOL Balance', theme.positive(solBal.toFixed(4) + ' SOL')));
       }
       if (usdcBal !== null) {
-        const val = usdcBal > 0 ? theme.positive(usdcBal.toFixed(2) + ' USDC') : theme.warning(usdcBal.toFixed(2) + ' USDC');
+        const val =
+          usdcBal > 0 ? theme.positive(usdcBal.toFixed(2) + ' USDC') : theme.warning(usdcBal.toFixed(2) + ' USDC');
         console.log(theme.pair('USDC Balance', val));
       }
       if (solBal === null && usdcBal === null) {
@@ -956,13 +991,15 @@ export class FlashTerminal {
 
           const stakeInfo = await Promise.race([
             getFafStakeInfo(client.perpClient, client.poolConfig, userPk),
-            new Promise<null>(r => setTimeout(() => r(null), 3000)),
+            new Promise<null>((r) => setTimeout(() => r(null), 3000)),
           ]);
 
           if (stakeInfo && stakeInfo.stakedAmount > 0) {
             console.log('');
             console.log(theme.pair('FAF Staked', theme.accent(formatFaf(stakeInfo.stakedAmount))));
-            console.log(theme.pair('VIP Tier', `Level ${stakeInfo.level} (${stakeInfo.tier.feeDiscount}% fee discount)`));
+            console.log(
+              theme.pair('VIP Tier', `Level ${stakeInfo.level} (${stakeInfo.tier.feeDiscount}% fee discount)`),
+            );
 
             if (stakeInfo.pendingRewards > 0) {
               console.log(theme.pair('Pending FAF', theme.positive(formatFaf(stakeInfo.pendingRewards))));
@@ -975,12 +1012,14 @@ export class FlashTerminal {
             try {
               const voltageInfo = await Promise.race([
                 getVoltageInfo(client.perpClient, client.poolConfig, userPk),
-                new Promise<null>(r => setTimeout(() => r(null), 2000)),
+                new Promise<null>((r) => setTimeout(() => r(null), 2000)),
               ]);
               if (voltageInfo) {
                 console.log(theme.pair('Voltage Tier', `${voltageInfo.tierName} (${voltageInfo.multiplier}x)`));
               }
-            } catch { /* voltage is non-critical */ }
+            } catch {
+              /* voltage is non-critical */
+            }
           }
         }
       } catch {
@@ -1017,8 +1056,14 @@ export class FlashTerminal {
       const timer = setTimeout(() => resolve(null), INTEL_TIMEOUT);
 
       this.doFetchIntelligence()
-        .then((data) => { clearTimeout(timer); resolve(data); })
-        .catch(() => { clearTimeout(timer); resolve(null); });
+        .then((data) => {
+          clearTimeout(timer);
+          resolve(data);
+        })
+        .catch(() => {
+          clearTimeout(timer);
+          resolve(null);
+        });
     });
   }
 
@@ -1072,20 +1117,29 @@ export class FlashTerminal {
     // Portfolio summary (only if positions exist)
     if (intel.positionCount > 0) {
       console.log(chalk.bold('  Portfolio'));
-      console.log(`    Positions: ${intel.positionCount}  PnL: ${intel.totalPnl >= 0 ? chalk.green(formatUsd(intel.totalPnl)) : chalk.red(formatUsd(intel.totalPnl))}`);
+      console.log(
+        `    Positions: ${intel.positionCount}  PnL: ${intel.totalPnl >= 0 ? chalk.green(formatUsd(intel.totalPnl)) : chalk.red(formatUsd(intel.totalPnl))}`,
+      );
       console.log('');
     }
   }
 
   private colorRegime(regime: string): string {
     switch (regime) {
-      case MarketRegime.TRENDING: return chalk.green(regime);
-      case MarketRegime.RANGING: return chalk.blue(regime);
-      case MarketRegime.HIGH_VOLATILITY: return chalk.red(regime);
-      case MarketRegime.LOW_VOLATILITY: return chalk.gray(regime);
-      case MarketRegime.WHALE_DOMINATED: return chalk.magenta(regime);
-      case MarketRegime.LOW_LIQUIDITY: return chalk.yellow(regime);
-      default: return chalk.gray(regime);
+      case MarketRegime.TRENDING:
+        return chalk.green(regime);
+      case MarketRegime.RANGING:
+        return chalk.blue(regime);
+      case MarketRegime.HIGH_VOLATILITY:
+        return chalk.red(regime);
+      case MarketRegime.LOW_VOLATILITY:
+        return chalk.gray(regime);
+      case MarketRegime.WHALE_DOMINATED:
+        return chalk.magenta(regime);
+      case MarketRegime.LOW_LIQUIDITY:
+        return chalk.yellow(regime);
+      default:
+        return chalk.gray(regime);
     }
   }
 
@@ -1213,7 +1267,8 @@ export class FlashTerminal {
   }
 
   // [M-7] Sensitive command patterns — scrubbed from history file to prevent info leak
-  private static readonly SENSITIVE_HISTORY_PATTERN = /^(wallet\s+(import|connect)\s|open\s|close\s|add\s+collateral|remove\s+collateral)/i;
+  private static readonly SENSITIVE_HISTORY_PATTERN =
+    /^(wallet\s+(import|connect)\s|open\s|close\s|add\s+collateral|remove\s+collateral)/i;
 
   /** Save command history to file — scrubs sensitive trade/wallet commands */
   private saveHistory(): void {
@@ -1221,8 +1276,9 @@ export class FlashTerminal {
       const rlAny = this.rl as unknown as { history: string[] };
       if (Array.isArray(rlAny.history)) {
         const lines = [...rlAny.history]
-          .filter(line => !FlashTerminal.SENSITIVE_HISTORY_PATTERN.test(line))
-          .reverse().slice(-MAX_HISTORY);
+          .filter((line) => !FlashTerminal.SENSITIVE_HISTORY_PATTERN.test(line))
+          .reverse()
+          .slice(-MAX_HISTORY);
         writeFileSync(HISTORY_FILE, lines.join('\n') + '\n', { mode: 0o600 });
       }
     } catch {
@@ -1359,12 +1415,7 @@ export class FlashTerminal {
     }
 
     if (lower === 'doctor' || lower === 'flash doctor' || lower === 'health' || lower === 'flash health') {
-      const output = await runDoctor(
-        this.flashClient,
-        this.rpcManager,
-        this.walletManager,
-        this.context,
-      );
+      const output = await runDoctor(this.flashClient, this.rpcManager, this.walletManager, this.context);
       console.log(output);
       return;
     }
@@ -1454,7 +1505,13 @@ export class FlashTerminal {
     }
 
     // ─── Degen Mode Toggle ──────────────────────────────────────
-    if (lower === 'degen' || lower === 'degen mode' || lower === 'degen on' || lower === 'degen off' || lower === 'degen toggle') {
+    if (
+      lower === 'degen' ||
+      lower === 'degen mode' ||
+      lower === 'degen on' ||
+      lower === 'degen off' ||
+      lower === 'degen toggle'
+    ) {
       if (lower === 'degen off') {
         this.context.degenMode = false;
       } else if (lower === 'degen on') {
@@ -1467,11 +1524,11 @@ export class FlashTerminal {
         const { hasDegenMode: hasDegen, getMaxLeverage: getMaxLev } = await import('../config/index.js');
         const { getAllMarkets: getAll } = await import('../config/index.js');
         // Degen-extended markets (SOL/BTC/ETH: 100x → 500x)
-        const degenMarkets = getAll().filter(m => hasDegen(m));
-        const degenInfo = degenMarkets.map(m => `${m} ${getMaxLev(m, true)}x`).join(', ');
+        const degenMarkets = getAll().filter((m) => hasDegen(m));
+        const degenInfo = degenMarkets.map((m) => `${m} ${getMaxLev(m, true)}x`).join(', ');
         // High-leverage markets that already have ≥200x as standard (forex pairs)
-        const highLevMarkets = getAll().filter(m => !hasDegen(m) && getMaxLev(m, false) >= 200);
-        const highLevInfo = highLevMarkets.map(m => `${m} ${getMaxLev(m, false)}x`).join(', ');
+        const highLevMarkets = getAll().filter((m) => !hasDegen(m) && getMaxLev(m, false) >= 200);
+        const highLevInfo = highLevMarkets.map((m) => `${m} ${getMaxLev(m, false)}x`).join(', ');
         console.log('');
         console.log(chalk.red.bold('  ⚡ DEGEN MODE ENABLED'));
         if (degenInfo) {
@@ -1519,7 +1576,9 @@ export class FlashTerminal {
         }
         lines.push('');
         lines.push(`  ${theme.separator(52)}`);
-        lines.push(`  ${theme.dim('Type')} ${theme.command('help <command>')} ${theme.dim('for detailed usage, e.g.')} ${theme.command('help open')}`);
+        lines.push(
+          `  ${theme.dim('Type')} ${theme.command('help <command>')} ${theme.dim('for detailed usage, e.g.')} ${theme.command('help open')}`,
+        );
         lines.push(`  ${theme.dim('Type')} ${theme.command('help')} ${theme.dim('for overview of all categories')}`);
         lines.push('');
         console.log(lines.join('\n'));
@@ -1666,8 +1725,19 @@ export class FlashTerminal {
       }
       await this.handleProtocolFees(market);
       return;
-    } else if (lower === 'source verify' || lower === 'verify source' || lower.startsWith('source verify ') || lower.startsWith('verify source ')) {
-      const prefix = lower.startsWith('source verify') ? (lower.startsWith('source verify ') ? 'source verify ' : 'source verify') : (lower.startsWith('verify source ') ? 'verify source ' : 'verify source');
+    } else if (
+      lower === 'source verify' ||
+      lower === 'verify source' ||
+      lower.startsWith('source verify ') ||
+      lower.startsWith('verify source ')
+    ) {
+      const prefix = lower.startsWith('source verify')
+        ? lower.startsWith('source verify ')
+          ? 'source verify '
+          : 'source verify'
+        : lower.startsWith('verify source ')
+          ? 'verify source '
+          : 'verify source';
       const rawMarket = input.slice(prefix.length).trim();
       if (!rawMarket) {
         console.log('');
@@ -1690,7 +1760,13 @@ export class FlashTerminal {
     } else if (lower === 'protocol verify' || lower === 'verify protocol' || lower === 'verify') {
       await this.handleProtocolVerify();
       return;
-    } else if (lower.startsWith('inspect market ') || (lower.startsWith('inspect ') && !lower.startsWith('inspect pool') && !lower.startsWith('inspect protocol') && lower !== 'inspect')) {
+    } else if (
+      lower.startsWith('inspect market ') ||
+      (lower.startsWith('inspect ') &&
+        !lower.startsWith('inspect pool') &&
+        !lower.startsWith('inspect protocol') &&
+        lower !== 'inspect')
+    ) {
       // Handle both "inspect market crude oil" and "inspect crude oil"
       const prefix = lower.startsWith('inspect market ') ? 'inspect market ' : 'inspect ';
       const rawMarket = input.slice(prefix.length).trim();
@@ -1713,11 +1789,7 @@ export class FlashTerminal {
       // Full interpreter path (regex + AI)
       if (!IS_AGENT) process.stdout.write(chalk.dim('  Parsing...\r'));
       try {
-        intent = await withTimeout(
-          this.interpreter.parseIntent(input),
-          COMMAND_TIMEOUT_MS,
-          'parsing',
-        );
+        intent = await withTimeout(this.interpreter.parseIntent(input), COMMAND_TIMEOUT_MS, 'parsing');
         if (!IS_AGENT) process.stdout.write('              \r');
 
         // Safety guard: block AI-inferred destructive actions
@@ -1758,7 +1830,9 @@ export class FlashTerminal {
             return; // User cancelled
           }
         }
-      } catch { /* builder not available */ }
+      } catch {
+        /* builder not available */
+      }
     }
 
     // ─── Ambiguous Resolution ────────────────────────────────────
@@ -1790,7 +1864,9 @@ export class FlashTerminal {
             }
           }
         }
-      } catch { /* scorer not available — fall through to normal unknown path */ }
+      } catch {
+        /* scorer not available — fall through to normal unknown path */
+      }
     }
 
     // ─── Command Alert Intercept ──────────────────────────────────
@@ -1813,10 +1889,12 @@ export class FlashTerminal {
       let positions: { market: string; side: string }[] | undefined;
       try {
         const posList = await this.flashClient.getPositions();
-        positions = posList.map(p => ({
-          market: p.market ?? '',
-          side: p.side ?? '',
-        })).filter(p => p.market && p.side);
+        positions = posList
+          .map((p) => ({
+            market: p.market ?? '',
+            side: p.side ?? '',
+          }))
+          .filter((p) => p.market && p.side);
       } catch {
         // Non-critical — proceed without position context
       }
@@ -1829,7 +1907,10 @@ export class FlashTerminal {
       }
 
       // Legacy suggestion engine fallback
-      const suggestion = getSuggestions(input, positions as { market: string; side: string; sizeUsd: number }[] | undefined);
+      const suggestion = getSuggestions(
+        input,
+        positions as { market: string; side: string; sizeUsd: number }[] | undefined,
+      );
       if (suggestion) {
         console.log('');
         console.log(theme.warning(`  Unknown command: ${input}`));
@@ -1846,7 +1927,9 @@ export class FlashTerminal {
         if (suggestion) {
           console.log(chalk.dim(`  Did you mean: ${chalk.cyan(suggestion)}?`));
         }
-      } catch { /* non-critical */ }
+      } catch {
+        /* non-critical */
+      }
       console.log('');
       console.log(`  ${theme.section('Try')}`);
       console.log(`    ${theme.command('help')}         List all commands`);
@@ -1871,26 +1954,25 @@ export class FlashTerminal {
     // ─── Auto-Detect Position Side ─────────────────────────────────
     // When close/add/remove has a market but no side, auto-detect from open positions
     const intentAny = intent as Record<string, unknown>;
-    const needsSide = (
-      intent.action === ActionType.ClosePosition ||
-      intent.action === ActionType.AddCollateral ||
-      intent.action === ActionType.RemoveCollateral
-    ) && intentAny.market && !intentAny.side;
+    const needsSide =
+      (intent.action === ActionType.ClosePosition ||
+        intent.action === ActionType.AddCollateral ||
+        intent.action === ActionType.RemoveCollateral) &&
+      intentAny.market &&
+      !intentAny.side;
 
     if (needsSide) {
       const mkt = String(intentAny.market).toUpperCase();
       try {
         const posList = await this.flashClient.getPositions();
-        const matching = posList.filter(p =>
-          (p.market ?? '').toUpperCase() === mkt,
-        );
+        const matching = posList.filter((p) => (p.market ?? '').toUpperCase() === mkt);
         if (matching.length === 1) {
           intent = { ...intent, side: matching[0].side } as ParsedIntent;
         } else if (matching.length === 0) {
           console.log(theme.warning(`  No open position found for ${mkt}.`));
           return;
         } else {
-          const sides = matching.map(p => p.side?.toLowerCase()).join(' and ');
+          const sides = matching.map((p) => p.side?.toLowerCase()).join(' and ');
           console.log(theme.warning(`  Multiple ${mkt} positions open (${sides}).`));
           console.log(theme.dim(`  Please specify the side, e.g. "${input} long" or "${input} short"`));
           return;
@@ -1942,18 +2024,14 @@ export class FlashTerminal {
         const sd = String(intentAny.side);
         try {
           const positions = await this.flashClient.getPositions();
-          const found = positions.some(p =>
-            (p.market ?? '').toUpperCase() === mkt && p.side === sd,
-          );
+          const found = positions.some((p) => (p.market ?? '').toUpperCase() === mkt && p.side === sd);
           if (!found) {
             console.log(chalk.yellow('  ⚠ Position not confirmed on-chain yet. Waiting for state sync...'));
             // Trigger reconciliation and retry once
             const rec = getReconciler();
             if (rec) await rec.reconcile();
             const retry = await this.flashClient.getPositions();
-            const retryFound = retry.some(p =>
-              (p.market ?? '').toUpperCase() === mkt && p.side === sd,
-            );
+            const retryFound = retry.some((p) => (p.market ?? '').toUpperCase() === mkt && p.side === sd);
             if (!retryFound) {
               console.log(chalk.red(`  ✖ Position ${mkt} ${sd} not found after sync. Cannot proceed.`));
               return;
@@ -1992,11 +2070,15 @@ export class FlashTerminal {
         this.context.walletName = flags.keyOverride;
 
         if (!flags.jsonOutput && !IS_AGENT) {
-          console.log(chalk.dim(`  Using wallet: ${flags.keyOverride} (${address.slice(0, 4)}...${address.slice(-4)})`));
+          console.log(
+            chalk.dim(`  Using wallet: ${flags.keyOverride} (${address.slice(0, 4)}...${address.slice(-4)})`),
+          );
         }
       } catch (err: unknown) {
         if (flags.jsonOutput) {
-          console.log(JSON.stringify({ success: false, error: `Wallet override failed: ${getErrorMessage(err)}` }, null, 2));
+          console.log(
+            JSON.stringify({ success: false, error: `Wallet override failed: ${getErrorMessage(err)}` }, null, 2),
+          );
         } else {
           console.log(chalk.red(`  Invalid --key: ${getErrorMessage(err)}`));
         }
@@ -2031,18 +2113,19 @@ export class FlashTerminal {
 
     let result: ToolResult;
     try {
-      result = await withTimeout(
-        this.engine.dispatch(intent),
-        COMMAND_TIMEOUT_MS,
-        'execution',
-      );
+      result = await withTimeout(this.engine.dispatch(intent), COMMAND_TIMEOUT_MS, 'execution');
       // Restore output mode BEFORE any IS_AGENT display checks
       if (flags.jsonOutput) restoreOutputMode();
-      if (progressTimer) { clearInterval(progressTimer); progressTimer = null; }
+      if (progressTimer) {
+        clearInterval(progressTimer);
+        progressTimer = null;
+      }
       if (!IS_AGENT && !flags.jsonOutput) process.stdout.write('               \r');
     } catch (error: unknown) {
       if (flags.jsonOutput) restoreOutputMode();
-      if (progressTimer) { clearInterval(progressTimer); }
+      if (progressTimer) {
+        clearInterval(progressTimer);
+      }
       if (!IS_AGENT && !flags.jsonOutput) process.stdout.write('               \r');
       if (flags.jsonOutput) {
         console.log(JSON.stringify({ success: false, error: getErrorMessage(error) }, null, 2));
@@ -2073,11 +2156,7 @@ export class FlashTerminal {
       // Auto-confirm trades (NO_DNA: never prompt)
       if (result.requiresConfirmation && result.data?.executeAction) {
         try {
-          const execResult = await withTimeout(
-            result.data.executeAction(),
-            COMMAND_TIMEOUT_MS,
-            'transaction',
-          );
+          const execResult = await withTimeout(result.data.executeAction(), COMMAND_TIMEOUT_MS, 'transaction');
           agentPayload.status = execResult.success ? 'submitted' : 'failed';
           if (execResult.txSignature) agentPayload.tx_signature = execResult.txSignature;
           if (execResult.data) {
@@ -2089,10 +2168,7 @@ export class FlashTerminal {
           if (!this.config.simulationMode && execResult.data?.market && execResult.data?.side) {
             const rec = getReconciler();
             if (rec) {
-              rec.verifyTrade(
-                execResult.data.market as string,
-                execResult.data.side as string,
-              ).catch(() => {});
+              rec.verifyTrade(execResult.data.market as string, execResult.data.side as string).catch(() => {});
             }
           }
         } catch (error: unknown) {
@@ -2189,11 +2265,7 @@ export class FlashTerminal {
 
         try {
           const submitStart = Date.now();
-          const execResult = await withTimeout(
-            result.data.executeAction(),
-            COMMAND_TIMEOUT_MS,
-            'transaction',
-          );
+          const execResult = await withTimeout(result.data.executeAction(), COMMAND_TIMEOUT_MS, 'transaction');
           const elapsed = ((Date.now() - submitStart) / 1000).toFixed(1);
           if (execResult.success) {
             console.log(chalk.green(`  ✔ Confirmed in ${elapsed}s`));
@@ -2204,14 +2276,16 @@ export class FlashTerminal {
           if (!this.config.simulationMode && execResult.data?.market && execResult.data?.side) {
             const rec = getReconciler();
             if (rec) {
-              rec.verifyTrade(
-                execResult.data.market as string,
-                execResult.data.side as string,
-              ).then(verified => {
-                if (!verified) {
-                  console.log(chalk.yellow('  ⚠ Position not yet found on-chain. It may take a moment to settle.'));
-                }
-              }).catch(() => { /* non-critical background check */ });
+              rec
+                .verifyTrade(execResult.data.market as string, execResult.data.side as string)
+                .then((verified) => {
+                  if (!verified) {
+                    console.log(chalk.yellow('  ⚠ Position not yet found on-chain. It may take a moment to settle.'));
+                  }
+                })
+                .catch(() => {
+                  /* non-critical background check */
+                });
             }
           }
         } catch (error: unknown) {
@@ -2235,7 +2309,9 @@ export class FlashTerminal {
         const walletPath = walletStore.getWalletPath(restoreData.name);
         this.walletManager.loadFromFile(walletPath);
       }
-    } catch { /* best-effort restore */ }
+    } catch {
+      /* best-effort restore */
+    }
     this.context.walletAddress = restoreData.address;
     this.context.walletName = restoreData.name;
   }
@@ -2254,9 +2330,8 @@ export class FlashTerminal {
     const skip = ['help', 'commands', '?', 'exit', 'quit'];
     if (skip.includes(this.lastCommand.toLowerCase())) return;
 
-    const timeStr = this.lastCommandMs >= 1000
-      ? `${(this.lastCommandMs / 1000).toFixed(1)}s`
-      : `${this.lastCommandMs}ms`;
+    const timeStr =
+      this.lastCommandMs >= 1000 ? `${(this.lastCommandMs / 1000).toFixed(1)}s` : `${this.lastCommandMs}ms`;
 
     console.log(theme.dim(`  [${timeStr}]`));
   }
@@ -2312,14 +2387,16 @@ export class FlashTerminal {
    *   Open Interest:  fstats API (aggregated Flash protocol state)
    */
   private async handleMarketMonitor(filterMarket?: string): Promise<void> {
-    await runMarketMonitor({
-      rl: this.rl,
-      rpcManager: this.rpcManager,
-      fstats: this.fstats,
-      config: this.config,
-    }, filterMarket);
+    await runMarketMonitor(
+      {
+        rl: this.rl,
+        rpcManager: this.rpcManager,
+        fstats: this.fstats,
+        config: this.config,
+      },
+      filterMarket,
+    );
   }
-
 
   /**
    * Position debug — protocol-level debugging view of an open position.
@@ -2407,10 +2484,7 @@ export class FlashTerminal {
         if (this.config.simulationMode) {
           const answer = this.bufferedLine;
           this.bufferedLine = null;
-          resolve(
-            answer.toLowerCase() === 'yes' ||
-            answer.toLowerCase() === 'y'
-          );
+          resolve(answer.toLowerCase() === 'yes' || answer.toLowerCase() === 'y');
           return;
         }
         // Live mode: discard pre-typed input — user must confirm after seeing details
@@ -2425,10 +2499,7 @@ export class FlashTerminal {
       timeout.unref();
       this.pendingConfirmation = (answer) => {
         clearTimeout(timeout);
-        resolve(
-          answer.toLowerCase() === 'yes' ||
-          answer.toLowerCase() === 'y'
-        );
+        resolve(answer.toLowerCase() === 'yes' || answer.toLowerCase() === 'y');
       };
     });
   }

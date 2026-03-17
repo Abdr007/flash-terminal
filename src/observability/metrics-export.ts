@@ -178,7 +178,7 @@ export function formatMetricsSummary(): string {
   for (const name of counterOrder) {
     const value = snap.counters[name] ?? 0;
     if (value > 0 || name === METRIC.TRADE_SUCCESS || name === METRIC.TRADE_FAILURE) {
-      const label = name.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+      const label = name.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
       lines.push(`  ${label}: ${value}`);
     }
   }
@@ -188,7 +188,7 @@ export function formatMetricsSummary(): string {
   for (const name of histOrder) {
     const hist = snap.histograms[name];
     if (hist && hist.count > 0) {
-      const label = name.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+      const label = name.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
       lines.push(`  ${label}: avg=${hist.avg.toFixed(0)}ms p95=${hist.p95.toFixed(0)}ms (n=${hist.count})`);
     }
   }

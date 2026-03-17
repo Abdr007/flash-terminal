@@ -15,25 +15,19 @@ import { PriceService, TokenPrice } from '../data/prices.js';
 import { FStatsClient } from '../data/fstats.js';
 import { getLogger } from '../utils/logger.js';
 import { getErrorMessage } from '../utils/retry.js';
-import {
-  IFlashClient,
-  Position,
-  TradeSide,
-  MarketOI,
-  RawActivityRecord,
-} from '../types/index.js';
+import { IFlashClient, Position, TradeSide, MarketOI, RawActivityRecord } from '../types/index.js';
 
 // ─── Thresholds ──────────────────────────────────────────────────────────────
 
-const PRICE_CHANGE_THRESHOLD_PCT = 0.5;     // 0.5% price move
-const OI_CHANGE_THRESHOLD_PCT = 5;           // 5% OI change
-const OI_CHANGE_THRESHOLD_USD = 10_000;      // or $10k absolute
-const FUNDING_FLIP_THRESHOLD = 0.001;        // funding rate sign change threshold
-const WHALE_SIZE_THRESHOLD_USD = 50_000;     // $50k+ = whale position
-const PNL_CHANGE_THRESHOLD_USD = 5;          // $5 PnL change
-const LIQ_DISTANCE_CHANGE_PCT = 2;           // 2% liquidation distance change
-const RPC_LATENCY_SPIKE_MS = 300;            // 300ms = latency spike
-const ORACLE_DELAY_THRESHOLD_S = 10;         // 10s oracle lag
+const PRICE_CHANGE_THRESHOLD_PCT = 0.5; // 0.5% price move
+const OI_CHANGE_THRESHOLD_PCT = 5; // 5% OI change
+const OI_CHANGE_THRESHOLD_USD = 10_000; // or $10k absolute
+const FUNDING_FLIP_THRESHOLD = 0.001; // funding rate sign change threshold
+const WHALE_SIZE_THRESHOLD_USD = 50_000; // $50k+ = whale position
+const PNL_CHANGE_THRESHOLD_USD = 5; // $5 PnL change
+const LIQ_DISTANCE_CHANGE_PCT = 2; // 2% liquidation distance change
+const RPC_LATENCY_SPIKE_MS = 300; // 300ms = latency spike
+const ORACLE_DELAY_THRESHOLD_S = 10; // 10s oracle lag
 
 const POLL_INTERVAL_MS = 7_000; // 7 seconds between polls
 const MAX_EVENTS_PER_CYCLE = 15; // prevent output flood
@@ -138,12 +132,15 @@ export class EventMonitor {
 
       const onKey = (data: Buffer) => {
         const key = data.toString();
-        if (key === 'q' || key === 'Q' || key === '\x03') { // q or Ctrl+C
+        if (key === 'q' || key === 'Q' || key === '\x03') {
+          // q or Ctrl+C
           stdin.removeListener('data', onKey);
           this.stop();
 
           // Drain remaining stdin bytes before restoring readline
-          const drain = () => { /* discard */ };
+          const drain = () => {
+            /* discard */
+          };
           stdin.on('data', drain);
           setTimeout(() => {
             stdin.removeListener('data', drain);
@@ -196,7 +193,8 @@ export class EventMonitor {
     }
 
     // Periodic heartbeat — show we're still alive
-    if (this.cycleCount % 9 === 0 && events.length === 0) { // ~63s
+    if (this.cycleCount % 9 === 0 && events.length === 0) {
+      // ~63s
       const now = new Date().toLocaleTimeString();
       console.log(theme.dim(`  ${now}  No significant changes detected`));
     }
@@ -236,9 +234,11 @@ export class EventMonitor {
     let fundingRate = 0;
     try {
       const markets = await this.client.getMarketData(sym);
-      const md = markets.find(m => m.symbol.toUpperCase() === sym);
+      const md = markets.find((m) => m.symbol.toUpperCase() === sym);
       if (md) fundingRate = md.fundingRate;
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
 
     const current: MarketSnapshot = {
       price: tp.price,
@@ -286,7 +286,10 @@ export class EventMonitor {
       if (prev.totalOi > 0 && current.totalOi > 0) {
         const oiDelta = current.totalOi - prev.totalOi;
         const oiPctChange = (oiDelta / prev.totalOi) * 100;
-        if (Math.abs(oiPctChange) < 50 && (Math.abs(oiPctChange) >= OI_CHANGE_THRESHOLD_PCT || Math.abs(oiDelta) >= OI_CHANGE_THRESHOLD_USD)) {
+        if (
+          Math.abs(oiPctChange) < 50 &&
+          (Math.abs(oiPctChange) >= OI_CHANGE_THRESHOLD_PCT || Math.abs(oiDelta) >= OI_CHANGE_THRESHOLD_USD)
+        ) {
           const dir = oiDelta > 0 ? '+' : '';
           const severity = Math.abs(oiPctChange) >= 20 ? 'warning' : 'info';
           events.push({
@@ -313,7 +316,7 @@ export class EventMonitor {
     }
 
     // ── Whale Activity ──
-    const marketWhales = whaleData.filter(w => {
+    const marketWhales = whaleData.filter((w) => {
       const wSym = (w.market_symbol ?? w.market ?? '').toUpperCase();
       const size = w.size_usd ?? 0;
       return wSym.includes(sym) && size >= WHALE_SIZE_THRESHOLD_USD;
@@ -359,7 +362,7 @@ export class EventMonitor {
       return;
     }
 
-    const pos = positions.find(p => p.market.toUpperCase() === sym);
+    const pos = positions.find((p) => p.market.toUpperCase() === sym);
     if (!pos) {
       if (this.cycleCount === 1) {
         events.push({ type: 'info', severity: 'info', message: `No open position on ${sym}` });
@@ -367,9 +370,7 @@ export class EventMonitor {
       return;
     }
 
-    const liqDistance = pos.entryPrice > 0
-      ? Math.abs(pos.markPrice - pos.liquidationPrice) / pos.entryPrice
-      : 0;
+    const liqDistance = pos.entryPrice > 0 ? Math.abs(pos.markPrice - pos.liquidationPrice) / pos.entryPrice : 0;
 
     const current: PositionSnapshot = {
       pnl: pos.unrealizedPnl,
@@ -397,7 +398,7 @@ export class EventMonitor {
       });
       events.push({
         type: 'info',
-        severity: liqDistance < 0.15 ? 'critical' : liqDistance < 0.30 ? 'warning' : 'info',
+        severity: liqDistance < 0.15 ? 'critical' : liqDistance < 0.3 ? 'warning' : 'info',
         message: `Distance to liquidation: ${(liqDistance * 100).toFixed(1)}%  Liq price: ${formatPrice(pos.liquidationPrice)}`,
       });
     } else {
@@ -415,7 +416,7 @@ export class EventMonitor {
       // ── Liquidation Distance Change ──
       const liqDelta = (current.liqDistance - prev.liqDistance) * 100;
       if (Math.abs(liqDelta) >= LIQ_DISTANCE_CHANGE_PCT) {
-        const severity = current.liqDistance < 0.15 ? 'critical' : current.liqDistance < 0.30 ? 'warning' : 'info';
+        const severity = current.liqDistance < 0.15 ? 'critical' : current.liqDistance < 0.3 ? 'warning' : 'info';
         const dir = liqDelta > 0 ? 'improved' : 'worsened';
         events.push({
           type: 'liquidation',
@@ -454,14 +455,18 @@ export class EventMonitor {
     const currentPrice = tp.price;
 
     // Analyze open positions for liquidation clusters
-    const marketPositions = positions.filter(p => {
+    const marketPositions = positions.filter((p) => {
       const pSym = (p.market_symbol ?? p.market ?? '').toUpperCase();
       return pSym.includes(sym) && (p.size_usd ?? 0) > 0;
     });
 
     if (marketPositions.length === 0) {
       if (this.cycleCount === 1) {
-        events.push({ type: 'info', severity: 'info', message: `Monitoring liquidations for ${chalk.bold(sym)} at ${formatPrice(currentPrice)}` });
+        events.push({
+          type: 'info',
+          severity: 'info',
+          message: `Monitoring liquidations for ${chalk.bold(sym)} at ${formatPrice(currentPrice)}`,
+        });
         events.push({ type: 'info', severity: 'info', message: 'No large liquidation clusters detected.' });
       }
       return;
@@ -471,27 +476,28 @@ export class EventMonitor {
     // No fabricated liquidation price estimates
     interface PositionCluster {
       side: string;
-      avgEntry: number;       // size-weighted average entry price (real data)
-      totalSize: number;      // total position size in USD
-      count: number;          // number of positions
-      distancePct: number;    // distance from current price to avg entry (real data)
+      avgEntry: number; // size-weighted average entry price (real data)
+      totalSize: number; // total position size in USD
+      count: number; // number of positions
+      distancePct: number; // distance from current price to avg entry (real data)
     }
 
     const clusters: PositionCluster[] = [];
 
-    const longPositions = marketPositions.filter(p => (p.side ?? '').toLowerCase() === 'long');
-    const shortPositions = marketPositions.filter(p => (p.side ?? '').toLowerCase() === 'short');
+    const longPositions = marketPositions.filter((p) => (p.side ?? '').toLowerCase() === 'long');
+    const shortPositions = marketPositions.filter((p) => (p.side ?? '').toLowerCase() === 'short');
 
     // Long position cluster — real data only
     if (longPositions.length > 0) {
       const totalLongSize = longPositions.reduce((sum, p) => sum + (p.size_usd ?? 0), 0);
-      const weightedEntry = totalLongSize > 0
-        ? longPositions.reduce((sum, p) => {
-            const entry = p.entry_price ?? currentPrice;
-            const size = p.size_usd ?? 0;
-            return sum + entry * size;
-          }, 0) / totalLongSize
-        : currentPrice;
+      const weightedEntry =
+        totalLongSize > 0
+          ? longPositions.reduce((sum, p) => {
+              const entry = p.entry_price ?? currentPrice;
+              const size = p.size_usd ?? 0;
+              return sum + entry * size;
+            }, 0) / totalLongSize
+          : currentPrice;
 
       // Distance from current price to average entry — this is real, observable data
       const distancePct = currentPrice > 0 ? ((currentPrice - weightedEntry) / currentPrice) * 100 : 0;
@@ -510,13 +516,14 @@ export class EventMonitor {
     // Short position cluster — real data only
     if (shortPositions.length > 0) {
       const totalShortSize = shortPositions.reduce((sum, p) => sum + (p.size_usd ?? 0), 0);
-      const weightedEntry = totalShortSize > 0
-        ? shortPositions.reduce((sum, p) => {
-            const entry = p.entry_price ?? currentPrice;
-            const size = p.size_usd ?? 0;
-            return sum + entry * size;
-          }, 0) / totalShortSize
-        : currentPrice;
+      const weightedEntry =
+        totalShortSize > 0
+          ? shortPositions.reduce((sum, p) => {
+              const entry = p.entry_price ?? currentPrice;
+              const size = p.size_usd ?? 0;
+              return sum + entry * size;
+            }, 0) / totalShortSize
+          : currentPrice;
 
       const distancePct = currentPrice > 0 ? ((weightedEntry - currentPrice) / currentPrice) * 100 : 0;
 
@@ -582,7 +589,9 @@ export class EventMonitor {
       if (solPrice) {
         oracleDelayS = (Date.now() - solPrice.timestamp) / 1000;
       }
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
 
     const current: ProtocolSnapshot = {
       rpcLatencyMs: rpcLatency,
@@ -600,7 +609,10 @@ export class EventMonitor {
       });
     } else {
       // ── RPC Latency Spike ──
-      if (rpcLatency > RPC_LATENCY_SPIKE_MS && (this.prevProtocol.rpcLatencyMs <= RPC_LATENCY_SPIKE_MS || this.prevProtocol.rpcLatencyMs < 0)) {
+      if (
+        rpcLatency > RPC_LATENCY_SPIKE_MS &&
+        (this.prevProtocol.rpcLatencyMs <= RPC_LATENCY_SPIKE_MS || this.prevProtocol.rpcLatencyMs < 0)
+      ) {
         events.push({
           type: 'rpc',
           severity: 'warning',
@@ -713,14 +725,30 @@ export class EventMonitor {
 
     // Type-specific icons
     switch (ev.type) {
-      case 'price': icon = ev.severity === 'info' ? '↕' : '⚡'; break;
-      case 'oi': icon = '◆'; break;
-      case 'funding': icon = '↻'; break;
-      case 'whale': icon = '🐋'; break;
-      case 'pnl': icon = '$'; break;
-      case 'liquidation': icon = '⚠'; break;
-      case 'rpc': icon = '⌂'; break;
-      case 'oracle': icon = '◎'; break;
+      case 'price':
+        icon = ev.severity === 'info' ? '↕' : '⚡';
+        break;
+      case 'oi':
+        icon = '◆';
+        break;
+      case 'funding':
+        icon = '↻';
+        break;
+      case 'whale':
+        icon = '🐋';
+        break;
+      case 'pnl':
+        icon = '$';
+        break;
+      case 'liquidation':
+        icon = '⚠';
+        break;
+      case 'rpc':
+        icon = '⌂';
+        break;
+      case 'oracle':
+        icon = '◎';
+        break;
     }
 
     console.log(`  ${timestamp}  ${colorFn(icon)} ${colorFn(ev.message)}`);

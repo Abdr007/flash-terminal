@@ -6,16 +6,16 @@
  */
 
 export interface TrendInput {
-  priceChange1h: number;   // percentage
-  priceChange4h: number;   // percentage
-  priceChange24h: number;  // percentage
+  priceChange1h: number; // percentage
+  priceChange4h: number; // percentage
+  priceChange24h: number; // percentage
 }
 
 export interface TrendResult {
-  trendScore: number;       // raw weighted % score
-  trendStrength: number;    // normalized 0-1
-  isTrending: boolean;      // trendScore > 5%
-  isRanging: boolean;       // trendScore < 2%
+  trendScore: number; // raw weighted % score
+  trendStrength: number; // normalized 0-1
+  isTrending: boolean; // trendScore > 5%
+  isRanging: boolean; // trendScore < 2%
 }
 
 /**
@@ -36,10 +36,7 @@ export function computeTrend(input: TrendInput): TrendResult {
   const priceChange4h = Number.isFinite(input.priceChange4h) ? input.priceChange4h : 0;
   const priceChange24h = Number.isFinite(input.priceChange24h) ? input.priceChange24h : 0;
 
-  const trendScore =
-    Math.abs(priceChange1h) * 0.4 +
-    Math.abs(priceChange4h) * 0.4 +
-    Math.abs(priceChange24h) * 0.2;
+  const trendScore = Math.abs(priceChange1h) * 0.4 + Math.abs(priceChange4h) * 0.4 + Math.abs(priceChange24h) * 0.2;
 
   // Normalize: 0% = 0, 10% = 1.0
   const trendStrength = Math.min(1, trendScore / 10);

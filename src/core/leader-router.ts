@@ -146,8 +146,9 @@ export class LeaderRouter {
   }
 
   private fetchSlot(): void {
-    this.connection.getSlot('confirmed')
-      .then(slot => {
+    this.connection
+      .getSlot('confirmed')
+      .then((slot) => {
         this.currentSlot = { slot, fetchedAt: Date.now() };
       })
       .catch(() => {
@@ -244,7 +245,7 @@ export class LeaderRouter {
     const currentSlot = slotState.slot;
 
     // If slot data is stale, still return what we have but flag it
-    if (!schedule || (Date.now() - schedule.fetchedAt) > SCHEDULE_CACHE_TTL_MS * 2) {
+    if (!schedule || Date.now() - schedule.fetchedAt > SCHEDULE_CACHE_TTL_MS * 2) {
       return {
         currentSlot,
         currentLeader: null,
@@ -304,10 +305,7 @@ export class LeaderRouter {
    *
    * This method NEVER blocks and NEVER fails.
    */
-  getBroadcastOrder(
-    primaryConnection: Connection,
-    broadcastConnections: Connection[],
-  ): BroadcastOrder {
+  getBroadcastOrder(primaryConnection: Connection, broadcastConnections: Connection[]): BroadcastOrder {
     this.totalBroadcastCount++;
 
     // If we have no leader data or only one endpoint, return as-is
@@ -392,10 +390,7 @@ export class LeaderRouter {
       this.leaderRoutedCount++;
       const firstUrl = endpointLatencies[0]?.url;
       if (firstUrl) {
-        this.endpointFirstCounts.set(
-          firstUrl,
-          (this.endpointFirstCounts.get(firstUrl) ?? 0) + 1,
-        );
+        this.endpointFirstCounts.set(firstUrl, (this.endpointFirstCounts.get(firstUrl) ?? 0) + 1);
       }
 
       const targetLeader = upcomingLeaders.values().next().value ?? null;
@@ -448,15 +443,13 @@ export class LeaderRouter {
     scheduleAvailable: boolean;
     currentSlot: number;
   } {
-    const leaderRoutedPct = this.totalBroadcastCount > 0
-      ? Math.round((this.leaderRoutedCount / this.totalBroadcastCount) * 100)
-      : 0;
+    const leaderRoutedPct =
+      this.totalBroadcastCount > 0 ? Math.round((this.leaderRoutedCount / this.totalBroadcastCount) * 100) : 0;
 
-    const avgSlotDelay = this.slotInclusionDelays.length > 0
-      ? Math.round(
-          (this.slotInclusionDelays.reduce((a, b) => a + b, 0) / this.slotInclusionDelays.length) * 10
-        ) / 10
-      : 0;
+    const avgSlotDelay =
+      this.slotInclusionDelays.length > 0
+        ? Math.round((this.slotInclusionDelays.reduce((a, b) => a + b, 0) / this.slotInclusionDelays.length) * 10) / 10
+        : 0;
 
     // Find the endpoint that was ranked first most often
     let fastestEndpoint: string | null = null;
@@ -468,9 +461,8 @@ export class LeaderRouter {
       }
     }
 
-    const fastestEndpointPct = this.leaderRoutedCount > 0
-      ? Math.round((fastestCount / this.leaderRoutedCount) * 100)
-      : 0;
+    const fastestEndpointPct =
+      this.leaderRoutedCount > 0 ? Math.round((fastestCount / this.leaderRoutedCount) * 100) : 0;
 
     return {
       leaderRoutedPct,

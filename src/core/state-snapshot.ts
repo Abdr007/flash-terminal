@@ -121,10 +121,12 @@ export class StateSnapshotService {
         const lastCount = lastSnapshot.metrics.totalAccounts;
         const currentCount = metrics.totalAccounts;
 
-        if (lastCount > 0 && currentCount > 0 &&
-            currentCount < lastCount * CORRUPTION_DROP_RATIO) {
+        if (lastCount > 0 && currentCount > 0 && currentCount < lastCount * CORRUPTION_DROP_RATIO) {
           this._metrics.corruptionEvents++;
-          logger.warn('STATE-SNAPSHOT', `Cache corruption detected: account count dropped from ${lastCount} to ${currentCount}`);
+          logger.warn(
+            'STATE-SNAPSHOT',
+            `Cache corruption detected: account count dropped from ${lastCount} to ${currentCount}`,
+          );
           // Don't take this snapshot — it would overwrite good data
           return false;
         }
@@ -186,12 +188,18 @@ export class StateSnapshotService {
     // High staleness rate
     const totalRequests = metrics.cacheHits + metrics.cacheMisses;
     if (totalRequests > 10 && metrics.staleFallbacks > totalRequests * 0.8) {
-      return { corrupted: true, reason: `High staleness rate: ${metrics.staleFallbacks}/${totalRequests} requests stale` };
+      return {
+        corrupted: true,
+        reason: `High staleness rate: ${metrics.staleFallbacks}/${totalRequests} requests stale`,
+      };
     }
 
     // Spike in owner validation failures
     if (metrics.ownerValidationFailures > metrics.totalAccounts * 0.5 && metrics.totalAccounts > 0) {
-      return { corrupted: true, reason: `Owner validation failures: ${metrics.ownerValidationFailures}/${metrics.totalAccounts}` };
+      return {
+        corrupted: true,
+        reason: `Owner validation failures: ${metrics.ownerValidationFailures}/${metrics.totalAccounts}`,
+      };
     }
 
     return { corrupted: false };

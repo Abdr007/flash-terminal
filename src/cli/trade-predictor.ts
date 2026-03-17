@@ -25,9 +25,15 @@ let _cache: CommandPattern[] | null = null;
 function loadPatterns(): CommandPattern[] {
   if (_cache) return _cache;
   try {
-    if (!existsSync(STATS_FILE)) { _cache = []; return _cache; }
+    if (!existsSync(STATS_FILE)) {
+      _cache = [];
+      return _cache;
+    }
     const raw = JSON.parse(readFileSync(STATS_FILE, 'utf8'));
-    if (!Array.isArray(raw)) { _cache = []; return _cache; }
+    if (!Array.isArray(raw)) {
+      _cache = [];
+      return _cache;
+    }
     _cache = raw as CommandPattern[];
     return _cache;
   } catch {
@@ -42,7 +48,9 @@ function savePatterns(patterns: CommandPattern[]): void {
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
     writeFileSync(STATS_FILE, JSON.stringify(patterns, null, 2), { mode: 0o600 });
     _cache = patterns;
-  } catch { /* best-effort */ }
+  } catch {
+    /* best-effort */
+  }
 }
 
 /**
@@ -58,7 +66,7 @@ export function recordTradeCommand(command: string): void {
   if (!/\b(long|short)\b/.test(normalized) || !/\d/.test(normalized)) return;
 
   const patterns = loadPatterns();
-  const existing = patterns.find(p => p.command === normalized);
+  const existing = patterns.find((p) => p.command === normalized);
   if (existing) {
     existing.count++;
     existing.lastUsed = Date.now();
@@ -87,9 +95,9 @@ export function getPredictions(prefix: string, maxResults = 3): string[] {
 
   const patterns = loadPatterns();
   return patterns
-    .filter(p => p.command.startsWith(lower) && p.command !== lower)
+    .filter((p) => p.command.startsWith(lower) && p.command !== lower)
     .slice(0, maxResults)
-    .map(p => p.command);
+    .map((p) => p.command);
 }
 
 /**

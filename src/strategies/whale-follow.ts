@@ -19,7 +19,11 @@ const MAX_WHALE_EVENTS = 100; // Cap input arrays to prevent unbounded processin
 /**
  * Compute a whale-follow signal by tracking direction of large positions.
  */
-export function computeWhaleFollowSignal({ recentActivity, openPositions, targetMarket }: WhaleFollowInput): StrategySignal {
+export function computeWhaleFollowSignal({
+  recentActivity,
+  openPositions,
+  targetMarket,
+}: WhaleFollowInput): StrategySignal {
   const marketUpper = targetMarket.toUpperCase();
 
   // Cap input arrays before processing
@@ -28,11 +32,11 @@ export function computeWhaleFollowSignal({ recentActivity, openPositions, target
 
   // Filter for whale-size activities in this market
   const whaleActivity = cappedActivity.filter(
-    (a) => a.market.toUpperCase() === marketUpper && a.sizeUsd >= WHALE_SIZE_THRESHOLD
+    (a) => a.market.toUpperCase() === marketUpper && a.sizeUsd >= WHALE_SIZE_THRESHOLD,
   );
 
   const whalePositions = cappedPositions.filter(
-    (p) => p.market.toUpperCase() === marketUpper && p.sizeUsd >= WHALE_SIZE_THRESHOLD
+    (p) => p.market.toUpperCase() === marketUpper && p.sizeUsd >= WHALE_SIZE_THRESHOLD,
   );
 
   const totalWhales = whaleActivity.length + whalePositions.length;

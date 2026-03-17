@@ -44,10 +44,7 @@ function deriveWsEndpoint(rpcUrl: string): string {
   return parsed.toString();
 }
 
-export function createConnection(
-  rpcUrl: string,
-  config?: { commitment?: Commitment }
-): Connection {
+export function createConnection(rpcUrl: string, config?: { commitment?: Commitment }): Connection {
   validateRpcUrl(rpcUrl);
 
   const wsEndpoint = deriveWsEndpoint(rpcUrl);
@@ -56,7 +53,6 @@ export function createConnection(
     commitment: config?.commitment ?? 'confirmed',
     confirmTransactionInitialTimeout: TX_CONFIRM_TIMEOUT_MS,
     wsEndpoint,
-    fetch: (url, options) =>
-      fetch(url, { ...options, signal: AbortSignal.timeout(RPC_FETCH_TIMEOUT_MS) }),
+    fetch: (url, options) => fetch(url, { ...options, signal: AbortSignal.timeout(RPC_FETCH_TIMEOUT_MS) }),
   });
 }

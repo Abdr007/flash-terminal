@@ -65,10 +65,7 @@ export interface WatchDeps {
  * Input isolation: readline is paused BEFORE any rendering begins.
  * All keyboard input goes through raw mode handler only.
  */
-export async function startWatch(
-  command: string,
-  deps: WatchDeps,
-): Promise<void> {
+export async function startWatch(command: string, deps: WatchDeps): Promise<void> {
   // ─── Validate command ──────────────────────────────────────────
   const blockReason = validateWatchCommand(command);
   if (blockReason) {
@@ -108,7 +105,9 @@ export async function startWatch(
     return [
       '',
       `  ${theme.accentBold('WATCH MODE')}`,
-      theme.dim(`  ${now}  |  Watching: ${theme.value(command)}  |  Refresh ${REFRESH_INTERVAL_MS / 1000}s  |  Press ${theme.value('q')} to exit`),
+      theme.dim(
+        `  ${now}  |  Watching: ${theme.value(command)}  |  Refresh ${REFRESH_INTERVAL_MS / 1000}s  |  Press ${theme.value('q')} to exit`,
+      ),
       `  ${theme.separator(Math.min(process.stdout.columns || 80, 80))}`,
     ];
   };

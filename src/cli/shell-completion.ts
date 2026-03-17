@@ -26,9 +26,18 @@ function getAllCommandWords(): string[] {
 
 /** Commands that accept a market/asset argument. */
 const MARKET_TAKING_PREFIXES = [
-  'open', 'close', 'analyze', 'liquidations', 'funding', 'depth',
-  'inspect market', 'inspect pool', 'source verify', 'verify source',
-  'protocol fees', 'position debug',
+  'open',
+  'close',
+  'analyze',
+  'liquidations',
+  'funding',
+  'depth',
+  'inspect market',
+  'inspect pool',
+  'source verify',
+  'verify source',
+  'protocol fees',
+  'position debug',
 ];
 
 /** Get commands that take market arguments (just the first word for simple matching). */
@@ -161,7 +170,9 @@ export function generateFishCompletion(): string {
     if (parts.length === 1) {
       lines.push(`complete -c flash -n '__fish_use_subcommand' -a '${entry.name}' -d '${escaped}'`);
     } else {
-      lines.push(`complete -c flash -n '__fish_seen_subcommand_from ${parts[0]}' -a '${parts.slice(1).join(' ')}' -d '${escaped}'`);
+      lines.push(
+        `complete -c flash -n '__fish_seen_subcommand_from ${parts[0]}' -a '${parts.slice(1).join(' ')}' -d '${escaped}'`,
+      );
     }
 
     // Aliases
@@ -171,7 +182,9 @@ export function generateFishCompletion(): string {
         if (aliasParts.length === 1) {
           lines.push(`complete -c flash -n '__fish_use_subcommand' -a '${alias}' -d '${escaped}'`);
         } else {
-          lines.push(`complete -c flash -n '__fish_seen_subcommand_from ${aliasParts[0]}' -a '${aliasParts.slice(1).join(' ')}' -d '${escaped}'`);
+          lines.push(
+            `complete -c flash -n '__fish_seen_subcommand_from ${aliasParts[0]}' -a '${aliasParts.slice(1).join(' ')}' -d '${escaped}'`,
+          );
         }
       }
     }

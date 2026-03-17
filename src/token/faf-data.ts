@@ -62,7 +62,9 @@ export async function getFafStakeInfo(
     if (stakeAccount.rewardTokens) {
       pendingRewards = new BN(stakeAccount.rewardTokens.toString()).toNumber() / Math.pow(10, FAF_DECIMALS);
     }
-  } catch { /* non-critical */ }
+  } catch {
+    /* non-critical */
+  }
 
   // Pending revenue (USDC)
   let pendingRevenue = 0;
@@ -70,11 +72,16 @@ export async function getFafStakeInfo(
     if (stakeAccount.unclaimedRevenueAmount) {
       pendingRevenue = new BN(stakeAccount.unclaimedRevenueAmount.toString()).toNumber() / Math.pow(10, 6); // USDC = 6 decimals
     }
-  } catch { /* non-critical */ }
+  } catch {
+    /* non-critical */
+  }
 
   const withdrawRequestCount = stakeAccount.withdrawRequestCount ?? 0;
 
-  logger.debug('FAF', `Stake info: ${stakedAmount} FAF, level ${level}, rewards ${pendingRewards} FAF, revenue $${pendingRevenue}`);
+  logger.debug(
+    'FAF',
+    `Stake info: ${stakedAmount} FAF, level ${level}, rewards ${pendingRewards} FAF, revenue $${pendingRevenue}`,
+  );
 
   return {
     stakedAmount,

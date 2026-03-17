@@ -98,7 +98,11 @@ export class ProtocolStatsService {
       ]);
 
       // Count market categories
-      const allMarkets = new Set(Object.values(POOL_MARKETS).flat().map(m => m.toUpperCase()));
+      const allMarkets = new Set(
+        Object.values(POOL_MARKETS)
+          .flat()
+          .map((m) => m.toUpperCase()),
+      );
       const tradeableMarkets = new Set<string>();
       for (const [pool, markets] of Object.entries(POOL_MARKETS)) {
         if (isTradeablePool(pool)) {

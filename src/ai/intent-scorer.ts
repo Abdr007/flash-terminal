@@ -27,7 +27,7 @@ export interface ScoredIntent {
   defaults: string[];
 }
 
-const CONFIDENCE_THRESHOLD = 0.80;
+const CONFIDENCE_THRESHOLD = 0.8;
 
 /**
  * Score a parsed intent based on how explicitly the user specified parameters.
@@ -104,7 +104,7 @@ export function resolveAmbiguous(
     const collateral = lastCollateral ?? 10;
     defaults.push('collateral');
 
-    const confidence = defaults.length === 2 ? 0.60 : defaults.length === 1 ? 0.75 : 0.85;
+    const confidence = defaults.length === 2 ? 0.6 : defaults.length === 1 ? 0.75 : 0.85;
 
     return {
       intent: {

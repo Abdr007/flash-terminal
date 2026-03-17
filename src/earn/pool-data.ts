@@ -37,7 +37,9 @@ function loadSnapshots(): FlpSnapshot[] {
     if (!existsSync(SNAPSHOT_FILE)) return [];
     const data = JSON.parse(readFileSync(SNAPSHOT_FILE, 'utf8'));
     return Array.isArray(data) ? data : [];
-  } catch { return []; }
+  } catch {
+    return [];
+  }
 }
 
 function saveSnapshots(snapshots: FlpSnapshot[]): void {
@@ -45,7 +47,9 @@ function saveSnapshots(snapshots: FlpSnapshot[]): void {
     const dir = join(homedir(), '.flash');
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
     writeFileSync(SNAPSHOT_FILE, JSON.stringify(snapshots), { mode: 0o600 });
-  } catch { /* non-critical */ }
+  } catch {
+    /* non-critical */
+  }
 }
 
 function recordFlpPrices(prices: Record<string, number>): void {
@@ -107,11 +111,24 @@ export async function getPoolMetrics(): Promise<Map<string, PoolMetrics>> {
   const registry = getPoolRegistry();
 
   // Step 1: Fetch pool prices from fstats /pools
-  const poolPrices: Record<string, { flp: number; sflp: number; vol: number; fees: number; trades: number; lpShare: number }> = {};
+  const poolPrices: Record<
+    string,
+    { flp: number; sflp: number; vol: number; fees: number; trades: number; lpShare: number }
+  > = {};
   try {
     const res = await fetch(`${FSTATS_BASE_URL}/pools`, { signal: AbortSignal.timeout(6000) });
     if (res.ok) {
-      const json = await res.json() as { pools?: Array<{ name?: string; lp_price_compounding?: number; lp_price_regular?: number; total_volume_usd?: number; total_fees_usd?: number; total_trades?: number; fee_split?: { lp?: number } }> };
+      const json = (await res.json()) as {
+        pools?: Array<{
+          name?: string;
+          lp_price_compounding?: number;
+          lp_price_regular?: number;
+          total_volume_usd?: number;
+          total_fees_usd?: number;
+          total_trades?: number;
+          fee_split?: { lp?: number };
+        }>;
+      };
       if (json.pools) {
         for (const p of json.pools) {
           if (!p.name || p.name.startsWith('Remora')) continue;
@@ -126,7 +143,9 @@ export async function getPoolMetrics(): Promise<Map<string, PoolMetrics>> {
         }
       }
     }
-  } catch { logger.debug('EARN', 'fstats /pools unavailable'); }
+  } catch {
+    logger.debug('EARN', 'fstats /pools unavailable');
+  }
 
   // Step 2: Compute 7D LP fees per pool
   // fstats /fees/daily pool filter is broken (returns protocol-wide data for all pools).
@@ -137,8 +156,8 @@ export async function getPoolMetrics(): Promise<Map<string, PoolMetrics>> {
     let protocolWeeklyLpFees = 0;
     const feesRes = await fetch(`${FSTATS_BASE_URL}/fees/daily?days=7`, { signal: AbortSignal.timeout(5000) });
     if (feesRes.ok) {
-      const feesJson = await feesRes.json() as { data?: Array<{ lp_share?: number }> } | Array<{ lp_share?: number }>;
-      const feesDays = Array.isArray(feesJson) ? feesJson : feesJson.data ?? [];
+      const feesJson = (await feesRes.json()) as { data?: Array<{ lp_share?: number }> } | Array<{ lp_share?: number }>;
+      const feesDays = Array.isArray(feesJson) ? feesJson : (feesJson.data ?? []);
       protocolWeeklyLpFees = feesDays.reduce((sum, d) => sum + (d.lp_share ?? 0), 0);
     }
 
@@ -147,22 +166,27 @@ export async function getPoolMetrics(): Promise<Map<string, PoolMetrics>> {
       const poolVolumes: Record<string, number> = {};
       let totalWeeklyVolume = 0;
 
-      await Promise.all(registry.map(async (pool) => {
-        try {
-          const res = await fetch(
-            `${FSTATS_BASE_URL}/volume/daily?days=7&pool=${encodeURIComponent(pool.poolId)}`,
-            { signal: AbortSignal.timeout(4000) },
-          );
-          if (!res.ok) return;
-          const json = await res.json() as { data?: Array<{ volume_usd?: number }> } | Array<{ volume_usd?: number }>;
-          const days = Array.isArray(json) ? json : json.data ?? [];
-          const vol = days.reduce((sum, d) => sum + (d.volume_usd ?? 0), 0);
-          if (vol > 0) {
-            poolVolumes[pool.poolId] = vol;
-            totalWeeklyVolume += vol;
+      await Promise.all(
+        registry.map(async (pool) => {
+          try {
+            const res = await fetch(`${FSTATS_BASE_URL}/volume/daily?days=7&pool=${encodeURIComponent(pool.poolId)}`, {
+              signal: AbortSignal.timeout(4000),
+            });
+            if (!res.ok) return;
+            const json = (await res.json()) as
+              | { data?: Array<{ volume_usd?: number }> }
+              | Array<{ volume_usd?: number }>;
+            const days = Array.isArray(json) ? json : (json.data ?? []);
+            const vol = days.reduce((sum, d) => sum + (d.volume_usd ?? 0), 0);
+            if (vol > 0) {
+              poolVolumes[pool.poolId] = vol;
+              totalWeeklyVolume += vol;
+            }
+          } catch {
+            /* non-critical */
           }
-        } catch { /* non-critical */ }
-      }));
+        }),
+      );
 
       // 2c: Distribute protocol LP fees by volume share, adjusted for each pool's fee rate
       if (totalWeeklyVolume > 0) {
@@ -173,9 +197,7 @@ export async function getPoolMetrics(): Promise<Map<string, PoolMetrics>> {
           const vol = poolVolumes[pool.poolId] ?? 0;
           if (vol <= 0) continue;
           const prices = poolPrices[pool.poolId];
-          const feeRate = (prices?.vol ?? 0) > 0 && (prices?.fees ?? 0) > 0
-            ? (prices.fees / prices.vol)
-            : 0.0007;
+          const feeRate = (prices?.vol ?? 0) > 0 && (prices?.fees ?? 0) > 0 ? prices.fees / prices.vol : 0.0007;
           const w = vol * feeRate;
           weights[pool.poolId] = w;
           totalWeight += w;
@@ -186,10 +208,15 @@ export async function getPoolMetrics(): Promise<Map<string, PoolMetrics>> {
             weeklyFeesByPool[pool.poolId] = protocolWeeklyLpFees * (w / totalWeight);
           }
         }
-        logger.debug('EARN', `Protocol 7D LP fees: $${protocolWeeklyLpFees.toFixed(0)}, distributed across ${Object.keys(poolVolumes).length} pools`);
+        logger.debug(
+          'EARN',
+          `Protocol 7D LP fees: $${protocolWeeklyLpFees.toFixed(0)}, distributed across ${Object.keys(poolVolumes).length} pools`,
+        );
       }
     }
-  } catch { logger.debug('EARN', 'Fee distribution calculation failed'); }
+  } catch {
+    logger.debug('EARN', 'Fee distribution calculation failed');
+  }
 
   // Step 3: Fetch token supplies from RPC for TVL
   const conn = _rpcConnection;
@@ -211,11 +238,19 @@ export async function getPoolMetrics(): Promise<Map<string, PoolMetrics>> {
       if (flpPrice <= 0) return;
       try {
         const [flpSupply, sflpSupply] = await Promise.all([
-          conn.getTokenSupply(pool.flpMint).then(s => s.value.uiAmount ?? 0).catch(() => 0),
-          conn.getTokenSupply(pool.sflpMint).then(s => s.value.uiAmount ?? 0).catch(() => 0),
+          conn
+            .getTokenSupply(pool.flpMint)
+            .then((s) => s.value.uiAmount ?? 0)
+            .catch(() => 0),
+          conn
+            .getTokenSupply(pool.sflpMint)
+            .then((s) => s.value.uiAmount ?? 0)
+            .catch(() => 0),
         ]);
-        tvlByPool[pool.poolId] = (flpSupply * flpPrice) + (sflpSupply * sflpPrice);
-      } catch { /* non-critical */ }
+        tvlByPool[pool.poolId] = flpSupply * flpPrice + sflpSupply * sflpPrice;
+      } catch {
+        /* non-critical */
+      }
     });
     await Promise.all(supplyPromises);
   }

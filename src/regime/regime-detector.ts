@@ -1,8 +1,4 @@
-import {
-  MarketData,
-  VolumeData,
-  OpenInterestData,
-} from '../types/index.js';
+import { MarketData, VolumeData, OpenInterestData } from '../types/index.js';
 import { MarketRegime, RegimeState, RegimeWeights } from './regime-types.js';
 import { computeTrend } from './trend.js';
 import { estimateVolatilityFromChange } from './volatility.js';
@@ -52,8 +48,8 @@ export class RegimeDetector {
     // by scaling: 1h ≈ 24h/6, 4h ≈ 24h/2 (rough heuristic for available data)
     const priceChange24h = Number.isFinite(market.priceChange24h) ? market.priceChange24h : 0;
     const trend = computeTrend({
-      priceChange1h: priceChange24h / 6,   // estimated
-      priceChange4h: priceChange24h / 2,   // estimated
+      priceChange1h: priceChange24h / 6, // estimated
+      priceChange4h: priceChange24h / 2, // estimated
       priceChange24h,
     });
 
@@ -61,15 +57,11 @@ export class RegimeDetector {
     const vol = estimateVolatilityFromChange(priceChange24h);
 
     // 3. Liquidity analysis
-    const oi = openInterest.markets.find(
-      (m) => m.market.toUpperCase() === key,
-    );
+    const oi = openInterest.markets.find((m) => m.market.toUpperCase() === key);
     const totalOi = oi ? oi.longOi + oi.shortOi : 0;
 
     // Volume: use last day from dailyVolumes if available
-    const lastDay = volume.dailyVolumes.length > 0
-      ? volume.dailyVolumes[volume.dailyVolumes.length - 1]
-      : null;
+    const lastDay = volume.dailyVolumes.length > 0 ? volume.dailyVolumes[volume.dailyVolumes.length - 1] : null;
     const vol24h = lastDay?.volumeUsd ?? 0;
     const tradeCount = lastDay?.trades ?? 0; // Only use daily trade count, not lifetime
 
@@ -80,9 +72,7 @@ export class RegimeDetector {
     });
 
     // 4. Whale dominance
-    const whaleShare = totalVolume > 0
-      ? Math.min(1, whaleVolume / totalVolume)
-      : 0;
+    const whaleShare = totalVolume > 0 ? Math.min(1, whaleVolume / totalVolume) : 0;
 
     // 5. Classify regime (priority order)
     const { regime, confidence } = this.classifyRegime(
@@ -180,7 +170,7 @@ export class RegimeDetector {
           momentum: 0.4,
           meanReversion: 0.3,
           whaleFollow: 0.3,
-          leverageMultiplier: 0.7,   // reduce leverage by 30%
+          leverageMultiplier: 0.7, // reduce leverage by 30%
           collateralMultiplier: 1.0,
         };
 
@@ -198,7 +188,7 @@ export class RegimeDetector {
           momentum: 0.2,
           meanReversion: 0.2,
           whaleFollow: 0.6,
-          leverageMultiplier: 0.85,  // slightly reduce leverage
+          leverageMultiplier: 0.85, // slightly reduce leverage
           collateralMultiplier: 1.0,
         };
 

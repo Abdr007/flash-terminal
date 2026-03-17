@@ -1,12 +1,5 @@
 import { z } from 'zod';
-import {
-  ToolDefinition,
-  ToolResult,
-  TradeSide,
-  Position,
-  MarketData,
-  MarketOI,
-} from '../types/index.js';
+import { ToolDefinition, ToolResult, TradeSide, Position, MarketData, MarketOI } from '../types/index.js';
 import {
   formatUsd,
   formatPrice,
@@ -93,7 +86,10 @@ export const flashOpenPosition: ToolDefinition = {
     }
 
     if (!Number.isFinite(collateral) || !Number.isFinite(leverage) || collateral <= 0 || leverage <= 0) {
-      return { success: false, message: chalk.red('  Invalid trade parameters: collateral and leverage must be positive numbers.') };
+      return {
+        success: false,
+        message: chalk.red('  Invalid trade parameters: collateral and leverage must be positive numbers.'),
+      };
     }
 
     if (collateral < 10) {
@@ -106,10 +102,13 @@ export const flashOpenPosition: ToolDefinition = {
     if (leverage > maxLev) {
       if (!context.degenMode && hasDegenMode(market)) {
         const degenMax = getMaxLeverage(market, true);
-        return { success: false, message: chalk.red(
-          `  Maximum leverage for ${market}: ${maxLev}x. ` +
-          `Enable degen mode for up to ${degenMax}x (min ${getDegenMinLeverage(market)}x).`
-        ) };
+        return {
+          success: false,
+          message: chalk.red(
+            `  Maximum leverage for ${market}: ${maxLev}x. ` +
+              `Enable degen mode for up to ${degenMax}x (min ${getDegenMinLeverage(market)}x).`,
+          ),
+        };
       }
       return { success: false, message: chalk.red(`  Maximum leverage for ${market}: ${maxLev}x`) };
     }
@@ -118,9 +117,10 @@ export const flashOpenPosition: ToolDefinition = {
     if (context.degenMode && hasDegenMode(market)) {
       const degenMin = getDegenMinLeverage(market);
       if (leverage > getMaxLeverage(market, false) && leverage < degenMin) {
-        return { success: false, message: chalk.red(
-          `  Degen mode on ${market} requires minimum ${degenMin}x leverage (got ${leverage}x).`
-        ) };
+        return {
+          success: false,
+          message: chalk.red(`  Degen mode on ${market} requires minimum ${degenMin}x leverage (got ${leverage}x).`),
+        };
       }
     }
 
@@ -154,20 +154,25 @@ export const flashOpenPosition: ToolDefinition = {
     const walletAddr = context.walletAddress ?? 'unknown';
 
     // Fetch fee rate from CustodyAccount via Flash SDK (cached, 60s TTL)
-    const perpClient = context.simulationMode ? null : (context.flashClient as unknown as Record<string, unknown>).perpClient ?? null;
+    const perpClient = context.simulationMode
+      ? null
+      : ((context.flashClient as unknown as Record<string, unknown>).perpClient ?? null);
     let feeRates;
     try {
       feeRates = await getProtocolFeeRates(market, perpClient);
     } catch (err) {
       if (err instanceof ProtocolParameterError) {
-        return { success: false, message: [
-          '',
-          chalk.red(`  Protocol parameter error detected for ${market}`),
-          chalk.red('  CustodyAccount data invalid or RPC corrupted.'),
-          chalk.red('  Please verify RPC integrity.'),
-          chalk.dim(`  Detail: ${err.message}`),
-          '',
-        ].join('\n') };
+        return {
+          success: false,
+          message: [
+            '',
+            chalk.red(`  Protocol parameter error detected for ${market}`),
+            chalk.red('  CustodyAccount data invalid or RPC corrupted.'),
+            chalk.red('  Please verify RPC integrity.'),
+            chalk.dim(`  Detail: ${err.message}`),
+            '',
+          ].join('\n'),
+        };
       }
       throw err;
     }
@@ -180,7 +185,11 @@ export const flashOpenPosition: ToolDefinition = {
       guard.logAudit({
         timestamp: new Date().toISOString(),
         type: 'open',
-        market, side, collateral, leverage, sizeUsd,
+        market,
+        side,
+        collateral,
+        leverage,
+        sizeUsd,
         walletAddress: walletAddr,
         result: 'rejected',
         reason: limitCheck.reason,
@@ -194,7 +203,11 @@ export const flashOpenPosition: ToolDefinition = {
       guard.logAudit({
         timestamp: new Date().toISOString(),
         type: 'open',
-        market, side, collateral, leverage, sizeUsd,
+        market,
+        side,
+        collateral,
+        leverage,
+        sizeUsd,
         walletAddress: walletAddr,
         result: 'rate_limited',
         reason: rateCheck.reason,
@@ -218,9 +231,13 @@ export const flashOpenPosition: ToolDefinition = {
     // Fee breakdown: open fee + estimated close fee
     const estCloseFee = calcFeeUsd(sizeUsd, feeRates.closeFeeRate ?? estimatedFeeRate);
     if (Number.isFinite(estimatedFee) && Number.isFinite(estCloseFee)) {
-      lines.push(`  Fees:        ${chalk.dim(`Open: $${estimatedFee.toFixed(4)} | Est. close: $${estCloseFee.toFixed(4)}`)}`);
+      lines.push(
+        `  Fees:        ${chalk.dim(`Open: $${estimatedFee.toFixed(4)} | Est. close: $${estCloseFee.toFixed(4)}`)}`,
+      );
     } else {
-      lines.push(`  Est. Fee:    ${chalk.dim('$' + estimatedFee.toFixed(4))}  ${chalk.dim(`(${(estimatedFeeRate * 100).toFixed(2)}%)`)}`);
+      lines.push(
+        `  Est. Fee:    ${chalk.dim('$' + estimatedFee.toFixed(4))}  ${chalk.dim(`(${(estimatedFeeRate * 100).toFixed(2)}%)`)}`,
+      );
     }
 
     // Risk preview: entry estimate, liquidation estimate, distance, risk level, portfolio impact
@@ -230,15 +247,19 @@ export const flashOpenPosition: ToolDefinition = {
     // Distance to liquidation (uses data from risk preview computation)
     try {
       const marketData = await context.flashClient.getMarketData(market);
-      const md = marketData.find(m => m.symbol.toUpperCase() === market.toUpperCase());
+      const md = marketData.find((m) => m.symbol.toUpperCase() === market.toUpperCase());
       if (md && Number.isFinite(md.price) && md.price > 0) {
-        const perpClient = context.simulationMode ? null : (context.flashClient as unknown as Record<string, unknown>).perpClient ?? null;
+        const perpClient = context.simulationMode
+          ? null
+          : ((context.flashClient as unknown as Record<string, unknown>).perpClient ?? null);
         const liqEst = await estimateLiqPrice(md.price, leverage, side, market, perpClient);
         if (Number.isFinite(liqEst) && liqEst > 0) {
-          const distToLiq = Math.abs(md.price - liqEst) / md.price * 100;
+          const distToLiq = (Math.abs(md.price - liqEst) / md.price) * 100;
           if (Number.isFinite(distToLiq)) {
             const distColor = distToLiq < 10 ? chalk.red : distToLiq < 30 ? chalk.yellow : chalk.green;
-            lines.push(`  Liq Distance: ${distColor(distToLiq.toFixed(1) + '%')} ${chalk.dim(`(${formatPrice(Math.abs(md.price - liqEst))} from entry)`)}`);
+            lines.push(
+              `  Liq Distance: ${distColor(distToLiq.toFixed(1) + '%')} ${chalk.dim(`(${formatPrice(Math.abs(md.price - liqEst))} from entry)`)}`,
+            );
           }
         }
       }
@@ -251,7 +272,8 @@ export const flashOpenPosition: ToolDefinition = {
     if (limits.maxCollateralPerTrade > 0 || limits.maxPositionSize > 0 || limits.maxLeverage > 0) {
       lines.push('');
       lines.push(chalk.dim('  Limits:'));
-      if (limits.maxCollateralPerTrade > 0) lines.push(chalk.dim(`    Max Collateral: ${formatUsd(limits.maxCollateralPerTrade)}`));
+      if (limits.maxCollateralPerTrade > 0)
+        lines.push(chalk.dim(`    Max Collateral: ${formatUsd(limits.maxCollateralPerTrade)}`));
       if (limits.maxPositionSize > 0) lines.push(chalk.dim(`    Max Position:   ${formatUsd(limits.maxPositionSize)}`));
       if (limits.maxLeverage > 0) lines.push(chalk.dim(`    Max Leverage:   ${limits.maxLeverage}x`));
     }
@@ -287,21 +309,32 @@ export const flashOpenPosition: ToolDefinition = {
           logTradeStart('open', market, side, { collateral, leverage, sizeUsd });
           // Journal: record pending BEFORE broadcast
           const journal = getTradeJournal();
-          const journalId = journal.recordPending({ market, side: side.toString(), action: 'open', collateral, leverage, sizeUsd });
+          const journalId = journal.recordPending({
+            market,
+            side: side.toString(),
+            action: 'open',
+            collateral,
+            leverage,
+            sizeUsd,
+          });
           try {
             // Use atomic method when TP/SL are provided (single transaction)
-            const useAtomic = (takeProfit !== undefined || stopLoss !== undefined)
-              && context.flashClient.openPositionAtomic
-              && !context.simulationMode;
+            const useAtomic =
+              (takeProfit !== undefined || stopLoss !== undefined) &&
+              context.flashClient.openPositionAtomic &&
+              !context.simulationMode;
 
             const result = useAtomic
               ? await context.flashClient.openPositionAtomic!(
-                  market, side, collateral, leverage, collateral_token,
-                  takeProfit, stopLoss,
+                  market,
+                  side,
+                  collateral,
+                  leverage,
+                  collateral_token,
+                  takeProfit,
+                  stopLoss,
                 )
-              : await context.flashClient.openPosition(
-                  market, side, collateral, leverage, collateral_token,
-                );
+              : await context.flashClient.openPosition(market, side, collateral, leverage, collateral_token);
 
             // Journal: mark confirmed and remove
             journal.recordSent(journalId, result.txSignature);
@@ -318,14 +351,16 @@ export const flashOpenPosition: ToolDefinition = {
             guard.logAudit({
               timestamp: new Date().toISOString(),
               type: 'open',
-              market, side, collateral, leverage, sizeUsd,
+              market,
+              side,
+              collateral,
+              leverage,
+              sizeUsd,
               walletAddress: walletAddr,
               result: 'confirmed',
             });
 
-            const txLink = context.simulationMode
-              ? result.txSignature
-              : `https://solscan.io/tx/${result.txSignature}`;
+            const txLink = context.simulationMode ? result.txSignature : `https://solscan.io/tx/${result.txSignature}`;
 
             // Liquidation price from SDK (protocol math)
             const liqPrice = result.liquidationPrice ?? 0;
@@ -338,10 +373,16 @@ export const flashOpenPosition: ToolDefinition = {
               // Cap session trades to prevent unbounded memory growth in long sessions
               if (context.sessionTrades.length >= 500) context.sessionTrades.shift();
               context.sessionTrades.push({
-                action: 'open', market, side, leverage, collateral,
-                sizeUsd: result.sizeUsd, entryPrice: result.entryPrice,
+                action: 'open',
+                market,
+                side,
+                leverage,
+                collateral,
+                sizeUsd: result.sizeUsd,
+                entryPrice: result.entryPrice,
                 openFeePaid: executionFee,
-                txSignature: result.txSignature, timestamp: Date.now(),
+                txSignature: result.txSignature,
+                timestamp: Date.now(),
               });
             }
 
@@ -352,9 +393,7 @@ export const flashOpenPosition: ToolDefinition = {
             if (!context.simulationMode) {
               try {
                 const freshPositions = await context.flashClient.getPositions();
-                const pos = freshPositions.find(
-                  (p) => p.market === market && p.side === side
-                );
+                const pos = freshPositions.find((p) => p.market === market && p.side === side);
                 if (pos) {
                   actualSize = pos.sizeUsd;
                   actualCollateral = pos.collateralUsd;
@@ -365,13 +404,19 @@ export const flashOpenPosition: ToolDefinition = {
               }
             }
 
-            logTradeSuccess('open', market, side, { txSignature: result.txSignature, entryPrice: result.entryPrice, sizeUsd: actualSize });
+            logTradeSuccess('open', market, side, {
+              txSignature: result.txSignature,
+              entryPrice: result.entryPrice,
+              sizeUsd: actualSize,
+            });
 
             // Shadow trade — fire-and-forget, completely isolated
             try {
               const shadowResult = await getShadowEngine().shadowOpen(market, side, collateral, leverage);
               if (shadowResult) logShadowTrade(shadowResult);
-            } catch { /* shadow must never affect live pipeline */ }
+            } catch {
+              /* shadow must never affect live pipeline */
+            }
 
             // TP/SL display lines
             const tpSlLines: string[] = [];
@@ -380,10 +425,14 @@ export const flashOpenPosition: ToolDefinition = {
             if (atomicIncluded) {
               // TP/SL were included in the atomic transaction
               if (takeProfit !== undefined) {
-                tpSlLines.push(`  Take Profit:       ${chalk.green('$' + takeProfit.toFixed(2))} ${chalk.dim('(on-chain, atomic)')}`);
+                tpSlLines.push(
+                  `  Take Profit:       ${chalk.green('$' + takeProfit.toFixed(2))} ${chalk.dim('(on-chain, atomic)')}`,
+                );
               }
               if (stopLoss !== undefined) {
-                tpSlLines.push(`  Stop Loss:         ${chalk.red('$' + stopLoss.toFixed(2))} ${chalk.dim('(on-chain, atomic)')}`);
+                tpSlLines.push(
+                  `  Stop Loss:         ${chalk.red('$' + stopLoss.toFixed(2))} ${chalk.dim('(on-chain, atomic)')}`,
+                );
               }
             } else if (takeProfit !== undefined || stopLoss !== undefined) {
               // Sequential fallback — place TP/SL as separate transactions
@@ -392,14 +441,22 @@ export const flashOpenPosition: ToolDefinition = {
                 if (takeProfit !== undefined) {
                   try {
                     await client.placeTriggerOrder(market, side, takeProfit, false);
-                    tpSlLines.push(`  Take Profit:       ${chalk.green('$' + takeProfit.toFixed(2))} ${chalk.dim('(on-chain)')}`);
-                  } catch { /* TP is non-critical */ }
+                    tpSlLines.push(
+                      `  Take Profit:       ${chalk.green('$' + takeProfit.toFixed(2))} ${chalk.dim('(on-chain)')}`,
+                    );
+                  } catch {
+                    /* TP is non-critical */
+                  }
                 }
                 if (stopLoss !== undefined) {
                   try {
                     await client.placeTriggerOrder(market, side, stopLoss, true);
-                    tpSlLines.push(`  Stop Loss:         ${chalk.red('$' + stopLoss.toFixed(2))} ${chalk.dim('(on-chain)')}`);
-                  } catch { /* SL is non-critical */ }
+                    tpSlLines.push(
+                      `  Stop Loss:         ${chalk.red('$' + stopLoss.toFixed(2))} ${chalk.dim('(on-chain)')}`,
+                    );
+                  } catch {
+                    /* SL is non-critical */
+                  }
                 }
               }
             }
@@ -429,12 +486,19 @@ export const flashOpenPosition: ToolDefinition = {
             guard.logAudit({
               timestamp: new Date().toISOString(),
               type: 'open',
-              market, side, collateral, leverage, sizeUsd,
+              market,
+              side,
+              collateral,
+              leverage,
+              sizeUsd,
               walletAddress: walletAddr,
               result: 'failed',
               reason: getErrorMessage(error),
             });
-            return { success: false, message: `  Failed to open position: ${humanizeSdkError(getErrorMessage(error), collateral, leverage)}` };
+            return {
+              success: false,
+              message: `  Failed to open position: ${humanizeSdkError(getErrorMessage(error), collateral, leverage)}`,
+            };
           }
         },
       },
@@ -455,7 +519,10 @@ export const flashClosePosition: ToolDefinition = {
   }),
   execute: async (params, context): Promise<ToolResult> => {
     const { market, side, closePercent, closeAmount } = params as {
-      market: string; side: TradeSide; closePercent?: number; closeAmount?: number;
+      market: string;
+      side: TradeSide;
+      closePercent?: number;
+      closeAmount?: number;
     };
 
     const validationError = validateLiveTradeContext(context);
@@ -502,9 +569,12 @@ export const flashClosePosition: ToolDefinition = {
     if (!rateCheck.allowed) {
       guard.logAudit({
         timestamp: new Date().toISOString(),
-        type: 'close', market, side,
+        type: 'close',
+        market,
+        side,
         walletAddress: walletAddr,
-        result: 'rate_limited', reason: rateCheck.reason,
+        result: 'rate_limited',
+        reason: rateCheck.reason,
       });
       return { success: false, message: chalk.red(`  ${rateCheck.reason}`) };
     }
@@ -512,9 +582,7 @@ export const flashClosePosition: ToolDefinition = {
     // Pre-check: verify position exists and validate partial close
     try {
       const positions = await context.flashClient.getPositions();
-      const pos = positions.find(p =>
-        (p.market ?? '').toUpperCase() === market.toUpperCase() && p.side === side,
-      );
+      const pos = positions.find((p) => (p.market ?? '').toUpperCase() === market.toUpperCase() && p.side === side);
       if (!pos) {
         return { success: false, message: chalk.red(`  No open ${side} position on ${market}.`) };
       }
@@ -527,7 +595,12 @@ export const flashClosePosition: ToolDefinition = {
         }
       }
       if (closeAmount !== undefined && closeAmount > positionSizeUsd) {
-        return { success: false, message: chalk.red(`  Close amount $${closeAmount.toFixed(2)} exceeds position size $${positionSizeUsd.toFixed(2)}.`) };
+        return {
+          success: false,
+          message: chalk.red(
+            `  Close amount $${closeAmount.toFixed(2)} exceeds position size $${positionSizeUsd.toFixed(2)}.`,
+          ),
+        };
       }
     } catch {
       // Non-critical: let the close attempt handle the error
@@ -547,7 +620,9 @@ export const flashClosePosition: ToolDefinition = {
     const titleLabel = isPartialClose ? 'Partial Close Position' : 'Close Position';
     const closeLines = [
       '',
-      isLive ? chalk.red.bold(`  CONFIRM TRANSACTION — ${titleLabel}`) : chalk.yellow(`  CONFIRM TRANSACTION — ${titleLabel}`),
+      isLive
+        ? chalk.red.bold(`  CONFIRM TRANSACTION — ${titleLabel}`)
+        : chalk.yellow(`  CONFIRM TRANSACTION — ${titleLabel}`),
       chalk.dim('  ─────────────────────────────────'),
       `  Market:  ${chalk.bold(market)} ${colorSide(side)}`,
       `  Pool:    ${chalk.cyan(pool)}`,
@@ -569,9 +644,7 @@ export const flashClosePosition: ToolDefinition = {
           const journal = getTradeJournal();
           const journalId = journal.recordPending({ market, side: side.toString(), action: 'close' });
           try {
-            const result = await context.flashClient.closePosition(
-              market, side, undefined, closePercent, closeAmount
-            );
+            const result = await context.flashClient.closePosition(market, side, undefined, closePercent, closeAmount);
 
             // Journal: confirmed
             journal.recordSent(journalId, result.txSignature);
@@ -586,7 +659,9 @@ export const flashClosePosition: ToolDefinition = {
             guard.recordSigning();
             guard.logAudit({
               timestamp: new Date().toISOString(),
-              type: result.isPartial ? 'partial_close' : 'close', market, side,
+              type: result.isPartial ? 'partial_close' : 'close',
+              market,
+              side,
               walletAddress: walletAddr,
               result: 'confirmed',
             });
@@ -595,25 +670,33 @@ export const flashClosePosition: ToolDefinition = {
             if (context.sessionTrades) {
               if (context.sessionTrades.length >= 500) context.sessionTrades.shift();
               context.sessionTrades.push({
-                action: result.isPartial ? 'partial_close' : 'close', market, side,
-                exitPrice: result.exitPrice, pnl: result.pnl,
-                txSignature: result.txSignature, timestamp: Date.now(),
+                action: result.isPartial ? 'partial_close' : 'close',
+                market,
+                side,
+                exitPrice: result.exitPrice,
+                pnl: result.pnl,
+                txSignature: result.txSignature,
+                timestamp: Date.now(),
               });
             }
 
             const pnlStr = result.pnl !== undefined ? `  PnL: ${colorPnl(result.pnl)}\n` : '';
-            const txLink = context.simulationMode
-              ? result.txSignature
-              : `https://solscan.io/tx/${result.txSignature}`;
+            const txLink = context.simulationMode ? result.txSignature : `https://solscan.io/tx/${result.txSignature}`;
             const tradeType = result.isPartial ? 'partial_close' : 'close';
-            logTradeSuccess(tradeType, market, side, { txSignature: result.txSignature, exitPrice: result.exitPrice, pnl: result.pnl });
+            logTradeSuccess(tradeType, market, side, {
+              txSignature: result.txSignature,
+              exitPrice: result.exitPrice,
+              pnl: result.pnl,
+            });
 
             // Shadow trade — fire-and-forget, completely isolated
             if (!result.isPartial) {
               try {
                 const shadowResult = await getShadowEngine().shadowClose(market, side);
                 if (shadowResult) logShadowTrade(shadowResult);
-              } catch { /* shadow must never affect live pipeline */ }
+              } catch {
+                /* shadow must never affect live pipeline */
+              }
             }
 
             // Build output message
@@ -646,9 +729,12 @@ export const flashClosePosition: ToolDefinition = {
             logTradeFailure('close', market, side, getErrorMessage(error));
             guard.logAudit({
               timestamp: new Date().toISOString(),
-              type: 'close', market, side,
+              type: 'close',
+              market,
+              side,
               walletAddress: walletAddr,
-              result: 'failed', reason: getErrorMessage(error),
+              result: 'failed',
+              reason: getErrorMessage(error),
             });
             return { success: false, message: `  Failed to close position: ${getErrorMessage(error)}` };
           }
@@ -718,9 +804,13 @@ export const flashAddCollateral: ToolDefinition = {
     if (!rateCheck.allowed) {
       guard.logAudit({
         timestamp: new Date().toISOString(),
-        type: 'add_collateral', market, side,
-        collateral: amount, walletAddress: walletAddr,
-        result: 'rate_limited', reason: rateCheck.reason,
+        type: 'add_collateral',
+        market,
+        side,
+        collateral: amount,
+        walletAddress: walletAddr,
+        result: 'rate_limited',
+        reason: rateCheck.reason,
       });
       return { success: false, message: chalk.red(`  ${rateCheck.reason}`) };
     }
@@ -728,9 +818,7 @@ export const flashAddCollateral: ToolDefinition = {
     // Pre-check: verify position exists before showing confirmation
     try {
       const positions = await context.flashClient.getPositions();
-      const exists = positions.some(p =>
-        (p.market ?? '').toUpperCase() === market.toUpperCase() && p.side === side,
-      );
+      const exists = positions.some((p) => (p.market ?? '').toUpperCase() === market.toUpperCase() && p.side === side);
       if (!exists) {
         return { success: false, message: chalk.red(`  No open ${side} position on ${market}.`) };
       }
@@ -743,7 +831,9 @@ export const flashAddCollateral: ToolDefinition = {
       success: true,
       message: [
         '',
-        isLive ? chalk.red.bold('  CONFIRM TRANSACTION — Add Collateral') : chalk.yellow('  CONFIRM TRANSACTION — Add Collateral'),
+        isLive
+          ? chalk.red.bold('  CONFIRM TRANSACTION — Add Collateral')
+          : chalk.yellow('  CONFIRM TRANSACTION — Add Collateral'),
         chalk.dim('  ─────────────────────────────────'),
         `  Market: ${chalk.bold(market)} ${colorSide(side)}`,
         ...addPosLines,
@@ -756,7 +846,12 @@ export const flashAddCollateral: ToolDefinition = {
       data: {
         executeAction: async (): Promise<ToolResult> => {
           const journal = getTradeJournal();
-          const journalId = journal.recordPending({ market, side: side.toString(), action: 'add_collateral', collateral: amount });
+          const journalId = journal.recordPending({
+            market,
+            side: side.toString(),
+            action: 'add_collateral',
+            collateral: amount,
+          });
           try {
             const result = await context.flashClient.addCollateral(market, side, amount);
             journal.recordSent(journalId, result.txSignature);
@@ -765,8 +860,11 @@ export const flashAddCollateral: ToolDefinition = {
             guard.recordSigning();
             guard.logAudit({
               timestamp: new Date().toISOString(),
-              type: 'add_collateral', market, side,
-              collateral: amount, walletAddress: walletAddr,
+              type: 'add_collateral',
+              market,
+              side,
+              collateral: amount,
+              walletAddress: walletAddr,
               result: 'confirmed',
             });
             // Log session trade
@@ -774,8 +872,12 @@ export const flashAddCollateral: ToolDefinition = {
               // Cap session trades to prevent unbounded memory growth in long sessions
               if (context.sessionTrades.length >= 500) context.sessionTrades.shift();
               context.sessionTrades.push({
-                action: 'add_collateral', market, side, collateral: amount,
-                txSignature: result.txSignature, timestamp: Date.now(),
+                action: 'add_collateral',
+                market,
+                side,
+                collateral: amount,
+                txSignature: result.txSignature,
+                timestamp: Date.now(),
               });
             }
 
@@ -783,7 +885,9 @@ export const flashAddCollateral: ToolDefinition = {
             try {
               const shadowResult = await getShadowEngine().shadowAddCollateral(market, side, amount);
               if (shadowResult) logShadowTrade(shadowResult);
-            } catch { /* shadow must never affect live pipeline */ }
+            } catch {
+              /* shadow must never affect live pipeline */
+            }
 
             const txDisplay = context.simulationMode
               ? result.txSignature
@@ -797,9 +901,13 @@ export const flashAddCollateral: ToolDefinition = {
             journal.remove(journalId);
             guard.logAudit({
               timestamp: new Date().toISOString(),
-              type: 'add_collateral', market, side,
-              collateral: amount, walletAddress: walletAddr,
-              result: 'failed', reason: getErrorMessage(error),
+              type: 'add_collateral',
+              market,
+              side,
+              collateral: amount,
+              walletAddress: walletAddr,
+              result: 'failed',
+              reason: getErrorMessage(error),
             });
             return { success: false, message: `  Failed: ${getErrorMessage(error)}` };
           }
@@ -869,9 +977,13 @@ export const flashRemoveCollateral: ToolDefinition = {
     if (!rateCheck.allowed) {
       guard.logAudit({
         timestamp: new Date().toISOString(),
-        type: 'remove_collateral', market, side,
-        collateral: amount, walletAddress: walletAddr,
-        result: 'rate_limited', reason: rateCheck.reason,
+        type: 'remove_collateral',
+        market,
+        side,
+        collateral: amount,
+        walletAddress: walletAddr,
+        result: 'rate_limited',
+        reason: rateCheck.reason,
       });
       return { success: false, message: chalk.red(`  ${rateCheck.reason}`) };
     }
@@ -879,15 +991,18 @@ export const flashRemoveCollateral: ToolDefinition = {
     // Pre-check: verify position exists before showing confirmation
     try {
       const positions = await context.flashClient.getPositions();
-      const pos = positions.find(p =>
-        (p.market ?? '').toUpperCase() === market.toUpperCase() && p.side === side,
-      );
+      const pos = positions.find((p) => (p.market ?? '').toUpperCase() === market.toUpperCase() && p.side === side);
       if (!pos) {
         return { success: false, message: chalk.red(`  No open ${side} position on ${market}.`) };
       }
       // Check if remove amount exceeds collateral
       if (pos.collateralUsd && amount >= pos.collateralUsd) {
-        return { success: false, message: chalk.red(`  Cannot remove ${formatUsd(amount)} — position only has ${formatUsd(pos.collateralUsd)} collateral. Close position instead.`) };
+        return {
+          success: false,
+          message: chalk.red(
+            `  Cannot remove ${formatUsd(amount)} — position only has ${formatUsd(pos.collateralUsd)} collateral. Close position instead.`,
+          ),
+        };
       }
     } catch {
       // Non-critical: let the remove attempt handle the error
@@ -898,7 +1013,9 @@ export const flashRemoveCollateral: ToolDefinition = {
       success: true,
       message: [
         '',
-        isLive ? chalk.red.bold('  CONFIRM TRANSACTION — Remove Collateral') : chalk.yellow('  CONFIRM TRANSACTION — Remove Collateral'),
+        isLive
+          ? chalk.red.bold('  CONFIRM TRANSACTION — Remove Collateral')
+          : chalk.yellow('  CONFIRM TRANSACTION — Remove Collateral'),
         chalk.dim('  ─────────────────────────────────'),
         `  Market:  ${chalk.bold(market)} ${colorSide(side)}`,
         ...rmPosLines,
@@ -911,7 +1028,12 @@ export const flashRemoveCollateral: ToolDefinition = {
       data: {
         executeAction: async (): Promise<ToolResult> => {
           const journal = getTradeJournal();
-          const journalId = journal.recordPending({ market, side: side.toString(), action: 'remove_collateral', collateral: amount });
+          const journalId = journal.recordPending({
+            market,
+            side: side.toString(),
+            action: 'remove_collateral',
+            collateral: amount,
+          });
           try {
             const result = await context.flashClient.removeCollateral(market, side, amount);
             journal.recordSent(journalId, result.txSignature);
@@ -920,8 +1042,11 @@ export const flashRemoveCollateral: ToolDefinition = {
             guard.recordSigning();
             guard.logAudit({
               timestamp: new Date().toISOString(),
-              type: 'remove_collateral', market, side,
-              collateral: amount, walletAddress: walletAddr,
+              type: 'remove_collateral',
+              market,
+              side,
+              collateral: amount,
+              walletAddress: walletAddr,
               result: 'confirmed',
             });
 
@@ -930,8 +1055,12 @@ export const flashRemoveCollateral: ToolDefinition = {
               // Cap session trades to prevent unbounded memory growth in long sessions
               if (context.sessionTrades.length >= 500) context.sessionTrades.shift();
               context.sessionTrades.push({
-                action: 'remove_collateral', market, side, collateral: amount,
-                txSignature: result.txSignature, timestamp: Date.now(),
+                action: 'remove_collateral',
+                market,
+                side,
+                collateral: amount,
+                txSignature: result.txSignature,
+                timestamp: Date.now(),
               });
             }
 
@@ -939,7 +1068,9 @@ export const flashRemoveCollateral: ToolDefinition = {
             try {
               const shadowResult = await getShadowEngine().shadowRemoveCollateral(market, side, amount);
               if (shadowResult) logShadowTrade(shadowResult);
-            } catch { /* shadow must never affect live pipeline */ }
+            } catch {
+              /* shadow must never affect live pipeline */
+            }
 
             const txDisplay = context.simulationMode
               ? result.txSignature
@@ -953,9 +1084,13 @@ export const flashRemoveCollateral: ToolDefinition = {
             journal.remove(journalId);
             guard.logAudit({
               timestamp: new Date().toISOString(),
-              type: 'remove_collateral', market, side,
-              collateral: amount, walletAddress: walletAddr,
-              result: 'failed', reason: getErrorMessage(error),
+              type: 'remove_collateral',
+              market,
+              side,
+              collateral: amount,
+              walletAddress: walletAddr,
+              result: 'failed',
+              reason: getErrorMessage(error),
             });
             return { success: false, message: `  Failed: ${getErrorMessage(error)}` };
           }
@@ -992,12 +1127,14 @@ export const flashGetPositions: ToolDefinition = {
     const headers = ['Market', 'Side', 'Lev', 'Size', 'Collateral', 'Entry', 'Mark', 'PnL', 'Fees', 'Liq'];
     const rows = positions.map((p: Position) => {
       const pnlSign = p.unrealizedPnl >= 0 ? '+' : '';
-      const liqDist = p.markPrice > 0 && p.liquidationPrice > 0
-        ? Math.abs((p.markPrice - p.liquidationPrice) / p.markPrice) * 100
-        : 0;
-      const liqStr = p.liquidationPrice > 0
-        ? `${formatPrice(p.liquidationPrice)} ${theme.dim(`(${liqDist.toFixed(1)}%)`)}`
-        : theme.dim('—');
+      const liqDist =
+        p.markPrice > 0 && p.liquidationPrice > 0
+          ? Math.abs((p.markPrice - p.liquidationPrice) / p.markPrice) * 100
+          : 0;
+      const liqStr =
+        p.liquidationPrice > 0
+          ? `${formatPrice(p.liquidationPrice)} ${theme.dim(`(${liqDist.toFixed(1)}%)`)}`
+          : theme.dim('—');
       // Total fees = on-chain unsettled fees + session-tracked open fee
       const sessionFee = sessionFeeLookup.get(`${p.market}:${p.side}`) ?? 0;
       const displayFees = p.totalFees > 0 ? p.totalFees : sessionFee;
@@ -1055,12 +1192,10 @@ export const flashGetMarketData: ToolDefinition = {
       const priceSvc = new PriceService();
       const [oi, pythPrices] = await Promise.all([
         context.dataClient.getOpenInterest().catch(() => ({ markets: [] as MarketOI[] })),
-        priceSvc.getPrices(markets.map(m => m.symbol)).catch(() => new Map()),
+        priceSvc.getPrices(markets.map((m) => m.symbol)).catch(() => new Map()),
       ]);
       for (const m of markets) {
-        const oiData = oi.markets.find(
-          (o: MarketOI) => o.market.includes(m.symbol)
-        );
+        const oiData = oi.markets.find((o: MarketOI) => o.market.includes(m.symbol));
         if (oiData) {
           m.openInterestLong = oiData.longOi;
           m.openInterestShort = oiData.shortOi;
@@ -1070,7 +1205,9 @@ export const flashGetMarketData: ToolDefinition = {
           m.priceChange24h = pythPrice.priceChange24h;
         }
       }
-    } catch { /* ignore enrichment errors */ }
+    } catch {
+      /* ignore enrichment errors */
+    }
 
     const headers = ['Market', 'Price', '24h Change', 'OI Long', 'OI Short', 'Max Lev'];
     const rows = markets.map((m: MarketData) => [
@@ -1084,12 +1221,7 @@ export const flashGetMarketData: ToolDefinition = {
 
     return {
       success: true,
-      message: [
-        theme.titleBlock('MARKET DATA'),
-        '',
-        formatTable(headers, rows),
-        '',
-      ].join('\n'),
+      message: [theme.titleBlock('MARKET DATA'), '', formatTable(headers, rows), ''].join('\n'),
       data: { markets },
     };
   },
@@ -1132,7 +1264,9 @@ export const flashGetPortfolio: ToolDefinition = {
 
     lines.push(
       `  ${portfolio.balanceLabel}`,
-      portfolio.usdcBalance !== undefined ? theme.pair('USDC Available', theme.positive('$' + portfolio.usdcBalance.toFixed(2))) : '',
+      portfolio.usdcBalance !== undefined
+        ? theme.pair('USDC Available', theme.positive('$' + portfolio.usdcBalance.toFixed(2)))
+        : '',
       theme.pair('Collateral', formatUsd(portfolio.totalCollateralUsd)),
       theme.pair('Unrealized PnL', colorPnl(portfolio.totalUnrealizedPnl)),
       theme.pair('Realized PnL', colorPnl(portfolio.totalRealizedPnl)),
@@ -1156,10 +1290,54 @@ import { allProtocolTools } from './protocol-tools.js';
 import { allOrderTools } from './order-tools.js';
 
 // Re-export individual tools for backward compatibility
-export { flashGetVolume, flashGetOpenInterest, flashGetLeaderboard, flashGetFees, flashGetTraderProfile } from './analytics-tools.js';
-export { walletImport, walletList, walletUse, walletRemove, walletStatus, walletDisconnect, walletAddress, walletBalance, walletTokens, flashMarkets, walletConnect } from './wallet-tools.js';
-export { inspectProtocol, inspectPool, inspectMarketTool, systemStatusTool, protocolStatusTool, rpcStatusTool, rpcTestTool, txInspectTool, txDebugTool, tradeHistoryTool, liquidationMapTool, fundingDashboardTool, liquidityDepthTool, protocolHealthTool, systemAuditTool, txMetricsTool } from './protocol-tools.js';
-export { flashCloseAll, setTpSlTool, removeTpSlTool, tpSlStatusTool, limitOrderPlaceTool, limitOrderCancelTool, limitOrderEditTool, limitOrderListTool } from './order-tools.js';
+export {
+  flashGetVolume,
+  flashGetOpenInterest,
+  flashGetLeaderboard,
+  flashGetFees,
+  flashGetTraderProfile,
+} from './analytics-tools.js';
+export {
+  walletImport,
+  walletList,
+  walletUse,
+  walletRemove,
+  walletStatus,
+  walletDisconnect,
+  walletAddress,
+  walletBalance,
+  walletTokens,
+  flashMarkets,
+  walletConnect,
+} from './wallet-tools.js';
+export {
+  inspectProtocol,
+  inspectPool,
+  inspectMarketTool,
+  systemStatusTool,
+  protocolStatusTool,
+  rpcStatusTool,
+  rpcTestTool,
+  txInspectTool,
+  txDebugTool,
+  tradeHistoryTool,
+  liquidationMapTool,
+  fundingDashboardTool,
+  liquidityDepthTool,
+  protocolHealthTool,
+  systemAuditTool,
+  txMetricsTool,
+} from './protocol-tools.js';
+export {
+  flashCloseAll,
+  setTpSlTool,
+  removeTpSlTool,
+  tpSlStatusTool,
+  limitOrderPlaceTool,
+  limitOrderCancelTool,
+  limitOrderEditTool,
+  limitOrderListTool,
+} from './order-tools.js';
 
 export const allFlashTools: ToolDefinition[] = [
   flashOpenPosition,

@@ -93,12 +93,7 @@ export class StatusBar {
   /** Rolling latency smoother */
   private latencySmoother = new LatencySmoother();
 
-  constructor(
-    rl: ReadlineInterface,
-    client: IFlashClient,
-    rpcManager: RpcManager,
-    cfg: StatusBarConfig,
-  ) {
+  constructor(rl: ReadlineInterface, client: IFlashClient, rpcManager: RpcManager, cfg: StatusBarConfig) {
     this.rl = rl;
     this.client = client;
     this.rpcManager = rpcManager;
@@ -232,17 +227,10 @@ export class StatusBar {
 
     // Build plain-text status for change detection and terminal title
     const latPlain = s.latencyMs > 0 ? `${s.latencyMs}ms` : '--';
-    const rpcPart = s.slotLag > 100
-      ? `RPC: ${s.rpcLabel} (${latPlain}) | Slot lag detected`
-      : `RPC: ${s.rpcLabel} (${latPlain})`;
+    const rpcPart =
+      s.slotLag > 100 ? `RPC: ${s.rpcLabel} (${latPlain}) | Slot lag detected` : `RPC: ${s.rpcLabel} (${latPlain})`;
     const syncPart = s.syncOk ? 'Sync: OK' : 'Sync: DELAY';
-    const plainParts = [
-      rpcPart,
-      `Wallet: ${s.walletName}`,
-      `Pos: ${s.positions}`,
-      syncPart,
-      `Mode: ${s.mode}`,
-    ];
+    const plainParts = [rpcPart, `Wallet: ${s.walletName}`, `Pos: ${s.positions}`, syncPart, `Mode: ${s.mode}`];
     const plainStatus = plainParts.join('  |  ');
 
     // Skip if nothing changed

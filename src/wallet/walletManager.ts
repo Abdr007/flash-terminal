@@ -12,7 +12,10 @@ export class WalletManager {
   private connection: Connection;
   private keypair: Keypair | null = null;
   private publicKey: PublicKey | null = null;
-  private tokenBalancesCache: { data: { sol: number; tokens: Array<{ symbol: string; mint: string; amount: number }> }; expiry: number } | null = null;
+  private tokenBalancesCache: {
+    data: { sol: number; tokens: Array<{ symbol: string; mint: string; amount: number }> };
+    expiry: number;
+  } | null = null;
   private static readonly TOKEN_CACHE_TTL = 30_000;
 
   // [H-3] Session timeout — auto-disconnect keypair after inactivity
@@ -94,7 +97,10 @@ export class WalletManager {
     this.keypair = null;
     this.publicKey = null;
     this.tokenBalancesCache = null;
-    if (this.idleTimer) { clearTimeout(this.idleTimer); this.idleTimer = null; }
+    if (this.idleTimer) {
+      clearTimeout(this.idleTimer);
+      this.idleTimer = null;
+    }
   }
 
   /**
@@ -146,7 +152,9 @@ export class WalletManager {
     }
 
     if (!Array.isArray(secretKey) || secretKey.length !== 64) {
-      throw new Error(`Invalid keypair: expected 64-byte array, got ${Array.isArray(secretKey) ? secretKey.length : typeof secretKey}`);
+      throw new Error(
+        `Invalid keypair: expected 64-byte array, got ${Array.isArray(secretKey) ? secretKey.length : typeof secretKey}`,
+      );
     }
 
     // Validate every byte is an integer in 0-255 range
@@ -187,7 +195,8 @@ export class WalletManager {
       // Check that the secret key has non-zero bytes (not zeroed out)
       const sk = this.keypair.secretKey;
       let nonZero = 0;
-      for (let i = 0; i < 32; i++) { // Only check private portion (first 32 bytes)
+      for (let i = 0; i < 32; i++) {
+        // Only check private portion (first 32 bytes)
         if (sk[i] !== 0) nonZero++;
       }
       return nonZero > 0;
@@ -267,17 +276,17 @@ export class WalletManager {
     const USDC_MINT = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
     const KNOWN_MINTS: Record<string, string> = {
       [USDC_MINT]: 'USDC',
-      'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB': 'USDT',
-      'So11111111111111111111111111111111111111112': 'WSOL',
-      'JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN': 'JUP',
-      'HZ1JovNiVvGrGNiiYvEozEVgZ58xaU3RKwX8eACQBCt3': 'PYTH',
-      'jtojtomepa8beP8AuQc6eXt5FriJwfFMwQx2v2f9mCL': 'JTO',
+      Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB: 'USDT',
+      So11111111111111111111111111111111111111112: 'WSOL',
+      JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN: 'JUP',
+      HZ1JovNiVvGrGNiiYvEozEVgZ58xaU3RKwX8eACQBCt3: 'PYTH',
+      jtojtomepa8beP8AuQc6eXt5FriJwfFMwQx2v2f9mCL: 'JTO',
       '4k3Dyjzvzp8eMZWUXbBCjEvwSkkk59S5iCNLY3QrkX6R': 'RAY',
-      'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263': 'BONK',
-      'EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm': 'WIF',
-      'BZLbGTNCSFfoth2GYDtwr7e4imWzpR5jqcUuGEwr646K': 'ORE',
-      'FAFxVxnkzZHMCodkWyoccgUNgVScqMw2mhhQBYDFjFAF': 'FAF',
-      'KMNo3nJsBXfcpJTVhZcXLW7RmTwTt4GVFE7suUBo9sS': 'KMNO',
+      DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263: 'BONK',
+      EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm: 'WIF',
+      BZLbGTNCSFfoth2GYDtwr7e4imWzpR5jqcUuGEwr646K: 'ORE',
+      FAFxVxnkzZHMCodkWyoccgUNgVScqMw2mhhQBYDFjFAF: 'FAF',
+      KMNo3nJsBXfcpJTVhZcXLW7RmTwTt4GVFE7suUBo9sS: 'KMNO',
       '98sMhvDwXj1RQi5c5Mndm3vPe9cBqPrbLaufMXFNMh5g': 'HYPE',
     };
 
@@ -285,15 +294,16 @@ export class WalletManager {
     const TOKEN_2022_PROGRAM_ID = new PublicKey('TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb');
 
     const [solBalance, tokenAccounts, token2022Accounts] = await withRetry(
-      () => Promise.all([
-        this.connection.getBalance(this.publicKey!),
-        this.connection.getParsedTokenAccountsByOwner(this.publicKey!, {
-          programId: TOKEN_PROGRAM_ID,
-        }),
-        this.connection.getParsedTokenAccountsByOwner(this.publicKey!, {
-          programId: TOKEN_2022_PROGRAM_ID,
-        }),
-      ]),
+      () =>
+        Promise.all([
+          this.connection.getBalance(this.publicKey!),
+          this.connection.getParsedTokenAccountsByOwner(this.publicKey!, {
+            programId: TOKEN_PROGRAM_ID,
+          }),
+          this.connection.getParsedTokenAccountsByOwner(this.publicKey!, {
+            programId: TOKEN_2022_PROGRAM_ID,
+          }),
+        ]),
       'wallet-token-balances',
       RPC_RETRY_OPTS,
     );

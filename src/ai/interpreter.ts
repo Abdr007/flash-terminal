@@ -188,13 +188,19 @@ function parseLimitOrder(input: string): ParsedIntent | null {
   if (!sideMatch) return null;
   const side = parseSide(sideMatch[1]);
   if (!side) return null;
-  body = body.replace(/\b(long|short)\b/, ' ').replace(/\s+/g, ' ').trim();
+  body = body
+    .replace(/\b(long|short)\b/, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
 
   // Extract leverage: "2x", "2.5x", "2 x"
   const levMatch = body.match(/\b(\d+(?:\.\d+)?)\s*x\b/);
   if (!levMatch) return null;
   const leverage = parseFloat(levMatch[1]);
-  body = body.replace(/\b\d+(?:\.\d+)?\s*x\b/, ' ').replace(/\s+/g, ' ').trim();
+  body = body
+    .replace(/\b\d+(?:\.\d+)?\s*x\b/, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
 
   // Extract collateral: "$100", "100", "100 dollars", "for $100", "with $100", "for 100 dollars"
   const colMatch = body.match(/(?:(?:for|with)\s+)?\$?(\d+(?:\.\d+)?)\s*(?:dollars?|usd|usdc)?/);
@@ -203,7 +209,10 @@ function parseLimitOrder(input: string): ParsedIntent | null {
   body = body.replace(colMatch[0], ' ').replace(/\s+/g, ' ').trim();
 
   // Remaining text should be the market (strip filler words)
-  const market = body.replace(/\b(for|with|on|a|an|the|order|position)\b/g, '').replace(/\s+/g, ' ').trim();
+  const market = body
+    .replace(/\b(for|with|on|a|an|the|order|position)\b/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
   if (!market || market.length > 20) return null;
 
   if (!Number.isFinite(limitPrice) || limitPrice <= 0) return null;
@@ -273,17 +282,19 @@ function fuzzyMarket(token: string): string | null {
  */
 function fuzzyCorrectTokens(input: string): string {
   const tokens = input.split(/\s+/);
-  return tokens.map(t => {
-    // Try fuzzy side correction
-    const correctedSide = fuzzySide(t);
-    if (correctedSide && t !== correctedSide) return correctedSide;
-    // Try fuzzy market correction (only for alphabetic tokens, not numbers)
-    if (/^[a-z]+$/.test(t) && t.length >= 3) {
-      const correctedMarket = fuzzyMarket(t);
-      if (correctedMarket) return correctedMarket.toLowerCase();
-    }
-    return t;
-  }).join(' ');
+  return tokens
+    .map((t) => {
+      // Try fuzzy side correction
+      const correctedSide = fuzzySide(t);
+      if (correctedSide && t !== correctedSide) return correctedSide;
+      // Try fuzzy market correction (only for alphabetic tokens, not numbers)
+      if (/^[a-z]+$/.test(t) && t.length >= 3) {
+        const correctedMarket = fuzzyMarket(t);
+        if (correctedMarket) return correctedMarket.toLowerCase();
+      }
+      return t;
+    })
+    .join(' ');
 }
 
 /**
@@ -313,13 +324,19 @@ function flexParseOpen(input: string): ParsedIntent | null {
   // Strip greeting/filler prefixes and verbs (iterative — handles chains like "yo i want to go")
   for (let i = 0; i < 3; i++) {
     const before = body;
-    body = body.replace(/^(?:yo|hey|please|pls|ok|okay|i\s+want\s+to|let\s+me|let\s+us|can\s+you|go|just|i\s+wanna)\s+/, '');
+    body = body.replace(
+      /^(?:yo|hey|please|pls|ok|okay|i\s+want\s+to|let\s+me|let\s+us|can\s+you|go|just|i\s+wanna)\s+/,
+      '',
+    );
     body = body.replace(/^(?:open|buy|enter)\s+(?:a\s+)?/, '');
     body = body.replace(/^(?:a|an|the)\s+/, '');
     if (body === before) break;
   }
   // Strip filler words (aggressive — keeps only meaningful tokens)
-  body = body.replace(/\b(?:with|for|on|at|to|in|of|using|and|the|a|an|my|position|collateral|dollars?|bucks?|usd|usdc)\b/g, ' ');
+  body = body.replace(
+    /\b(?:with|for|on|at|to|in|of|using|and|the|a|an|my|position|collateral|dollars?|bucks?|usd|usdc)\b/g,
+    ' ',
+  );
   // "leverage two" / "leverage 2" → "2x"
   body = body.replace(/\bleverage\s+(\d+(?:\.\d+)?)\b/g, '$1x');
   body = body.replace(/\s+/g, ' ').trim();
@@ -329,7 +346,10 @@ function flexParseOpen(input: string): ParsedIntent | null {
   const sideMatch = body.match(/\b(long|short)\b/);
   if (sideMatch) {
     side = parseSide(sideMatch[1]);
-    body = body.replace(/\b(long|short)\b/, ' ').replace(/\s+/g, ' ').trim();
+    body = body
+      .replace(/\b(long|short)\b/, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
   }
 
   // If original input started with a side-implying keyword, use that
@@ -347,7 +367,10 @@ function flexParseOpen(input: string): ParsedIntent | null {
   const levMatch = body.match(/\b(\d+(?:\.\d+)?)\s*x\b/);
   if (levMatch) {
     leverage = parseFloat(levMatch[1]);
-    body = body.replace(/\b\d+(?:\.\d+)?\s*x\b/, ' ').replace(/\s+/g, ' ').trim();
+    body = body
+      .replace(/\b\d+(?:\.\d+)?\s*x\b/, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
   }
 
   // Extract collateral: "$10", "10" — take the number that's NOT the leverage
@@ -355,13 +378,19 @@ function flexParseOpen(input: string): ParsedIntent | null {
   const dollarMatch = body.match(/\$(\d+(?:\.\d+)?)/);
   if (dollarMatch) {
     collateral = parseFloat(dollarMatch[1]);
-    body = body.replace(/\$\d+(?:\.\d+)?/, ' ').replace(/\s+/g, ' ').trim();
+    body = body
+      .replace(/\$\d+(?:\.\d+)?/, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
   } else {
     // Find remaining numbers — the one that looks like collateral (not leverage)
-    const numbers = [...body.matchAll(/\b(\d+(?:\.\d+)?)\b/g)].map(m => parseFloat(m[1]));
+    const numbers = [...body.matchAll(/\b(\d+(?:\.\d+)?)\b/g)].map((m) => parseFloat(m[1]));
     if (numbers.length === 1) {
       collateral = numbers[0];
-      body = body.replace(/\b\d+(?:\.\d+)?\b/, ' ').replace(/\s+/g, ' ').trim();
+      body = body
+        .replace(/\b\d+(?:\.\d+)?\b/, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
     } else if (numbers.length >= 2 && !leverage) {
       // Two numbers, no leverage yet — one is leverage, one is collateral
       // The one with 'x' was already extracted; if both are bare numbers,
@@ -369,12 +398,18 @@ function flexParseOpen(input: string): ParsedIntent | null {
       const sorted = [...numbers].sort((a, b) => a - b);
       leverage = sorted[0];
       collateral = sorted[1];
-      body = body.replace(/\b\d+(?:\.\d+)?\b/g, ' ').replace(/\s+/g, ' ').trim();
+      body = body
+        .replace(/\b\d+(?:\.\d+)?\b/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
     }
   }
 
   // Remaining text should be the market
-  body = body.replace(/\b(?:the|a|an|my|with|for|on)\b/g, '').replace(/\s+/g, ' ').trim();
+  body = body
+    .replace(/\b(?:the|a|an|my|with|for|on)\b/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
   if (!body) return null;
 
   // Resolve market — try direct first, then fuzzy correction for typos
@@ -434,12 +469,36 @@ function flexParseTpSl(input: string): ParsedIntent | null {
 // ─── Number Word Normalization ────────────────────────────────────────────
 
 const NUMBER_WORDS: Record<string, number> = {
-  zero: 0, one: 1, two: 2, three: 3, four: 4, five: 5,
-  six: 6, seven: 7, eight: 8, nine: 9, ten: 10,
-  eleven: 11, twelve: 12, thirteen: 13, fourteen: 14, fifteen: 15,
-  sixteen: 16, seventeen: 17, eighteen: 18, nineteen: 19, twenty: 20,
-  thirty: 30, forty: 40, fifty: 50, sixty: 60, seventy: 70,
-  eighty: 80, ninety: 90, hundred: 100, thousand: 1000,
+  zero: 0,
+  one: 1,
+  two: 2,
+  three: 3,
+  four: 4,
+  five: 5,
+  six: 6,
+  seven: 7,
+  eight: 8,
+  nine: 9,
+  ten: 10,
+  eleven: 11,
+  twelve: 12,
+  thirteen: 13,
+  fourteen: 14,
+  fifteen: 15,
+  sixteen: 16,
+  seventeen: 17,
+  eighteen: 18,
+  nineteen: 19,
+  twenty: 20,
+  thirty: 30,
+  forty: 40,
+  fifty: 50,
+  sixty: 60,
+  seventy: 70,
+  eighty: 80,
+  ninety: 90,
+  hundred: 100,
+  thousand: 1000,
 };
 
 /** Convert number words to digits: "ten" → "10", "twenty five" → "25" */
@@ -481,16 +540,37 @@ function normalizeNumberWords(text: string): string {
 // ─── Asset Alias Dictionary ───────────────────────────────────────────────
 
 const ASSET_ALIASES: Record<string, string> = {
-  solana: 'SOL', bitcoin: 'BTC', ethereum: 'ETH', ether: 'ETH',
-  binance: 'BNB', jupiter: 'JUP', raydium: 'RAY',
-  dogwifhat: 'WIF', bonk: 'BONK', pyth: 'PYTH',
-  gold: 'XAU', silver: 'XAG', crude: 'CRUDEOIL', oil: 'CRUDEOIL',
-  jito: 'JTO', kamino: 'KMNO', metaplex: 'MET',
-  pengu: 'PENGU', penguin: 'PENGU', fartcoin: 'FARTCOIN',
-  hype: 'HYPE', hyperliquid: 'HYPE', ore: 'ORE',
-  zcash: 'ZEC', euro: 'EUR', pound: 'GBP', sterling: 'GBP',
-  yen: 'USDJPY', yuan: 'USDCNH',
-  pump: 'PUMP', pumpfun: 'PUMP',
+  solana: 'SOL',
+  bitcoin: 'BTC',
+  ethereum: 'ETH',
+  ether: 'ETH',
+  binance: 'BNB',
+  jupiter: 'JUP',
+  raydium: 'RAY',
+  dogwifhat: 'WIF',
+  bonk: 'BONK',
+  pyth: 'PYTH',
+  gold: 'XAU',
+  silver: 'XAG',
+  crude: 'CRUDEOIL',
+  oil: 'CRUDEOIL',
+  jito: 'JTO',
+  kamino: 'KMNO',
+  metaplex: 'MET',
+  pengu: 'PENGU',
+  penguin: 'PENGU',
+  fartcoin: 'FARTCOIN',
+  hype: 'HYPE',
+  hyperliquid: 'HYPE',
+  ore: 'ORE',
+  zcash: 'ZEC',
+  euro: 'EUR',
+  pound: 'GBP',
+  sterling: 'GBP',
+  yen: 'USDJPY',
+  yuan: 'USDCNH',
+  pump: 'PUMP',
+  pumpfun: 'PUMP',
 };
 
 /** Normalize asset aliases: "solana" → "SOL", "crude oil" → "crudeoil" */
@@ -511,11 +591,11 @@ const COMMAND_ALIASES: Record<string, string> = {
   m: 'monitor',
   w: 'wallet',
   d: 'dashboard',
-  b: 'portfolio',    // "b" for balance
+  b: 'portfolio', // "b" for balance
   bal: 'portfolio',
   ca: 'close all',
-  buy: 'open',       // "buy sol 2x 10" → "open sol 2x 10"
-  sell: 'close',     // "sell sol" → "close sol"
+  buy: 'open', // "buy sol 2x 10" → "open sol 2x 10"
+  sell: 'close', // "sell sol" → "close sol"
 };
 
 /** Expand single-letter/short command aliases at the start of input. */
@@ -585,9 +665,12 @@ export function validateIntent(intent: ParsedIntent): CommandAlert | null {
   // Market validation (only for trading actions that require a valid market)
   if (typeof i.market === 'string' && i.market) {
     const tradingActions = [
-      ActionType.OpenPosition, ActionType.ClosePosition,
-      ActionType.AddCollateral, ActionType.RemoveCollateral,
-      ActionType.SetTpSl, ActionType.RemoveTpSl,
+      ActionType.OpenPosition,
+      ActionType.ClosePosition,
+      ActionType.AddCollateral,
+      ActionType.RemoveCollateral,
+      ActionType.SetTpSl,
+      ActionType.RemoveTpSl,
       ActionType.LimitOrder,
     ];
     if (tradingActions.includes(intent.action as ActionType)) {
@@ -607,8 +690,11 @@ export function validateIntent(intent: ParsedIntent): CommandAlert | null {
  */
 export function localParse(input: string): ParsedIntent | null {
   // Sanitize: collapse whitespace (tabs, newlines, etc.) to single spaces, strip control chars
-  // eslint-disable-next-line no-control-regex
-  const sanitized = input.replace(/[\x00-\x1f\x7f]/g, ' ').replace(/\s+/g, ' ').trim();
+  const sanitized = input
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\x00-\x1f\x7f]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
   // Expand trade templates first (e.g. "scalp" → "long sol 3x 50")
   const templateExpanded = expandTemplate(sanitized) ?? sanitized;
   // Expand learned user aliases (e.g. "lsol" → "long sol")
@@ -770,9 +856,7 @@ export function localParse(input: string): ParsedIntent | null {
   }
 
   // Set TP/SL: "set tp SOL long $95", "set sl SOL long $80", "set tp btc long to 75000"
-  const setTpSlMatch = lower.match(
-    /^set\s+(tp|sl)\s+([a-z]+)\s+(long|short)\s+(?:to\s+|at\s+)?\$?(\d+(?:\.\d+)?)$/
-  );
+  const setTpSlMatch = lower.match(/^set\s+(tp|sl)\s+([a-z]+)\s+(long|short)\s+(?:to\s+|at\s+)?\$?(\d+(?:\.\d+)?)$/);
   if (setTpSlMatch) {
     const side = parseSide(setTpSlMatch[3]);
     if (side) {
@@ -788,7 +872,7 @@ export function localParse(input: string): ParsedIntent | null {
 
   // Set TP/SL alternate: "set tp 95 for SOL long", "set sl 80 for SOL long", "set tp $95 on SOL long"
   const setTpSlAltMatch = lower.match(
-    /^set\s+(tp|sl)\s+\$?(\d+(?:\.\d+)?)\s+(?:for|on|to)?\s*([a-z]+)\s+(long|short)$/
+    /^set\s+(tp|sl)\s+\$?(\d+(?:\.\d+)?)\s+(?:for|on|to)?\s*([a-z]+)\s+(long|short)$/,
   );
   if (setTpSlAltMatch) {
     const side = parseSide(setTpSlAltMatch[4]);
@@ -809,9 +893,7 @@ export function localParse(input: string): ParsedIntent | null {
   }
 
   // Remove TP/SL: "remove tp SOL long", "remove sl SOL long"
-  const removeTpSlMatch = lower.match(
-    /^remove\s+(tp|sl)\s+([a-z]+)\s+(long|short)$/
-  );
+  const removeTpSlMatch = lower.match(/^remove\s+(tp|sl)\s+([a-z]+)\s+(long|short)$/);
   if (removeTpSlMatch) {
     const side = parseSide(removeTpSlMatch[3]);
     if (side) {
@@ -842,7 +924,7 @@ export function localParse(input: string): ParsedIntent | null {
 
   // Edit limit order: "edit limit 0 price $85", "edit limit #0 sol long $85"
   const editMatch = lower.match(
-    /^edit\s+limit\s+(?:order\s+)?#?(\d+)\s+(?:([a-z]+)\s+(long|short)\s+)?(?:price\s+)?\$?([\d.]+)$/
+    /^edit\s+limit\s+(?:order\s+)?#?(\d+)\s+(?:([a-z]+)\s+(long|short)\s+)?(?:price\s+)?\$?([\d.]+)$/,
   );
   if (editMatch) {
     const orderId = parseInt(editMatch[1], 10);
@@ -861,9 +943,7 @@ export function localParse(input: string): ParsedIntent | null {
   }
 
   // Cancel order: "cancel order order-1", "cancel order-1", "cancel order 1", "cancel order #1"
-  const cancelMatch = lower.match(
-    /^cancel\s+(?:order\s+)?#?(?:order-)?(\d+)$/
-  );
+  const cancelMatch = lower.match(/^cancel\s+(?:order\s+)?#?(?:order-)?(\d+)$/);
   if (cancelMatch) {
     return {
       action: ActionType.CancelOrder,
@@ -873,7 +953,7 @@ export function localParse(input: string): ParsedIntent | null {
 
   // Close position with amount/percent before market: "close 50% of SOL long", "close $20 of BTC short"
   const closePrefixMatch = lower.match(
-    /^(?:close|exit|sell)\s+(\d+(?:\.\d+)?)\s*(%|percent)\s+(?:of\s+)?(?:my\s+)?([a-z]+)\s+(long|short)/
+    /^(?:close|exit|sell)\s+(\d+(?:\.\d+)?)\s*(%|percent)\s+(?:of\s+)?(?:my\s+)?([a-z]+)\s+(long|short)/,
   );
   if (closePrefixMatch) {
     const side = parseSide(closePrefixMatch[4]);
@@ -887,7 +967,7 @@ export function localParse(input: string): ParsedIntent | null {
     }
   }
   const closePrefixAmtMatch = lower.match(
-    /^(?:close|exit|sell)\s+\$(\d+(?:\.\d+)?)\s+(?:of\s+|from\s+)?(?:my\s+)?([a-z]+)\s+(long|short)/
+    /^(?:close|exit|sell)\s+\$(\d+(?:\.\d+)?)\s+(?:of\s+|from\s+)?(?:my\s+)?([a-z]+)\s+(long|short)/,
   );
   if (closePrefixAmtMatch) {
     const side = parseSide(closePrefixAmtMatch[3]);
@@ -902,9 +982,7 @@ export function localParse(input: string): ParsedIntent | null {
   }
 
   // Close position: "close SOL long", "close SOL long 50%", "close SOL long $20"
-  const closeMatch = lower.match(
-    /^(?:close|exit|sell)\s+(?:my\s+)?([a-z]+)\s+(long|short)(?:\s+position)?\s*(.*)$/
-  );
+  const closeMatch = lower.match(/^(?:close|exit|sell)\s+(?:my\s+)?([a-z]+)\s+(long|short)(?:\s+position)?\s*(.*)$/);
   if (closeMatch) {
     const side = parseSide(closeMatch[2]);
     if (side) {
@@ -926,9 +1004,7 @@ export function localParse(input: string): ParsedIntent | null {
   }
 
   // Close position without side: "close SOL" — side will be auto-detected at execution
-  const closeNoSideMatch = lower.match(
-    /^(?:close|exit|sell)\s+(?:my\s+)?([a-z]+)(?:\s+position)?$/
-  );
+  const closeNoSideMatch = lower.match(/^(?:close|exit|sell)\s+(?:my\s+)?([a-z]+)(?:\s+position)?$/);
   if (closeNoSideMatch) {
     const resolved = resolveMarket(closeNoSideMatch[1]);
     if (getAllMarkets().includes(resolved)) {
@@ -943,7 +1019,7 @@ export function localParse(input: string): ParsedIntent | null {
   // Add collateral: "add $200 to SOL long", "add collateral of $50 to SOL long", "add $200 to SOL"
   // Also: "add 5 dollar collateral on crude oil long" (after normalization: "add 5 dollar collateral on crudeoil long")
   const addCollMatch = lower.match(
-    /^add\s+(?:collateral\s+(?:of\s+)?)?\$?(\d+(?:\.\d+)?)\s+(?:dollars?\s+)?(?:collateral\s+)?(?:to\s+|on\s+)?(?:my\s+)?([a-z]+)\s+(long|short)$/
+    /^add\s+(?:collateral\s+(?:of\s+)?)?\$?(\d+(?:\.\d+)?)\s+(?:dollars?\s+)?(?:collateral\s+)?(?:to\s+|on\s+)?(?:my\s+)?([a-z]+)\s+(long|short)$/,
   );
   if (addCollMatch) {
     const side = parseSide(addCollMatch[3]);
@@ -960,7 +1036,7 @@ export function localParse(input: string): ParsedIntent | null {
   // Add collateral without side: "add $200 to SOL" — side will be auto-detected
   // Also: "add 5 dollar collateral on crude oil" (after normalization: "add 5 dollar collateral on crudeoil")
   const addCollNoSideMatch = lower.match(
-    /^add\s+(?:collateral\s+(?:of\s+)?)?\$?(\d+(?:\.\d+)?)\s+(?:dollars?\s+)?(?:collateral\s+)?(?:to\s+|on\s+)?(?:my\s+)?([a-z]+)$/
+    /^add\s+(?:collateral\s+(?:of\s+)?)?\$?(\d+(?:\.\d+)?)\s+(?:dollars?\s+)?(?:collateral\s+)?(?:to\s+|on\s+)?(?:my\s+)?([a-z]+)$/,
   );
   if (addCollNoSideMatch) {
     const resolved = resolveMarket(addCollNoSideMatch[2]);
@@ -975,7 +1051,7 @@ export function localParse(input: string): ParsedIntent | null {
 
   // Remove collateral: "remove $100 from ETH long", "remove $100 from ETH"
   const rmCollMatch = lower.match(
-    /^remove\s+\$?(\d+(?:\.\d+)?)\s+(?:dollars?\s+)?(?:collateral\s+)?(?:from\s+|on\s+)?(?:my\s+)?([a-z]+)\s+(long|short)$/
+    /^remove\s+\$?(\d+(?:\.\d+)?)\s+(?:dollars?\s+)?(?:collateral\s+)?(?:from\s+|on\s+)?(?:my\s+)?([a-z]+)\s+(long|short)$/,
   );
   if (rmCollMatch) {
     const side = parseSide(rmCollMatch[3]);
@@ -991,7 +1067,7 @@ export function localParse(input: string): ParsedIntent | null {
 
   // Remove collateral without side: "remove $100 from SOL" — side will be auto-detected
   const rmCollNoSideMatch = lower.match(
-    /^remove\s+\$?(\d+(?:\.\d+)?)\s+(?:dollars?\s+)?(?:collateral\s+)?(?:from\s+|on\s+)?(?:my\s+)?([a-z]+)$/
+    /^remove\s+\$?(\d+(?:\.\d+)?)\s+(?:dollars?\s+)?(?:collateral\s+)?(?:from\s+|on\s+)?(?:my\s+)?([a-z]+)$/,
   );
   if (rmCollNoSideMatch) {
     const resolved = resolveMarket(rmCollNoSideMatch[2]);
@@ -1109,9 +1185,7 @@ export function localParse(input: string): ParsedIntent | null {
 
   // ─── Swap ──────────────────────────────────────────────────────────────
   // "swap SOL USDC $10", "swap 10 SOL to USDC", "swap SOL to USDC $10", "swap $50 USDC to SOL"
-  const swapMatch1 = lower.match(
-    /^swap\s+\$?(\d+(?:\.\d+)?)\s+([a-z]+)\s+(?:to|for|into)\s+([a-z]+)$/
-  );
+  const swapMatch1 = lower.match(/^swap\s+\$?(\d+(?:\.\d+)?)\s+([a-z]+)\s+(?:to|for|into)\s+([a-z]+)$/);
   if (swapMatch1) {
     return {
       action: ActionType.Swap,
@@ -1121,9 +1195,7 @@ export function localParse(input: string): ParsedIntent | null {
     } as ParsedIntent;
   }
 
-  const swapMatch2 = lower.match(
-    /^swap\s+([a-z]+)\s+(?:to|for|into)\s+([a-z]+)\s+\$?(\d+(?:\.\d+)?)$/
-  );
+  const swapMatch2 = lower.match(/^swap\s+([a-z]+)\s+(?:to|for|into)\s+([a-z]+)\s+\$?(\d+(?:\.\d+)?)$/);
   if (swapMatch2) {
     return {
       action: ActionType.Swap,
@@ -1133,9 +1205,7 @@ export function localParse(input: string): ParsedIntent | null {
     } as ParsedIntent;
   }
 
-  const swapMatch3 = lower.match(
-    /^swap\s+([a-z]+)\s+([a-z]+)\s+\$?(\d+(?:\.\d+)?)$/
-  );
+  const swapMatch3 = lower.match(/^swap\s+([a-z]+)\s+([a-z]+)\s+\$?(\d+(?:\.\d+)?)$/);
   if (swapMatch3) {
     return {
       action: ActionType.Swap,
@@ -1270,9 +1340,7 @@ export function localParse(input: string): ParsedIntent | null {
     const [earnBody, earnPool] = extractEarnPool(lower, normalized);
 
     // "earn add $100", "earn add $100 crypto", "earn add-liquidity $100 governance"
-    const earnAddMatch = earnBody.match(
-      /^earn\s+add(?:[- ]?liquidity)?\s+\$?(\d+(?:\.\d+)?)$/
-    );
+    const earnAddMatch = earnBody.match(/^earn\s+add(?:[- ]?liquidity)?\s+\$?(\d+(?:\.\d+)?)$/);
     if (earnAddMatch) {
       return {
         action: ActionType.EarnAddLiquidity,
@@ -1283,9 +1351,7 @@ export function localParse(input: string): ParsedIntent | null {
     }
 
     // "earn remove 50%", "earn remove 50% crypto", "earn remove-liquidity 25% governance"
-    const earnRemoveMatch = earnBody.match(
-      /^earn\s+remove(?:[- ]?liquidity)?\s+(\d+(?:\.\d+)?)\s*%?$/
-    );
+    const earnRemoveMatch = earnBody.match(/^earn\s+remove(?:[- ]?liquidity)?\s+(\d+(?:\.\d+)?)\s*%?$/);
     if (earnRemoveMatch) {
       return {
         action: ActionType.EarnRemoveLiquidity,
@@ -1296,9 +1362,7 @@ export function localParse(input: string): ParsedIntent | null {
     }
 
     // "earn stake $200", "earn stake $200 governance"
-    const earnStakeMatch = earnBody.match(
-      /^earn\s+stake(?:[- ]?flp)?\s+\$?(\d+(?:\.\d+)?)$/
-    );
+    const earnStakeMatch = earnBody.match(/^earn\s+stake(?:[- ]?flp)?\s+\$?(\d+(?:\.\d+)?)$/);
     if (earnStakeMatch) {
       return {
         action: ActionType.EarnStake,
@@ -1308,9 +1372,7 @@ export function localParse(input: string): ParsedIntent | null {
     }
 
     // "earn unstake 25%", "earn unstake 50% governance"
-    const earnUnstakeMatch = earnBody.match(
-      /^earn\s+unstake(?:[- ]?flp)?\s+(\d+(?:\.\d+)?)\s*%?$/
-    );
+    const earnUnstakeMatch = earnBody.match(/^earn\s+unstake(?:[- ]?flp)?\s+(\d+(?:\.\d+)?)\s*%?$/);
     if (earnUnstakeMatch) {
       return {
         action: ActionType.EarnUnstake,
@@ -1325,18 +1387,14 @@ export function localParse(input: string): ParsedIntent | null {
     }
 
     // "earn info crypto", "earn info gold"
-    const earnInfoMatch = earnBody.match(
-      /^earn\s+info(?:\s+(.+))?$/
-    );
+    const earnInfoMatch = earnBody.match(/^earn\s+info(?:\s+(.+))?$/);
     if (earnInfoMatch) {
-      const pool = earnInfoMatch[1] ? resolveEarnPool(earnInfoMatch[1]) ?? earnInfoMatch[1] : earnPool;
+      const pool = earnInfoMatch[1] ? (resolveEarnPool(earnInfoMatch[1]) ?? earnInfoMatch[1]) : earnPool;
       return { action: ActionType.EarnInfo, pool } as ParsedIntent;
     }
 
     // "earn deposit $100 crypto", "earn deposit 50 gold"
-    const earnDepositMatch = earnBody.match(
-      /^earn\s+deposit\s+\$?(\d+(?:\.\d+)?)$/
-    );
+    const earnDepositMatch = earnBody.match(/^earn\s+deposit\s+\$?(\d+(?:\.\d+)?)$/);
     if (earnDepositMatch) {
       return {
         action: ActionType.EarnAddLiquidity,
@@ -1347,9 +1405,7 @@ export function localParse(input: string): ParsedIntent | null {
     }
 
     // "earn withdraw 50% crypto", "earn withdraw 100% gold"
-    const earnWithdrawMatch = earnBody.match(
-      /^earn\s+withdraw\s+(\d+(?:\.\d+)?)\s*%?$/
-    );
+    const earnWithdrawMatch = earnBody.match(/^earn\s+withdraw\s+(\d+(?:\.\d+)?)\s*%?$/);
     if (earnWithdrawMatch) {
       return {
         action: ActionType.EarnRemoveLiquidity,
@@ -1389,9 +1445,7 @@ export function localParse(input: string): ParsedIntent | null {
     }
 
     // "earn simulate crypto 1000", "earn sim gold 500"
-    const earnSimMatch = earnBody.match(
-      /^earn\s+sim(?:ulate)?\s+\$?(\d+(?:\.\d+)?)$/
-    );
+    const earnSimMatch = earnBody.match(/^earn\s+sim(?:ulate)?\s+\$?(\d+(?:\.\d+)?)$/);
     if (earnSimMatch) {
       return {
         action: ActionType.EarnSimulate,
@@ -1427,9 +1481,7 @@ export function localParse(input: string): ParsedIntent | null {
     }
 
     // Smart shortcut: "earn 500 crypto" → earn deposit crypto 500
-    const earnShortcut = earnBody.match(
-      /^earn\s+\$?(\d+(?:\.\d+)?)$/
-    );
+    const earnShortcut = earnBody.match(/^earn\s+\$?(\d+(?:\.\d+)?)$/);
     if (earnShortcut && earnPool) {
       return {
         action: ActionType.EarnAddLiquidity,
@@ -1498,7 +1550,9 @@ export class AIInterpreter {
         if (coll > 0) {
           recordTradeCommand(`${side} ${(intent.market as string).toLowerCase()} ${lev}x ${coll}`);
         }
-      } catch { /* non-critical */ }
+      } catch {
+        /* non-critical */
+      }
     }
   }
 
@@ -1547,7 +1601,13 @@ export class AIInterpreter {
 
     // "repeat last trade" / "repeat" / "again"
     if (/^(?:repeat|again|repeat\s+(?:last\s+)?(?:trade|command|order))$/.test(lower)) {
-      if (ctx.lastAction === ActionType.OpenPosition && ctx.lastMarket && ctx.lastSide && ctx.lastCollateral && ctx.lastLeverage) {
+      if (
+        ctx.lastAction === ActionType.OpenPosition &&
+        ctx.lastMarket &&
+        ctx.lastSide &&
+        ctx.lastCollateral &&
+        ctx.lastLeverage
+      ) {
         return {
           action: ActionType.OpenPosition,
           market: ctx.lastMarket,
@@ -1560,7 +1620,13 @@ export class AIInterpreter {
 
     // "double previous position" / "double it" / "2x it"
     if (/^(?:double|2x)\s+(?:it|previous\s+position|last\s+(?:trade|position))$/.test(lower)) {
-      if (ctx.lastAction === ActionType.OpenPosition && ctx.lastMarket && ctx.lastSide && ctx.lastCollateral && ctx.lastLeverage) {
+      if (
+        ctx.lastAction === ActionType.OpenPosition &&
+        ctx.lastMarket &&
+        ctx.lastSide &&
+        ctx.lastCollateral &&
+        ctx.lastLeverage
+      ) {
         return {
           action: ActionType.OpenPosition,
           market: ctx.lastMarket,
@@ -1572,8 +1638,16 @@ export class AIInterpreter {
     }
 
     // "increase leverage to 3x" / "set leverage to 5x" — replay last trade with new leverage
-    const leverageModMatch = lower.match(/^(?:increase|change|set|update)\s+(?:the\s+)?leverage\s+to\s+(\d+(?:\.\d+)?)\s*x?$/);
-    if (leverageModMatch && ctx.lastAction === ActionType.OpenPosition && ctx.lastMarket && ctx.lastSide && ctx.lastCollateral) {
+    const leverageModMatch = lower.match(
+      /^(?:increase|change|set|update)\s+(?:the\s+)?leverage\s+to\s+(\d+(?:\.\d+)?)\s*x?$/,
+    );
+    if (
+      leverageModMatch &&
+      ctx.lastAction === ActionType.OpenPosition &&
+      ctx.lastMarket &&
+      ctx.lastSide &&
+      ctx.lastCollateral
+    ) {
       return {
         action: ActionType.OpenPosition,
         market: ctx.lastMarket,
@@ -1584,8 +1658,16 @@ export class AIInterpreter {
     }
 
     // "reduce to $5" / "reduce to 5 dollars" / "change to $5"
-    const reduceMatch = lower.match(/^(?:reduce|decrease|change|lower)\s+(?:it\s+)?(?:to\s+)?\$?(\d+(?:\.\d+)?)\s*(?:dollars?|usd)?$/);
-    if (reduceMatch && ctx.lastAction === ActionType.OpenPosition && ctx.lastMarket && ctx.lastSide && ctx.lastLeverage) {
+    const reduceMatch = lower.match(
+      /^(?:reduce|decrease|change|lower)\s+(?:it\s+)?(?:to\s+)?\$?(\d+(?:\.\d+)?)\s*(?:dollars?|usd)?$/,
+    );
+    if (
+      reduceMatch &&
+      ctx.lastAction === ActionType.OpenPosition &&
+      ctx.lastMarket &&
+      ctx.lastSide &&
+      ctx.lastLeverage
+    ) {
       return {
         action: ActionType.OpenPosition,
         market: ctx.lastMarket,
@@ -1596,7 +1678,9 @@ export class AIInterpreter {
     }
 
     // "increase to $X" / "change collateral to $X"
-    const increaseMatch = lower.match(/^(?:increase|change|set)\s+(?:it\s+)?(?:collateral\s+)?to\s+\$?(\d+(?:\.\d+)?)$/);
+    const increaseMatch = lower.match(
+      /^(?:increase|change|set)\s+(?:it\s+)?(?:collateral\s+)?to\s+\$?(\d+(?:\.\d+)?)$/,
+    );
     if (increaseMatch && ctx.lastMarket && ctx.lastSide && ctx.lastCollateral) {
       const newAmount = parseFloat(increaseMatch[1]);
       const diff = newAmount - ctx.lastCollateral;
@@ -1608,7 +1692,12 @@ export class AIInterpreter {
     // "add $X to it" / "add $X more"
     const addMatch = lower.match(/^add\s+\$?(\d+(?:\.\d+)?)\s+(?:to\s+it|more|to\s+that)$/);
     if (addMatch && ctx.lastMarket && ctx.lastSide) {
-      return { action: ActionType.AddCollateral, market: ctx.lastMarket, side: ctx.lastSide, amount: parseFloat(addMatch[1]) };
+      return {
+        action: ActionType.AddCollateral,
+        market: ctx.lastMarket,
+        side: ctx.lastSide,
+        amount: parseFloat(addMatch[1]),
+      };
     }
 
     // "analyze it" / "what about it"
@@ -1697,13 +1786,16 @@ export class AIInterpreter {
 
       let response;
       try {
-        response = await this.anthropic!.messages.create({
-          model: 'claude-haiku-4-5-20251001',
-          max_tokens: 256,
-          temperature: 0,
-          system: SYSTEM_PROMPT,
-          messages: [{ role: 'user', content: userInput }],
-        }, { signal: controller.signal });
+        response = await this.anthropic!.messages.create(
+          {
+            model: 'claude-haiku-4-5-20251001',
+            max_tokens: 256,
+            temperature: 0,
+            system: SYSTEM_PROMPT,
+            messages: [{ role: 'user', content: userInput }],
+          },
+          { signal: controller.signal },
+        );
       } finally {
         clearTimeout(timeout);
       }
@@ -1716,7 +1808,14 @@ export class AIInterpreter {
       return this.parseJsonResponse(response.content[0].text, 'primary');
     } catch (error: unknown) {
       const msg = getErrorMessage(error);
-      if (msg.includes('credit balance') || msg.includes('401') || msg.includes('403') || msg.includes('429') || msg.includes('abort') || msg.includes('timeout')) {
+      if (
+        msg.includes('credit balance') ||
+        msg.includes('401') ||
+        msg.includes('403') ||
+        msg.includes('429') ||
+        msg.includes('abort') ||
+        msg.includes('timeout')
+      ) {
         logger.info('AI', `Primary AI unavailable (${msg}). Trying fallback...`);
       } else {
         logger.error('AI', `Primary AI parse failed: ${msg}`);
@@ -1735,15 +1834,18 @@ export class AIInterpreter {
 
       let response;
       try {
-        response = await this.groq!.chat.completions.create({
-          model: 'llama-3.3-70b-versatile',
-          max_tokens: 256,
-          messages: [
-            { role: 'system', content: SYSTEM_PROMPT },
-            { role: 'user', content: userInput },
-          ],
-          temperature: 0,
-        }, { signal: controller.signal });
+        response = await this.groq!.chat.completions.create(
+          {
+            model: 'llama-3.3-70b-versatile',
+            max_tokens: 256,
+            messages: [
+              { role: 'system', content: SYSTEM_PROMPT },
+              { role: 'user', content: userInput },
+            ],
+            temperature: 0,
+          },
+          { signal: controller.signal },
+        );
       } finally {
         clearTimeout(timeout);
       }
@@ -1840,7 +1942,9 @@ export class OfflineInterpreter {
       return { action: ActionType.ClosePosition, market: ctx.lastMarket, side: ctx.lastSide };
     }
 
-    const increaseMatch = lower.match(/^(?:increase|change|set)\s+(?:it\s+)?(?:collateral\s+)?to\s+\$?(\d+(?:\.\d+)?)$/);
+    const increaseMatch = lower.match(
+      /^(?:increase|change|set)\s+(?:it\s+)?(?:collateral\s+)?to\s+\$?(\d+(?:\.\d+)?)$/,
+    );
     if (increaseMatch && ctx.lastMarket && ctx.lastSide && ctx.lastCollateral) {
       const newAmount = parseFloat(increaseMatch[1]);
       const diff = newAmount - ctx.lastCollateral;
@@ -1851,7 +1955,12 @@ export class OfflineInterpreter {
 
     const addMatch = lower.match(/^add\s+\$?(\d+(?:\.\d+)?)\s+(?:to\s+it|more|to\s+that)$/);
     if (addMatch && ctx.lastMarket && ctx.lastSide) {
-      return { action: ActionType.AddCollateral, market: ctx.lastMarket, side: ctx.lastSide, amount: parseFloat(addMatch[1]) };
+      return {
+        action: ActionType.AddCollateral,
+        market: ctx.lastMarket,
+        side: ctx.lastSide,
+        amount: parseFloat(addMatch[1]),
+      };
     }
 
     if (/^(?:analyze\s+it|what\s+about\s+it)$/.test(lower) && ctx.lastMarket) {

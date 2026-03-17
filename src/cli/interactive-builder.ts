@@ -39,8 +39,14 @@ export function detectPartialTrade(input: string): PartialTrade | null {
 
   // Detect side
   for (const t of tokens) {
-    if (t === 'long' || t === 'buy' || t === 'l') { partial.side = TradeSide.Long; break; }
-    if (t === 'short' || t === 'sell' || t === 's') { partial.side = TradeSide.Short; break; }
+    if (t === 'long' || t === 'buy' || t === 'l') {
+      partial.side = TradeSide.Long;
+      break;
+    }
+    if (t === 'short' || t === 'sell' || t === 's') {
+      partial.side = TradeSide.Short;
+      break;
+    }
   }
 
   // Detect market
@@ -117,7 +123,11 @@ export async function buildTradeInteractively(
   // 2. Side
   let side = partial.side;
   if (!side) {
-    const answer = (await ask(`  ${chalk.dim('Side')} (${chalk.green('long')}/${chalk.red('short')}) ${chalk.yellow('>')} `)).trim().toLowerCase();
+    const answer = (
+      await ask(`  ${chalk.dim('Side')} (${chalk.green('long')}/${chalk.red('short')}) ${chalk.yellow('>')} `)
+    )
+      .trim()
+      .toLowerCase();
     if (answer === 'long' || answer === 'l') side = TradeSide.Long;
     else if (answer === 'short' || answer === 's') side = TradeSide.Short;
     else if (!answer || answer === 'cancel' || answer === 'q') return null;
@@ -133,7 +143,9 @@ export async function buildTradeInteractively(
   const preferred = getPreferredLeverage(market);
   if (!leverage) {
     const defaultStr = preferred ? `${preferred}x` : '2x';
-    const answer = (await ask(`  ${chalk.dim('Leverage')} (max ${maxLev}x, default ${defaultStr}) ${chalk.yellow('>')} `)).trim();
+    const answer = (
+      await ask(`  ${chalk.dim('Leverage')} (max ${maxLev}x, default ${defaultStr}) ${chalk.yellow('>')} `)
+    ).trim();
     if (!answer) {
       leverage = preferred ?? 2;
     } else if (answer === 'cancel' || answer === 'q') {
@@ -168,7 +180,9 @@ export async function buildTradeInteractively(
   // Show summary
   const sizeUsd = collateral * leverage;
   console.log('');
-  console.log(`  ${theme.dim('Market:')}     ${chalk.bold(market)} ${side === TradeSide.Long ? chalk.green('LONG') : chalk.red('SHORT')}`);
+  console.log(
+    `  ${theme.dim('Market:')}     ${chalk.bold(market)} ${side === TradeSide.Long ? chalk.green('LONG') : chalk.red('SHORT')}`,
+  );
   console.log(`  ${theme.dim('Leverage:')}   ${leverage}x`);
   console.log(`  ${theme.dim('Collateral:')} $${collateral}`);
   console.log(`  ${theme.dim('Size:')}       $${sizeUsd.toFixed(2)}`);

@@ -1,26 +1,13 @@
 import { z } from 'zod';
 import chalk from 'chalk';
-import {
-  ToolDefinition,
-  ToolResult,
-  ToolContext,
-  MarketAnalysis,
-  RawActivityRecord,
-} from '../types/index.js';
+import { ToolDefinition, ToolResult, ToolContext, MarketAnalysis, RawActivityRecord } from '../types/index.js';
 import { SolanaInspector } from './solana-inspector.js';
 import { resolveMarket } from '../utils/market-resolver.js';
 import { assessAllPositions } from '../risk/liquidation-risk.js';
 import { computeExposure } from '../risk/exposure.js';
 import { PortfolioManager } from '../portfolio/portfolio-manager.js';
 import { RegimeDetector, MarketRegime } from '../regime/index.js';
-import {
-  formatUsd,
-  formatPrice,
-  colorPercent,
-  colorPnl,
-  colorSide,
-  formatTable,
-} from '../utils/format.js';
+import { formatUsd, formatPrice, colorPercent, colorPnl, colorSide, formatTable } from '../utils/format.js';
 import { CONCENTRATION_WARNING_THRESHOLD } from '../core/risk-config.js';
 
 let inspectorInstance: SolanaInspector | null = null;
@@ -70,13 +57,20 @@ export function getRegimeDetector(): RegimeDetector {
 function regimeLabel(regime?: string): string {
   if (!regime) return chalk.gray('—');
   switch (regime) {
-    case MarketRegime.TRENDING: return chalk.green(regime);
-    case MarketRegime.RANGING: return chalk.blue(regime);
-    case MarketRegime.HIGH_VOLATILITY: return chalk.red(regime);
-    case MarketRegime.LOW_VOLATILITY: return chalk.gray(regime);
-    case MarketRegime.WHALE_DOMINATED: return chalk.magenta(regime);
-    case MarketRegime.LOW_LIQUIDITY: return chalk.yellow(regime);
-    default: return chalk.gray(regime);
+    case MarketRegime.TRENDING:
+      return chalk.green(regime);
+    case MarketRegime.RANGING:
+      return chalk.blue(regime);
+    case MarketRegime.HIGH_VOLATILITY:
+      return chalk.red(regime);
+    case MarketRegime.LOW_VOLATILITY:
+      return chalk.gray(regime);
+    case MarketRegime.WHALE_DOMINATED:
+      return chalk.magenta(regime);
+    case MarketRegime.LOW_LIQUIDITY:
+      return chalk.yellow(regime);
+    default:
+      return chalk.gray(regime);
   }
 }
 
@@ -183,9 +177,11 @@ export const aiAnalyze: ToolDefinition = {
       lines.push('');
 
       // Whale long/short distribution (factual)
-      const whaleLong = whalePositions.filter(w => String(w.side ?? '').toLowerCase() === 'long')
+      const whaleLong = whalePositions
+        .filter((w) => String(w.side ?? '').toLowerCase() === 'long')
         .reduce((s, w) => s + Number(w.size_usd ?? 0), 0);
-      const whaleShort = whalePositions.filter(w => String(w.side ?? '').toLowerCase() === 'short')
+      const whaleShort = whalePositions
+        .filter((w) => String(w.side ?? '').toLowerCase() === 'short')
         .reduce((s, w) => s + Number(w.size_usd ?? 0), 0);
       const whaleTotal = whaleLong + whaleShort;
       if (whaleTotal > 0) {
@@ -228,10 +224,7 @@ export const aiRiskReport: ToolDefinition = {
   execute: async (_params: Record<string, unknown>, context: ToolContext): Promise<ToolResult> => {
     const inspector = getInspector(context);
 
-    const [positions, portfolio] = await Promise.all([
-      inspector.getPositions(),
-      inspector.getPortfolio(),
-    ]);
+    const [positions, portfolio] = await Promise.all([inspector.getPositions(), inspector.getPortfolio()]);
 
     if (positions.length === 0) {
       return {
@@ -247,20 +240,14 @@ export const aiRiskReport: ToolDefinition = {
     const longPct = totalExposure > 0 ? ((exposure.totalLongExposure / totalExposure) * 100).toFixed(0) : '0';
     const shortPct = totalExposure > 0 ? ((exposure.totalShortExposure / totalExposure) * 100).toFixed(0) : '0';
 
-    const lines = [
-      '',
-      chalk.bold('  Risk Report'),
-      chalk.dim('  ─────────────────────────────────────────'),
-      '',
-    ];
+    const lines = ['', chalk.bold('  Risk Report'), chalk.dim('  ─────────────────────────────────────────'), ''];
 
     // Position risks
     lines.push(chalk.bold('  Position Risks'));
     lines.push('');
     for (const risk of riskAssessments) {
-      const riskColor = risk.riskLevel === 'critical' ? chalk.red.bold
-        : risk.riskLevel === 'warning' ? chalk.yellow
-        : chalk.green;
+      const riskColor =
+        risk.riskLevel === 'critical' ? chalk.red.bold : risk.riskLevel === 'warning' ? chalk.yellow : chalk.green;
       lines.push(`  ${riskColor(`[${risk.riskLevel.toUpperCase()}]`)} ${risk.message}`);
     }
     lines.push('');
@@ -277,7 +264,7 @@ export const aiRiskReport: ToolDefinition = {
 
     // Risk Analysis
     const alerts: string[] = [];
-    if (exposure.concentrationRisk.some(c => c.percentage > 50)) {
+    if (exposure.concentrationRisk.some((c) => c.percentage > 50)) {
       alerts.push('Correlated markets detected');
     }
     if (exposure.collateralUtilization < 80) {
@@ -314,7 +301,9 @@ function boxTop(title: string): string {
   const pad = Math.max(0, inner - title.length);
   const left = Math.floor(pad / 2);
   const right = pad - left;
-  return chalk.dim('╭') + chalk.dim('─'.repeat(left)) + chalk.bold(title) + chalk.dim('─'.repeat(right)) + chalk.dim('╮');
+  return (
+    chalk.dim('╭') + chalk.dim('─'.repeat(left)) + chalk.bold(title) + chalk.dim('─'.repeat(right)) + chalk.dim('╮')
+  );
 }
 function boxBot(): string {
   return chalk.dim('╰') + chalk.dim('─'.repeat(BOX_W - 2)) + chalk.dim('╯');
@@ -354,7 +343,9 @@ export const aiDashboard: ToolDefinition = {
           const label = rpc.activeEndpoint.label;
           const fr = rpc.getFailureRate(rpc.activeEndpoint.url);
           return { latency, label, healthy: fr < 0.5, slot: rpc.activeSlot, slotLag: rpc.activeSlotLag };
-        } catch { return { latency: -1, label: 'Unknown', healthy: false, slot: -1, slotLag: -1 }; }
+        } catch {
+          return { latency: -1, label: 'Unknown', healthy: false, slot: -1, slotLag: -1 };
+        }
       })(),
     ]);
 
@@ -381,7 +372,7 @@ export const aiDashboard: ToolDefinition = {
       psActiveMarkets = pStats.activeMarkets;
     } catch {
       // fallback: count markets with valid prices
-      psActiveMarkets = snapshot.markets.filter(m => Number.isFinite(m.price) && m.price > 0).length;
+      psActiveMarkets = snapshot.markets.filter((m) => Number.isFinite(m.price) && m.price > 0).length;
     }
     lines.push(boxLine(dashPair('Active Markets:', String(psActiveMarkets))));
 
@@ -389,7 +380,9 @@ export const aiDashboard: ToolDefinition = {
     for (const m of snapshot.openInterest.markets) {
       totalOi += m.longOi + m.shortOi;
     }
-    lines.push(boxLine(dashPair('Total Open Interest:', totalOi > 0 ? formatUsd(totalOi) : chalk.dim('Data unavailable'))));
+    lines.push(
+      boxLine(dashPair('Total Open Interest:', totalOi > 0 ? formatUsd(totalOi) : chalk.dim('Data unavailable'))),
+    );
 
     // 24h volume from overview stats (fstats API)
     const stats = snapshot.overviewStats;
@@ -520,8 +513,8 @@ export const aiDashboard: ToolDefinition = {
 
       // Risk level from liquidation assessment
       const risks = assessAllPositions(snapshot.positions);
-      const critCount = risks.filter(r => r.riskLevel === 'critical').length;
-      const warnCount = risks.filter(r => r.riskLevel === 'warning').length;
+      const critCount = risks.filter((r) => r.riskLevel === 'critical').length;
+      const warnCount = risks.filter((r) => r.riskLevel === 'warning').length;
       const riskLevel = critCount > 0 ? 'CRITICAL' : warnCount > 0 ? 'ELEVATED' : 'HEALTHY';
       const riskColor = critCount > 0 ? chalk.red.bold : warnCount > 0 ? chalk.yellow : chalk.hex('#00FF88');
       lines.push(boxEmpty());
@@ -555,9 +548,7 @@ export const aiDashboard: ToolDefinition = {
     // ═══════════════════════════════════════════════════════════════════
     lines.push(boxTop(' Terminal Status '));
 
-    const modeStr = context.simulationMode
-      ? chalk.bgYellow.black(' SIM ')
-      : chalk.bgRed.white.bold(' LIVE ');
+    const modeStr = context.simulationMode ? chalk.bgYellow.black(' SIM ') : chalk.bgRed.white.bold(' LIVE ');
     lines.push(boxLine(dashPair('Mode:', modeStr)));
 
     const walletDisplay = context.walletName || chalk.dim('Not connected');
@@ -592,8 +583,8 @@ function sortedOiData(snapshot: {
   openInterest: { markets: { market: string; longOi: number; shortOi: number }[] };
 }): { market: string; total: number; longOi: number; shortOi: number }[] {
   return [...snapshot.openInterest.markets]
-    .map(m => ({ market: m.market, total: m.longOi + m.shortOi, longOi: m.longOi, shortOi: m.shortOi }))
-    .filter(m => m.total > 0)
+    .map((m) => ({ market: m.market, total: m.longOi + m.shortOi, longOi: m.longOi, shortOi: m.shortOi }))
+    .filter((m) => m.total > 0)
     .sort((a, b) => b.total - a.total);
 }
 
@@ -616,7 +607,9 @@ export const aiWhaleActivity: ToolDefinition = {
     const WHALE_THRESHOLD = 10_000;
     const marketFilter = params.market ? resolveMarket(String(params.market)) : undefined;
 
-    const normalize = (items: RawActivityRecord[]): { market: string; side: string; sizeUsd: number; price: number }[] =>
+    const normalize = (
+      items: RawActivityRecord[],
+    ): { market: string; side: string; sizeUsd: number; price: number }[] =>
       items
         .map((a) => ({
           market: String(a.market_symbol ?? a.market ?? 'UNKNOWN'),
@@ -665,7 +658,10 @@ export const aiWhaleActivity: ToolDefinition = {
       chalk.bold(`  Whale Activity${marketMsg}`),
       chalk.dim('  ─────────────────────────────────────────'),
       '',
-      formatTable(headers, rows).split('\n').map((l) => '    ' + l).join('\n'),
+      formatTable(headers, rows)
+        .split('\n')
+        .map((l) => '    ' + l)
+        .join('\n'),
       '',
       chalk.dim(`  ${top.length} positions >= $${WHALE_THRESHOLD.toLocaleString()}`),
       '',
@@ -688,10 +684,7 @@ export const portfolioStateTool: ToolDefinition = {
     const inspector = getInspector(context);
     const pm = getPortfolioManager();
 
-    const [positions, portfolio] = await Promise.all([
-      inspector.getPositions(),
-      inspector.getPortfolio(),
-    ]);
+    const [positions, portfolio] = await Promise.all([inspector.getPositions(), inspector.getPortfolio()]);
     const balance = portfolio.usdcBalance ?? context.flashClient.getBalance();
     const state = pm.getState(positions, balance);
 
@@ -718,7 +711,12 @@ export const portfolioStateTool: ToolDefinition = {
         formatUsd(p.notional),
         colorPercent(p.pnlPct),
       ]);
-      lines.push(formatTable(headers, rows).split('\n').map((l) => '    ' + l).join('\n'));
+      lines.push(
+        formatTable(headers, rows)
+          .split('\n')
+          .map((l) => '    ' + l)
+          .join('\n'),
+      );
       lines.push('');
     }
 
@@ -750,10 +748,7 @@ export const portfolioExposureTool: ToolDefinition = {
     const inspector = getInspector(context);
     const pm = getPortfolioManager();
 
-    const [positions, portfolio] = await Promise.all([
-      inspector.getPositions(),
-      inspector.getPortfolio(),
-    ]);
+    const [positions, portfolio] = await Promise.all([inspector.getPositions(), inspector.getPortfolio()]);
     const balance = portfolio.usdcBalance ?? context.flashClient.getBalance();
     const state = pm.getState(positions, balance);
     const exposure = computeExposure(portfolio);
@@ -806,10 +801,7 @@ export const portfolioRebalanceTool: ToolDefinition = {
     const inspector = getInspector(context);
     const pm = getPortfolioManager();
 
-    const [positions, rbPortfolio] = await Promise.all([
-      inspector.getPositions(),
-      inspector.getPortfolio(),
-    ]);
+    const [positions, rbPortfolio] = await Promise.all([inspector.getPositions(), inspector.getPortfolio()]);
     const balance = rbPortfolio.usdcBalance ?? context.flashClient.getBalance();
 
     if (positions.length === 0) {

@@ -12,10 +12,10 @@
 
 import { getLogger } from '../utils/logger.js';
 
-const CACHE_SWEEP_INTERVAL_MS = 5 * 60_000;    // 5 minutes
-const MEMORY_CHECK_INTERVAL_MS = 5 * 60_000;   // 5 minutes
-const ORACLE_CHECK_INTERVAL_MS = 10_000;        // 10 seconds
-const RSS_WARNING_THRESHOLD = 800 * 1024 * 1024;         // 800 MB
+const CACHE_SWEEP_INTERVAL_MS = 5 * 60_000; // 5 minutes
+const MEMORY_CHECK_INTERVAL_MS = 5 * 60_000; // 5 minutes
+const ORACLE_CHECK_INTERVAL_MS = 10_000; // 10 seconds
+const RSS_WARNING_THRESHOLD = 800 * 1024 * 1024; // 800 MB
 const RSS_CRITICAL_THRESHOLD = 1.2 * 1024 * 1024 * 1024; // 1.2 GB
 
 export interface MaintenanceHandle {
@@ -32,12 +32,16 @@ export function startMaintenance(): MaintenanceHandle {
       // Sweep protocol fee cache
       try {
         sweepFeeCacheSync();
-      } catch { /* non-critical */ }
+      } catch {
+        /* non-critical */
+      }
 
       // Sweep expired price history entries (>24h old)
       try {
         sweepPriceHistorySync();
-      } catch { /* non-critical */ }
+      } catch {
+        /* non-critical */
+      }
 
       logger.debug('MAINTENANCE', 'Cache sweep completed');
     } catch {
@@ -119,19 +123,23 @@ export function startMaintenance(): MaintenanceHandle {
 /** Sweep expired entries from the protocol fee cache (sync, no imports needed). */
 function sweepFeeCacheSync(): void {
   // Dynamic import to avoid circular deps
-  import('../utils/protocol-fees.js').then(mod => {
-    if (typeof mod.sweepExpiredCache === 'function') {
-      mod.sweepExpiredCache();
-    }
-  }).catch(() => {});
+  import('../utils/protocol-fees.js')
+    .then((mod) => {
+      if (typeof mod.sweepExpiredCache === 'function') {
+        mod.sweepExpiredCache();
+      }
+    })
+    .catch(() => {});
 }
 
 /** Trim price history to keep only 24h of data per symbol, bounded. */
 function sweepPriceHistorySync(): void {
-  import('../data/prices.js').then(mod => {
-    // PriceService already trims history on recordPriceHistory(), but
-    // this explicit sweep handles idle periods where no prices are fetched.
-    const svc = new mod.PriceService();
-    svc.flushHistory();
-  }).catch(() => {});
+  import('../data/prices.js')
+    .then((mod) => {
+      // PriceService already trims history on recordPriceHistory(), but
+      // this explicit sweep handles idle periods where no prices are fetched.
+      const svc = new mod.PriceService();
+      svc.flushHistory();
+    })
+    .catch(() => {});
 }

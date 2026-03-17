@@ -1,9 +1,5 @@
 import { FStatsClient } from '../data/fstats.js';
-import {
-  FLASH_PROGRAM_ID,
-  POOL_NAMES,
-  POOL_MARKETS,
-} from '../config/index.js';
+import { FLASH_PROGRAM_ID, POOL_NAMES, POOL_MARKETS } from '../config/index.js';
 import { formatUsd, formatPrice, shortAddress } from '../utils/format.js';
 import { getLogger } from '../utils/logger.js';
 import { getErrorMessage } from '../utils/retry.js';
@@ -76,7 +72,9 @@ export class ProtocolInspector {
       if (pStats.marketsComingSoon > 0) {
         lines.push(theme.pair('Coming Soon', pStats.marketsComingSoon.toString()));
       }
-    } catch { /* non-critical */ }
+    } catch {
+      /* non-critical */
+    }
 
     // Overview stats
     if (snap.overviewStats) {
@@ -94,7 +92,7 @@ export class ProtocolInspector {
       lines.push(`  ${theme.section('Open Interest')}`);
       let totalLong = 0;
       let totalShort = 0;
-      const sorted = [...snap.openInterest].sort((a, b) => (b.longOi + b.shortOi) - (a.longOi + a.shortOi));
+      const sorted = [...snap.openInterest].sort((a, b) => b.longOi + b.shortOi - (a.longOi + a.shortOi));
       for (const m of sorted) {
         const total = m.longOi + m.shortOi;
         if (total <= 0) continue;
@@ -119,7 +117,7 @@ export class ProtocolInspector {
   // ─── Pool Inspection ───────────────────────────────────────────────
 
   async inspectPool(poolName: string): Promise<string> {
-    const matched = POOL_NAMES.find(p => p.toLowerCase() === poolName.toLowerCase());
+    const matched = POOL_NAMES.find((p) => p.toLowerCase() === poolName.toLowerCase());
     if (!matched) {
       return theme.negative(`  Unknown pool: ${poolName}. Available: ${POOL_NAMES.join(', ')}`);
     }
@@ -136,7 +134,7 @@ export class ProtocolInspector {
     ];
 
     // OI per market in this pool
-    const poolOi = snap.openInterest.filter(m => markets.some(mk => mk.toUpperCase() === m.market.toUpperCase()));
+    const poolOi = snap.openInterest.filter((m) => markets.some((mk) => mk.toUpperCase() === m.market.toUpperCase()));
     if (poolOi.length > 0) {
       lines.push(`  ${theme.section('Open Interest')}`);
       let poolLong = 0;
@@ -154,7 +152,9 @@ export class ProtocolInspector {
       const poolTotal = poolLong + poolShort;
       if (poolTotal > 0) {
         lines.push('');
-        lines.push(`  ${theme.dim('Pool L/S:')} ${theme.positive(((poolLong / poolTotal) * 100).toFixed(0) + '%')} / ${theme.negative(((poolShort / poolTotal) * 100).toFixed(0) + '%')}`);
+        lines.push(
+          `  ${theme.dim('Pool L/S:')} ${theme.positive(((poolLong / poolTotal) * 100).toFixed(0) + '%')} / ${theme.negative(((poolShort / poolTotal) * 100).toFixed(0) + '%')}`,
+        );
       }
       lines.push('');
     }
@@ -162,10 +162,12 @@ export class ProtocolInspector {
     // Whale activity from recent positions
     try {
       const activity = await this.fstats.getRecentActivity(50);
-      const poolWhales = activity.filter(a => {
-        const sym = (a.market_symbol ?? a.market ?? '').toUpperCase();
-        return markets.some(mk => mk.toUpperCase() === sym) && (a.size_usd ?? 0) >= 10_000;
-      }).slice(0, 5);
+      const poolWhales = activity
+        .filter((a) => {
+          const sym = (a.market_symbol ?? a.market ?? '').toUpperCase();
+          return markets.some((mk) => mk.toUpperCase() === sym) && (a.size_usd ?? 0) >= 10_000;
+        })
+        .slice(0, 5);
 
       if (poolWhales.length > 0) {
         lines.push(`  ${theme.section('Recent Whale Activity')}`);
@@ -190,7 +192,7 @@ export class ProtocolInspector {
     const upper = market.toUpperCase();
     let pool = '';
     for (const [p, markets] of Object.entries(POOL_MARKETS)) {
-      if (markets.some(m => m.toUpperCase() === upper)) {
+      if (markets.some((m) => m.toUpperCase() === upper)) {
         pool = p;
         break;
       }
@@ -204,7 +206,7 @@ export class ProtocolInspector {
     const mktStatus = getMarketStatus(upper);
 
     const snap = await this.getSnapshot();
-    const oi = snap.openInterest.find(m => m.market.toUpperCase() === upper);
+    const oi = snap.openInterest.find((m) => m.market.toUpperCase() === upper);
 
     let statusDisplay: string;
     if (!mktStatus.isVirtual) {
@@ -259,7 +261,7 @@ export class ProtocolInspector {
     try {
       const openPositions = await this.fstats.getOpenPositions();
       const marketPositions = openPositions
-        .filter(p => (p.market_symbol ?? p.market ?? '').toUpperCase() === upper)
+        .filter((p) => (p.market_symbol ?? p.market ?? '').toUpperCase() === upper)
         .sort((a, b) => (b.size_usd ?? 0) - (a.size_usd ?? 0))
         .slice(0, 5);
 
@@ -272,7 +274,9 @@ export class ProtocolInspector {
           const side = (p.side ?? '?').toUpperCase();
           const size = p.size_usd ?? 0;
           const price = p.entry_price ?? p.mark_price ?? 0;
-          lines.push(`    ${i + 1}. ${addr} — ${formatUsd(size)} ${side}${price > 0 ? ` @ ${formatPrice(price)}` : ''}`);
+          lines.push(
+            `    ${i + 1}. ${addr} — ${formatUsd(size)} ${side}${price > 0 ? ` @ ${formatPrice(price)}` : ''}`,
+          );
         }
       }
     } catch {
@@ -288,14 +292,11 @@ export class ProtocolInspector {
   async inspectRiskMetrics(): Promise<string> {
     const snap = await this.getSnapshot();
 
-    const lines: string[] = [
-      theme.titleBlock('PROTOCOL RISK METRICS'),
-      '',
-    ];
+    const lines: string[] = [theme.titleBlock('PROTOCOL RISK METRICS'), ''];
 
     // Markets by OI
-    const sorted = [...snap.openInterest].sort((a, b) => (b.longOi + b.shortOi) - (a.longOi + a.shortOi));
-    const active = sorted.filter(m => m.longOi + m.shortOi > 0);
+    const sorted = [...snap.openInterest].sort((a, b) => b.longOi + b.shortOi - (a.longOi + a.shortOi));
+    const active = sorted.filter((m) => m.longOi + m.shortOi > 0);
 
     if (active.length > 0) {
       lines.push(`  ${theme.section('Markets by Open Interest')}`);
@@ -346,7 +347,7 @@ export class ProtocolInspector {
 
     try {
       const oiData = await this.fstats.getOpenInterest();
-      openInterest = oiData.markets.map(m => ({
+      openInterest = oiData.markets.map((m) => ({
         market: m.market,
         longOi: m.longOi,
         shortOi: m.shortOi,

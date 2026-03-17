@@ -29,10 +29,16 @@ export async function runMarketMonitor(deps: MarketMonitorDeps, filterMarket?: s
     const { PriceService } = await import('../data/prices.js');
     const { POOL_MARKETS } = await import('../config/index.js');
     const priceSvc = new PriceService();
-    const allSymbols = [...new Set(Object.values(POOL_MARKETS).flat().map(s => s.toUpperCase()))];
+    const allSymbols = [
+      ...new Set(
+        Object.values(POOL_MARKETS)
+          .flat()
+          .map((s) => s.toUpperCase()),
+      ),
+    ];
     try {
       const prices = await priceSvc.getPrices(allSymbols);
-      const snapshot = allSymbols.map(sym => {
+      const snapshot = allSymbols.map((sym) => {
         const p = prices.get(sym);
         return { symbol: sym, price: p?.price ?? null, change_24h: p?.priceChange24h ?? null };
       });
@@ -49,9 +55,15 @@ export async function runMarketMonitor(deps: MarketMonitorDeps, filterMarket?: s
   const { POOL_MARKETS } = await import('../config/index.js');
 
   // All unique market symbols from Flash SDK pool config
-  let allSymbols = [...new Set(Object.values(POOL_MARKETS).flat().map(s => s.toUpperCase()))];
+  let allSymbols = [
+    ...new Set(
+      Object.values(POOL_MARKETS)
+        .flat()
+        .map((s) => s.toUpperCase()),
+    ),
+  ];
   if (filterMarket) {
-    allSymbols = allSymbols.filter(s => s === filterMarket.toUpperCase());
+    allSymbols = allSymbols.filter((s) => s === filterMarket.toUpperCase());
   }
 
   let running = true;
@@ -68,8 +80,10 @@ export async function runMarketMonitor(deps: MarketMonitorDeps, filterMarket?: s
 
   // Drain any buffered stdin (e.g. the Enter key from the command)
   // to prevent stale bytes from triggering the exit handler
-  await new Promise<void>(resolve => {
-    const drain = () => { /* discard */ };
+  await new Promise<void>((resolve) => {
+    const drain = () => {
+      /* discard */
+    };
     process.stdin.on('data', drain);
     setTimeout(() => {
       process.stdin.removeListener('data', drain);
@@ -83,9 +97,9 @@ export async function runMarketMonitor(deps: MarketMonitorDeps, filterMarket?: s
   const prevLongPct = new Map<string, number>();
 
   // Event thresholds — only fire on meaningful changes
-  const PRICE_MOVE_PCT = 1.0;     // 1% price move between cycles
-  const OI_CHANGE_USD = 10_000;   // $10k OI change between cycles
-  const RATIO_SHIFT_PCT = 5;      // 5pp long/short ratio shift
+  const PRICE_MOVE_PCT = 1.0; // 1% price move between cycles
+  const OI_CHANGE_USD = 10_000; // $10k OI change between cycles
+  const RATIO_SHIFT_PCT = 5; // 5pp long/short ratio shift
 
   // ─── Rolling history buffer for velocity tracking ──────────────
   const HISTORY_DEPTH = 12;
@@ -257,12 +271,20 @@ export async function runMarketMonitor(deps: MarketMonitorDeps, filterMarket?: s
       prevLongPct.set(sym, longPct);
       pushSnapshot(sym, { timestamp: now, price: tp.price, totalOi, longPct });
 
-      rows.push({ symbol: sym, price: tp.price, change: tp.priceChange24h, totalOi, longPct, shortPct, priceDirection });
+      rows.push({
+        symbol: sym,
+        price: tp.price,
+        change: tp.priceChange24h,
+        totalOi,
+        longPct,
+        shortPct,
+        priceDirection,
+      });
     }
 
     // Evict stale events (>60s old) and cap size
     const eventNow = Date.now();
-    recentEvents = recentEvents.filter(e => eventNow - e.timestamp < 60_000);
+    recentEvents = recentEvents.filter((e) => eventNow - e.timestamp < 60_000);
     if (recentEvents.length > MAX_EVENTS) {
       recentEvents = recentEvents.slice(-MAX_EVENTS);
     }
@@ -280,9 +302,7 @@ export async function runMarketMonitor(deps: MarketMonitorDeps, filterMarket?: s
     const elapsedSec = (latest.timestamp - oldest.timestamp) / 1000;
     if (elapsedSec < 10) return null;
 
-    const priceDelta = oldest.price > 0
-      ? ((latest.price - oldest.price) / oldest.price) * 100
-      : 0;
+    const priceDelta = oldest.price > 0 ? ((latest.price - oldest.price) / oldest.price) * 100 : 0;
     const oiDelta = latest.totalOi - oldest.totalOi;
     const ratioDelta = latest.longPct - oldest.longPct;
 
@@ -319,26 +339,41 @@ export async function runMarketMonitor(deps: MarketMonitorDeps, filterMarket?: s
 
     // ── Telemetry status bar with health coloring ──
     const rpcMs = telemetry.rpcLatencyMs;
-    const rpcStr = rpcMs < 0 ? theme.dim('RPC N/A')
-      : rpcMs < 150 ? chalk.green(`RPC ${rpcMs}ms`)
-      : rpcMs < 400 ? chalk.yellow(`RPC ${rpcMs}ms`)
-      : chalk.red(`RPC ${rpcMs}ms`);
+    const rpcStr =
+      rpcMs < 0
+        ? theme.dim('RPC N/A')
+        : rpcMs < 150
+          ? chalk.green(`RPC ${rpcMs}ms`)
+          : rpcMs < 400
+            ? chalk.yellow(`RPC ${rpcMs}ms`)
+            : chalk.red(`RPC ${rpcMs}ms`);
 
     const oMs = telemetry.oracleLatencyMs;
-    const oracleStr = oMs < 0 ? theme.dim('Oracle N/A')
-      : oMs <= 3000 ? chalk.green(`Oracle ${oMs}ms`)
-      : oMs <= 5000 ? chalk.yellow(`Oracle ${oMs}ms ⚠`)
-      : chalk.red(`Oracle ${oMs}ms ⚠`);
+    const oracleStr =
+      oMs < 0
+        ? theme.dim('Oracle N/A')
+        : oMs <= 3000
+          ? chalk.green(`Oracle ${oMs}ms`)
+          : oMs <= 5000
+            ? chalk.yellow(`Oracle ${oMs}ms ⚠`)
+            : chalk.red(`Oracle ${oMs}ms ⚠`);
 
-    const slotStr = telemetry.slot < 0 ? theme.dim('Slot N/A')
-      : slotFreezeCount >= 2 ? chalk.red(`Slot ${telemetry.slot} ⚠`)
-      : chalk.green(`Slot ${telemetry.slot}`);
+    const slotStr =
+      telemetry.slot < 0
+        ? theme.dim('Slot N/A')
+        : slotFreezeCount >= 2
+          ? chalk.red(`Slot ${telemetry.slot} ⚠`)
+          : chalk.green(`Slot ${telemetry.slot}`);
 
     const lag = telemetry.slotLag;
-    const lagStr = lag < 0 ? theme.dim('Lag N/A')
-      : lag === 0 ? chalk.green('Lag 0')
-      : lag <= 5 ? chalk.yellow(`Lag ${lag}`)
-      : chalk.red(`Lag ${lag}`);
+    const lagStr =
+      lag < 0
+        ? theme.dim('Lag N/A')
+        : lag === 0
+          ? chalk.green('Lag 0')
+          : lag <= 5
+            ? chalk.yellow(`Lag ${lag}`)
+            : chalk.red(`Lag ${lag}`);
 
     const renderStr = theme.dim(`Render ${telemetry.renderTimeMs}ms`);
     const _refreshStr = theme.dim(`Refresh ${REFRESH_MS / 1000}s`);
@@ -375,19 +410,28 @@ export async function runMarketMonitor(deps: MarketMonitorDeps, filterMarket?: s
     for (const r of visibleRows) {
       const sym = chalk.bold(('  ' + r.symbol).padEnd(14));
       const priceStr = formatPrice(r.price).padStart(14);
-      const coloredPrice = r.priceDirection === 'up'
-        ? chalk.green(priceStr)
-        : r.priceDirection === 'down'
-          ? chalk.red(priceStr)
-          : priceStr;
-      const changeRaw = !Number.isFinite(r.change) ? 'N/A'.padStart(12)
-        : r.change === 0 ? '+0.00%'.padStart(12)
-        : formatPercent(r.change).padStart(12);
-      const change = !Number.isFinite(r.change) ? theme.dim(changeRaw)
-        : r.change > 0 ? theme.positive(changeRaw) : r.change < 0 ? theme.negative(changeRaw) : theme.dim(changeRaw);
+      const coloredPrice =
+        r.priceDirection === 'up'
+          ? chalk.green(priceStr)
+          : r.priceDirection === 'down'
+            ? chalk.red(priceStr)
+            : priceStr;
+      const changeRaw = !Number.isFinite(r.change)
+        ? 'N/A'.padStart(12)
+        : r.change === 0
+          ? '+0.00%'.padStart(12)
+          : formatPercent(r.change).padStart(12);
+      const change = !Number.isFinite(r.change)
+        ? theme.dim(changeRaw)
+        : r.change > 0
+          ? theme.positive(changeRaw)
+          : r.change < 0
+            ? theme.negative(changeRaw)
+            : theme.dim(changeRaw);
       const oiStr = formatUsd(r.totalOi).padStart(16);
       const ratio = `${r.longPct} / ${r.shortPct}`.padStart(14);
-      const ratioColored = r.longPct > 60 ? theme.positive(ratio) : r.shortPct > 60 ? theme.negative(ratio) : theme.dim(ratio);
+      const ratioColored =
+        r.longPct > 60 ? theme.positive(ratio) : r.shortPct > 60 ? theme.negative(ratio) : theme.dim(ratio);
       lines.push(`${sym}${coloredPrice}${change}${oiStr}${ratioColored}`);
     }
 
@@ -489,7 +533,9 @@ export async function runMarketMonitor(deps: MarketMonitorDeps, filterMarket?: s
       // Drain any remaining stdin bytes before restoring readline.
       // Use a longer drain window to prevent the exit key from
       // leaking into the CLI prompt.
-      const drainHandler = () => { /* discard */ };
+      const drainHandler = () => {
+        /* discard */
+      };
       process.stdin.resume();
       process.stdin.on('data', drainHandler);
       setTimeout(() => {

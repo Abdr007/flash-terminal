@@ -56,7 +56,13 @@ import { initStateSnapshot } from '../core/state-snapshot.js';
 import { initTpuClient, getTpuClient } from '../network/tpu-client.js';
 import { getLeaderRouter } from '../core/leader-router.js';
 
-import { createBatch, appendToBatch, isBatchWithinLimit, batchSummary, type SdkResult } from '../transaction/instruction-aggregator.js';
+import {
+  createBatch,
+  appendToBatch,
+  isBatchWithinLimit,
+  batchSummary,
+  type SdkResult,
+} from '../transaction/instruction-aggregator.js';
 import { resolveALTs, verifyALTAccountOverlap, logMessageALTDiagnostics } from '../transaction/alt-resolver.js';
 import { buildATAIdempotentIxs } from '../transaction/ata-resolver.js';
 import { getTypedMarkets, type SdkPositionData, type SdkPoolConfigExt } from '../types/sdk-types.js';
@@ -69,12 +75,20 @@ async function quietSdk<T>(fn: () => Promise<T>): Promise<T> {
   const origLog = console.log;
   console.log = (...args: unknown[]) => {
     const first = typeof args[0] === 'string' ? args[0] : '';
-    if (first.includes('close position') || first.includes('SDK logs') ||
-        first.includes('volitlity fee') || first.includes('assetsUsd') ||
-        first.includes('collateralSymbol === SOL') || first.includes('inputSymbol === SOL') ||
-        first.includes('maxWithdrawableAmount') || first.includes('collateralAmountReceived') ||
-        first.includes('exceeding to') || first.includes('profitLoss') ||
-        first.includes('THIS cannot') || first.includes('No account info found')) {
+    if (
+      first.includes('close position') ||
+      first.includes('SDK logs') ||
+      first.includes('volitlity fee') ||
+      first.includes('assetsUsd') ||
+      first.includes('collateralSymbol === SOL') ||
+      first.includes('inputSymbol === SOL') ||
+      first.includes('maxWithdrawableAmount') ||
+      first.includes('collateralAmountReceived') ||
+      first.includes('exceeding to') ||
+      first.includes('profitLoss') ||
+      first.includes('THIS cannot') ||
+      first.includes('No account info found')
+    ) {
       return;
     }
     origLog.apply(console, args);
@@ -162,9 +176,10 @@ class PythPriceService {
       const emaPriceComponent = priceData.emaPrice.valueComponent;
       // confidence from Pyth can be a float — convert to integer at the oracle's exponent scale
       const rawConfidence = priceData.confidence ?? 0;
-      const confidenceInt = typeof rawConfidence === 'number'
-        ? Math.round(rawConfidence * Math.pow(10, Math.abs(priceData.exponent)))
-        : rawConfidence;
+      const confidenceInt =
+        typeof rawConfidence === 'number'
+          ? Math.round(rawConfidence * Math.pow(10, Math.abs(priceData.exponent)))
+          : rawConfidence;
       const rawEmaConfidence = priceData.emaConfidence?.valueComponent ?? 0;
 
       const price = new OraclePrice({
@@ -202,7 +217,10 @@ class PythPriceService {
       const confidenceRatio = (priceData.confidence ?? 0) / absPrice;
       const MAX_CONFIDENCE_RATIO = 0.02;
       if (confidenceRatio > MAX_CONFIDENCE_RATIO) {
-        logger.warn('PRICE', `Oracle confidence for ${token.symbol} too wide: ${(confidenceRatio * 100).toFixed(1)}% — skipping`);
+        logger.warn(
+          'PRICE',
+          `Oracle confidence for ${token.symbol} too wide: ${(confidenceRatio * 100).toFixed(1)}% — skipping`,
+        );
         continue;
       }
 
@@ -280,7 +298,8 @@ function mapProgramError(rawError: string): string {
  */
 function isNetworkError(msg: string): boolean {
   const lower = msg.toLowerCase();
-  return lower.includes('timeout') ||
+  return (
+    lower.includes('timeout') ||
     lower.includes('econnrefused') ||
     lower.includes('econnreset') ||
     lower.includes('enotfound') ||
@@ -289,7 +308,8 @@ function isNetworkError(msg: string): boolean {
     lower.includes('socket hang up') ||
     lower.includes('429') ||
     lower.includes('503') ||
-    lower.includes('502');
+    lower.includes('502')
+  );
 }
 
 // ─── Program ID Whitelist ──────────────────────────────────────────────────
@@ -312,19 +332,21 @@ const ED25519_PROGRAM = 'Ed25519SigVerify111111111111111111111111111'; // Ed2551
 // Flash Trade program IDs are loaded dynamically from PoolConfig.
 // [M-4] Base set of allowed system programs — immutable.
 // Flash-specific IDs are added per-client instance via frozenAllowedProgramIds.
-const BASE_ALLOWED_PROGRAM_IDS = Object.freeze(new Set<string>([
-  SYSTEM_PROGRAM,
-  TOKEN_PROGRAM,
-  TOKEN_2022_PROGRAM,
-  ATA_PROGRAM,
-  COMPUTE_BUDGET_PROGRAM,
-  SYSVAR_RENT,
-  SYSVAR_CLOCK,
-  SYSVAR_INSTRUCTIONS,
-  MEMO_PROGRAM,
-  EVENT_AUTHORITY,
-  ED25519_PROGRAM,
-]));
+const BASE_ALLOWED_PROGRAM_IDS = Object.freeze(
+  new Set<string>([
+    SYSTEM_PROGRAM,
+    TOKEN_PROGRAM,
+    TOKEN_2022_PROGRAM,
+    ATA_PROGRAM,
+    COMPUTE_BUDGET_PROGRAM,
+    SYSVAR_RENT,
+    SYSVAR_CLOCK,
+    SYSVAR_INSTRUCTIONS,
+    MEMO_PROGRAM,
+    EVENT_AUTHORITY,
+    ED25519_PROGRAM,
+  ]),
+);
 
 // Active program whitelist — updated by FlashClient constructor and getPoolConfigForMarket().
 // Starts with base system programs; Flash-specific IDs added per pool.
@@ -341,7 +363,7 @@ function validateInstructionPrograms(instructions: TransactionInstruction[], con
     if (!ALLOWED_PROGRAM_IDS.has(progId)) {
       throw new Error(
         `Transaction rejected: instruction ${i} targets unknown program ${progId} (${context}). ` +
-        `Only approved Flash Trade and Solana system programs are allowed.`
+          `Only approved Flash Trade and Solana system programs are allowed.`,
       );
     }
   }
@@ -367,7 +389,11 @@ export class FlashClient implements IFlashClient {
   private activeTrades = new Set<string>();
 
   /** Cached referral params for trade calls */
-  private referralParams: { privilege: typeof Privilege.Referral; tokenStakeAccount: PublicKey; userReferralAccount: PublicKey } | null = null;
+  private referralParams: {
+    privilege: typeof Privilege.Referral;
+    tokenStakeAccount: PublicKey;
+    userReferralAccount: PublicKey;
+  } | null = null;
 
   /** Recent trade cache — prevents duplicate submissions within a short window */
   private recentTrades = new Map<string, number>(); // tradeKey -> timestamp
@@ -401,7 +427,7 @@ export class FlashClient implements IFlashClient {
     } catch {
       throw new Error(
         `Unknown pool: ${config.defaultPool}. ` +
-        `Valid pools: Crypto.1, Virtual.1, Governance.1, Community.1, Community.2, Trump.1, Ore.1`
+          `Valid pools: Crypto.1, Virtual.1, Governance.1, Community.1, Community.2, Trump.1, Ore.1`,
       );
     }
 
@@ -413,7 +439,7 @@ export class FlashClient implements IFlashClient {
       this.poolConfig.fbNftRewardProgramId,
       this.poolConfig.rewardDistributionProgram.programId,
       { prioritizationFee: config.computeUnitPrice },
-      false // useExtOracleAccount — internal oracles used for current SDK version
+      false, // useExtOracleAccount — internal oracles used for current SDK version
     );
 
     // [M-4] Build allowed program set from pool config
@@ -496,16 +522,22 @@ export class FlashClient implements IFlashClient {
    * Get a recent blockhash — uses pre-cached value if fresh, otherwise fetches on-demand.
    * Returns the blockhash and the age of the cache entry (for timeout adjustment).
    */
-  private async getBlockhash(conn: Connection): Promise<{ blockhash: string; lastValidBlockHeight: number; fetchLatencyMs: number }> {
+  private async getBlockhash(
+    conn: Connection,
+  ): Promise<{ blockhash: string; lastValidBlockHeight: number; fetchLatencyMs: number }> {
     const cached = this.cachedBlockhash;
-    if (cached && (Date.now() - cached.fetchedAt) < FlashClient.BLOCKHASH_MAX_AGE_MS) {
+    if (cached && Date.now() - cached.fetchedAt < FlashClient.BLOCKHASH_MAX_AGE_MS) {
       return { blockhash: cached.blockhash, lastValidBlockHeight: cached.lastValidBlockHeight, fetchLatencyMs: 0 };
     }
     // Cache miss or stale — fetch on-demand
     const start = Date.now();
     const result = await conn.getLatestBlockhash('confirmed');
     const fetchLatencyMs = Date.now() - start;
-    this.cachedBlockhash = { blockhash: result.blockhash, lastValidBlockHeight: result.lastValidBlockHeight, fetchedAt: Date.now() };
+    this.cachedBlockhash = {
+      blockhash: result.blockhash,
+      lastValidBlockHeight: result.lastValidBlockHeight,
+      fetchedAt: Date.now(),
+    };
     return { blockhash: result.blockhash, lastValidBlockHeight: result.lastValidBlockHeight, fetchLatencyMs };
   }
 
@@ -550,7 +582,7 @@ export class FlashClient implements IFlashClient {
       this.poolConfig.fbNftRewardProgramId,
       this.poolConfig.rewardDistributionProgram.programId,
       { prioritizationFee: this.config.computeUnitPrice },
-      false // useExtOracleAccount
+      false, // useExtOracleAccount
     );
     // Swap all references together — minimizes the window where concurrent
     // reads could see mismatched connection/provider/perpClient
@@ -571,16 +603,14 @@ export class FlashClient implements IFlashClient {
   // ─── Pre-Trade Validation ─────────────────────────────────────────────────
 
   private async ensureSufficientSol(): Promise<void> {
-    const lamports = await withRetry(
-      () => this.connection.getBalance(this.wallet.publicKey),
-      'sol-balance-check',
-      { maxAttempts: 2 },
-    );
+    const lamports = await withRetry(() => this.connection.getBalance(this.wallet.publicKey), 'sol-balance-check', {
+      maxAttempts: 2,
+    });
     this.cachedSolBalance = lamports / LAMPORTS_PER_SOL;
     if (this.cachedSolBalance < MIN_SOL_FOR_FEES) {
       throw new Error(
         `Insufficient SOL for transaction fees. Balance: ${this.cachedSolBalance.toFixed(4)} SOL. ` +
-        `Minimum required: ${MIN_SOL_FOR_FEES} SOL.`
+          `Minimum required: ${MIN_SOL_FOR_FEES} SOL.`,
       );
     }
   }
@@ -606,7 +636,11 @@ export class FlashClient implements IFlashClient {
   /** Whether we've already checked the referral PDA on-chain (one-time) */
   private referralChecked = false;
 
-  private getReferralParams(): { privilege: typeof Privilege.Referral; tokenStakeAccount: PublicKey; userReferralAccount: PublicKey } | null {
+  private getReferralParams(): {
+    privilege: typeof Privilege.Referral;
+    tokenStakeAccount: PublicKey;
+    userReferralAccount: PublicKey;
+  } | null {
     if (this.referralParams) return this.referralParams;
     if (!this.config.referrerAddress) return null;
     // If we already checked and it was invalid, don't retry
@@ -636,7 +670,10 @@ export class FlashClient implements IFlashClient {
       };
 
       const logger = getLogger();
-      logger.info('REFERRAL', `Referral active: referrer=${referrerPk.toBase58().slice(0, 8)}... stakeAcct=${referrerStakeAccount.toBase58().slice(0, 8)}... referralPDA=${userReferralAccount.toBase58().slice(0, 8)}...`);
+      logger.info(
+        'REFERRAL',
+        `Referral active: referrer=${referrerPk.toBase58().slice(0, 8)}... stakeAcct=${referrerStakeAccount.toBase58().slice(0, 8)}... referralPDA=${userReferralAccount.toBase58().slice(0, 8)}...`,
+      );
 
       return this.referralParams;
     } catch (err: unknown) {
@@ -663,7 +700,10 @@ export class FlashClient implements IFlashClient {
     try {
       const acctInfo = await this.connection.getAccountInfo(params.userReferralAccount);
       if (!acctInfo) {
-        logger.info('REFERRAL', 'User referral PDA not found on-chain. Run "faf create-referral" first. Falling back to no referral.');
+        logger.info(
+          'REFERRAL',
+          'User referral PDA not found on-chain. Run "faf create-referral" first. Falling back to no referral.',
+        );
         this.referralParams = null;
       }
     } catch {
@@ -685,7 +725,9 @@ export class FlashClient implements IFlashClient {
     if (!poolName) throw new Error(`Unknown market: ${market}`);
     // Check if pool is tradeable (SDK supports it)
     if (!isTradeablePool(poolName)) {
-      throw new Error(`${market} (${poolName}) is not yet available for trading. The pool exists in the protocol config but the SDK doesn't support it yet. Check for flash-sdk updates.`);
+      throw new Error(
+        `${market} (${poolName}) is not yet available for trading. The pool exists in the protocol config but the SDK doesn't support it yet. Check for flash-sdk updates.`,
+      );
     }
     if (poolName !== this.poolConfig.poolName) {
       const pc = PoolConfig.fromIdsByName(poolName, this.config.network);
@@ -693,7 +735,8 @@ export class FlashClient implements IFlashClient {
       this.allowedPrograms.add(pc.programId.toBase58());
       if (pc.perpComposibilityProgramId) this.allowedPrograms.add(pc.perpComposibilityProgramId.toBase58());
       if (pc.fbNftRewardProgramId) this.allowedPrograms.add(pc.fbNftRewardProgramId.toBase58());
-      if (pc.rewardDistributionProgram?.programId) this.allowedPrograms.add(pc.rewardDistributionProgram.programId.toBase58());
+      if (pc.rewardDistributionProgram?.programId)
+        this.allowedPrograms.add(pc.rewardDistributionProgram.programId.toBase58());
       ALLOWED_PROGRAM_IDS = this.allowedPrograms;
       return pc;
     }
@@ -711,7 +754,12 @@ export class FlashClient implements IFlashClient {
   }
 
   private findToken(poolConfig: PoolConfig, symbol: string) {
-    const tokens = poolConfig.tokens as Array<{ symbol: string; mintKey: PublicKey; decimals: number; pythTicker: string }>;
+    const tokens = poolConfig.tokens as Array<{
+      symbol: string;
+      mintKey: PublicKey;
+      decimals: number;
+      pythTicker: string;
+    }>;
     const token = tokens.find((t) => t.symbol === symbol);
     if (!token) throw new Error(`Token ${symbol} not found in pool`);
     return token;
@@ -738,23 +786,26 @@ export class FlashClient implements IFlashClient {
   private async findUserPosition(
     poolConfig: PoolConfig,
     market: string,
-    side: TradeSide
+    side: TradeSide,
   ): Promise<{
     position: { pubkey: PublicKey; market: PublicKey };
-    marketConfig: { marketAccount: PublicKey; targetMint: PublicKey; collateralMint: PublicKey; side: typeof Side.Long | typeof Side.Short };
+    marketConfig: {
+      marketAccount: PublicKey;
+      targetMint: PublicKey;
+      collateralMint: PublicKey;
+      side: typeof Side.Long | typeof Side.Short;
+    };
   }> {
     const sdkSide = toSdkSide(side);
     const positions = await this.perpClient.getUserPositions(this.wallet.publicKey, poolConfig);
     const token = this.findToken(poolConfig, market);
     const markets = getTypedMarkets(poolConfig);
 
-    const marketConfig = markets.find(
-      (m) => m.targetMint.equals(token.mintKey) && m.side === sdkSide
-    );
+    const marketConfig = markets.find((m) => m.targetMint.equals(token.mintKey) && m.side === sdkSide);
     if (!marketConfig) throw new Error(`Market config for ${market} ${side} not found`);
 
-    const position = (positions as Array<{ pubkey: PublicKey; market: PublicKey }>).find(
-      (p) => p.market.equals(marketConfig.marketAccount)
+    const position = (positions as Array<{ pubkey: PublicKey; market: PublicKey }>).find((p) =>
+      p.market.equals(marketConfig.marketAccount),
     );
     if (!position) throw new Error(`No open ${side} position on ${market}`);
 
@@ -823,17 +874,26 @@ export class FlashClient implements IFlashClient {
     if (altAccounts.length > 0) {
       const overlap = verifyALTAccountOverlap(instructions, altAccounts);
       if (overlap.compressible > 0) {
-        logger.debug('ALT', `TX accounts: ${overlap.totalAccounts}, compressible via ALT: ${overlap.compressible} (${(overlap.compressionRatio * 100).toFixed(0)}%)`);
+        logger.debug(
+          'ALT',
+          `TX accounts: ${overlap.totalAccounts}, compressible via ALT: ${overlap.compressible} (${(overlap.compressionRatio * 100).toFixed(0)}%)`,
+        );
       } else {
-        logger.debug('ALT', `TX has ${overlap.totalAccounts} accounts but 0 overlap with ALT — tables will have no effect`);
+        logger.debug(
+          'ALT',
+          `TX has ${overlap.totalAccounts} accounts but 0 overlap with ALT — tables will have no effect`,
+        );
       }
     }
 
     // ── Dynamic CU limit scaling ──
     // Base: 220k CU (observed usage: 104–112k). If instructions > 4 (e.g. TP/SL
     // attached), add 30k headroom. Never exceed 600k. Explicit overrides take precedence.
-    const dynamicCuLimit = computeUnitLimitOverride ??
-      (instructions.length > 4 ? Math.min(this.config.computeUnitLimit + 30_000, 600_000) : this.config.computeUnitLimit);
+    const dynamicCuLimit =
+      computeUnitLimitOverride ??
+      (instructions.length > 4
+        ? Math.min(this.config.computeUnitLimit + 30_000, 600_000)
+        : this.config.computeUnitLimit);
 
     // ── Route through Ultra-TX Engine when available ──
     const txEngine = getUltraTxEngine();
@@ -844,7 +904,10 @@ export class FlashClient implements IFlashClient {
         altAccounts,
         dynamicCuLimit,
       );
-      logger.info('CLIENT', `Ultra-TX: ${result.signature} (${result.metrics.totalLatencyMs}ms, ${result.metrics.confirmedViaWs ? 'WS' : 'HTTP'}, ${result.broadcastEndpoints} endpoints)`);
+      logger.info(
+        'CLIENT',
+        `Ultra-TX: ${result.signature} (${result.metrics.totalLatencyMs}ms, ${result.metrics.confirmedViaWs ? 'WS' : 'HTTP'}, ${result.broadcastEndpoints} endpoints)`,
+      );
       // Reset session idle timer on successful trade
       this.walletMgr.resetIdleTimer();
       // Invalidate balance cache — balances changed after trade
@@ -894,28 +957,31 @@ export class FlashClient implements IFlashClient {
       try {
         // Use pre-cached blockhash when available (0ms latency vs ~200-500ms RPC call).
         // On retries, always fetch fresh to avoid using a near-expiry blockhash.
-        const { blockhash, fetchLatencyMs: bhLatency } = attempt === 1
-          ? await this.getBlockhash(conn)
-          : await (async () => {
-              const start = Date.now();
-              const result = await conn.getLatestBlockhash('confirmed');
-              return { blockhash: result.blockhash, lastValidBlockHeight: result.lastValidBlockHeight, fetchLatencyMs: Date.now() - start };
-            })();
+        const { blockhash, fetchLatencyMs: bhLatency } =
+          attempt === 1
+            ? await this.getBlockhash(conn)
+            : await (async () => {
+                const start = Date.now();
+                const result = await conn.getLatestBlockhash('confirmed');
+                return {
+                  blockhash: result.blockhash,
+                  lastValidBlockHeight: result.lastValidBlockHeight,
+                  fetchLatencyMs: Date.now() - start,
+                };
+              })();
         if (bhLatency > 10_000) {
           logger.info('CLIENT', `Blockhash fetch took ${(bhLatency / 1000).toFixed(1)}s — confirmation window reduced`);
         }
         // [L-10] Reduce confirmation timeout when blockhash fetch was slow to avoid expiry
         const timeoutMs = 45_000;
-        const effectiveTimeoutMs = bhLatency > 5_000
-          ? Math.max(timeoutMs - bhLatency, 20_000)
-          : timeoutMs;
+        const effectiveTimeoutMs = bhLatency > 5_000 ? Math.max(timeoutMs - bhLatency, 20_000) : timeoutMs;
         // Build compute budget instructions (may change on CU overflow retry)
         const cuLimitIx = ComputeBudgetProgram.setComputeUnitLimit({ units: effectiveCuLimit });
         // Ed25519 signature verification instructions (e.g. backup oracle) must appear
         // BEFORE compute budget instructions — the on-chain program reads ixSysvar
         // and expects Ed25519 at a low index.
-        const ed25519Ixs = validatedInstructions.filter(ix => ix.programId.toBase58() === ED25519_PROGRAM);
-        const nonEd25519Ixs = validatedInstructions.filter(ix => ix.programId.toBase58() !== ED25519_PROGRAM);
+        const ed25519Ixs = validatedInstructions.filter((ix) => ix.programId.toBase58() === ED25519_PROGRAM);
+        const nonEd25519Ixs = validatedInstructions.filter((ix) => ix.programId.toBase58() !== ED25519_PROGRAM);
         const allIxs = [...ed25519Ixs, cuLimitIx, cuPriceIx, ...nonEd25519Ixs];
         const message = MessageV0.compile({
           payerKey: this.wallet.publicKey,
@@ -929,9 +995,13 @@ export class FlashClient implements IFlashClient {
           const txSize = new VersionedTransaction(message).serialize().length;
           const altLookups = message.addressTableLookups ?? [];
           const altLookupCount = altLookups.reduce(
-            (sum, l) => sum + l.readonlyIndexes.length + l.writableIndexes.length, 0,
+            (sum, l) => sum + l.readonlyIndexes.length + l.writableIndexes.length,
+            0,
           );
-          logger.info('TX', `Size: ${txSize}b | ALT: ${altLookups.length > 0 ? `${altLookups.length} table(s), ${altLookupCount} accounts` : 'none'} | Static: ${message.staticAccountKeys.length} | CU: ${effectiveCuLimit} | Fee: ${this.config.computeUnitPrice} µL | IXs: ${allIxs.length}`);
+          logger.info(
+            'TX',
+            `Size: ${txSize}b | ALT: ${altLookups.length > 0 ? `${altLookups.length} table(s), ${altLookupCount} accounts` : 'none'} | Static: ${message.staticAccountKeys.length} | CU: ${effectiveCuLimit} | Fee: ${this.config.computeUnitPrice} µL | IXs: ${allIxs.length}`,
+          );
           logMessageALTDiagnostics(message, 'sendTx');
         }
 
@@ -954,7 +1024,10 @@ export class FlashClient implements IFlashClient {
               // Compute budget exceeded — bump CU limit and retry immediately
               if (simErr.includes('ComputationalBudgetExceeded') || simErr.includes('ProgramFailedToComplete')) {
                 if (effectiveCuLimit < CU_OVERFLOW_BUMP) {
-                  logger.info('CLIENT', `Compute budget exceeded at ${effectiveCuLimit} CU — retrying with ${CU_OVERFLOW_BUMP} CU`);
+                  logger.info(
+                    'CLIENT',
+                    `Compute budget exceeded at ${effectiveCuLimit} CU — retrying with ${CU_OVERFLOW_BUMP} CU`,
+                  );
                   effectiveCuLimit = CU_OVERFLOW_BUMP;
                   continue; // Rebuild tx with higher CU limit
                 }
@@ -972,7 +1045,12 @@ export class FlashClient implements IFlashClient {
           } catch (simError: unknown) {
             const simMsg = getErrorMessage(simError);
             // Re-throw program errors (from mapProgramError) and simulation failures
-            if (simMsg.includes('simulation failed') || simMsg.includes('Trade rejected') || simMsg.includes('Transaction rejected')) throw simError;
+            if (
+              simMsg.includes('simulation failed') ||
+              simMsg.includes('Trade rejected') ||
+              simMsg.includes('Transaction rejected')
+            )
+              throw simError;
             // Non-critical simulation failures (RPC timeout etc) — proceed with send
             logger.debug('CLIENT', `Pre-send simulation skipped: ${scrubSensitive(simMsg)}`);
           }
@@ -985,12 +1063,15 @@ export class FlashClient implements IFlashClient {
         // Rebuilds tx with the tighter limit — no additional RPC call.
         if (simUnitsConsumed && simUnitsConsumed > 0 && this.config.dynamicCompute !== false) {
           const bufferPct = this.config.computeBufferPercent ?? 20;
-          const rawLimit = Math.ceil(simUnitsConsumed * (1 + bufferPct / 100) / 10_000) * 10_000;
+          const rawLimit = Math.ceil((simUnitsConsumed * (1 + bufferPct / 100)) / 10_000) * 10_000;
           // Safety clamp: never below 120k (floor) or above configured limit
           const dynamicLimit = Math.max(120_000, Math.min(rawLimit, effectiveCuLimit));
           // Only tighten — never exceed the configured limit (safety ceiling)
           if (dynamicLimit < effectiveCuLimit && dynamicLimit >= simUnitsConsumed) {
-            logger.debug('CLIENT', `Dynamic CU: ${simUnitsConsumed} used → ${dynamicLimit} limit (was ${effectiveCuLimit})`);
+            logger.debug(
+              'CLIENT',
+              `Dynamic CU: ${simUnitsConsumed} used → ${dynamicLimit} limit (was ${effectiveCuLimit})`,
+            );
             effectiveCuLimit = dynamicLimit;
             // Rebuild transaction with tighter CU limit (no extra RPC call)
             const tightCuLimitIx = ComputeBudgetProgram.setComputeUnitLimit({ units: effectiveCuLimit });
@@ -1010,15 +1091,18 @@ export class FlashClient implements IFlashClient {
               maxRetries: 3,
             });
             lastSignature = signatureStr;
-            const feeEstimate = Math.floor(effectiveCuLimit * this.config.computeUnitPrice / 1_000_000);
-            logger.info('CLIENT', `Tx sent (dynamic CU): ${signatureStr} | CU: ${simUnitsConsumed}→${effectiveCuLimit} | Fee: ~${feeEstimate} lamports`);
+            const feeEstimate = Math.floor((effectiveCuLimit * this.config.computeUnitPrice) / 1_000_000);
+            logger.info(
+              'CLIENT',
+              `Tx sent (dynamic CU): ${signatureStr} | CU: ${simUnitsConsumed}→${effectiveCuLimit} | Fee: ~${feeEstimate} lamports`,
+            );
 
             // Skip to confirmation polling (jump past the normal sendRawTransaction)
             // We need to inline the confirmation here to avoid restructuring the entire loop
             process.stdout.write('  Awaiting confirmation... \r');
             const confirmStart = Date.now();
             for (let i = 0; Date.now() - confirmStart < effectiveTimeoutMs; i++) {
-              await new Promise(r => setTimeout(r, 2_000));
+              await new Promise((r) => setTimeout(r, 2_000));
               const { value } = await conn.getSignatureStatuses([signatureStr]);
               const status = value?.[0];
               if (status?.err) {
@@ -1057,7 +1141,7 @@ export class FlashClient implements IFlashClient {
         const start = Date.now();
         const pollTimeoutMs = effectiveTimeoutMs;
         for (let i = 0; Date.now() - start < pollTimeoutMs; i++) {
-          await new Promise(r => setTimeout(r, 2_000));
+          await new Promise((r) => setTimeout(r, 2_000));
           const { value } = await conn.getSignatureStatuses([signatureStr]);
           const status = value?.[0];
           if (status?.err) {
@@ -1084,8 +1168,11 @@ export class FlashClient implements IFlashClient {
         try {
           const { value: finalValue } = await conn.getSignatureStatuses([signatureStr]);
           const finalStatus = finalValue?.[0];
-          if (finalStatus && !finalStatus.err &&
-              (finalStatus.confirmationStatus === 'confirmed' || finalStatus.confirmationStatus === 'finalized')) {
+          if (
+            finalStatus &&
+            !finalStatus.err &&
+            (finalStatus.confirmationStatus === 'confirmed' || finalStatus.confirmationStatus === 'finalized')
+          ) {
             process.stdout.write('                              \r');
             logger.info('CLIENT', `Tx confirmed (late detection): ${signatureStr}`);
             this.walletMgr.clearBalanceCache();
@@ -1128,11 +1215,10 @@ export class FlashClient implements IFlashClient {
     process.stdout.write('                              \r');
     throw new Error(
       `Transaction failed after ${maxAttempts} attempts.\n` +
-      `  Last error: ${lastError}\n` +
-      (lastSignature ? `  Last signature: ${lastSignature}\n  Check https://solscan.io/tx/${lastSignature}` : '')
+        `  Last error: ${lastError}\n` +
+        (lastSignature ? `  Last signature: ${lastSignature}\n  Check https://solscan.io/tx/${lastSignature}` : ''),
     );
   }
-
 
   // ─── Trade Mutex ──────────────────────────────────────────────────────────
 
@@ -1187,7 +1273,7 @@ export class FlashClient implements IFlashClient {
       const ago = Math.ceil((now - lastTime) / 1000);
       throw new Error(
         `Duplicate trade detected — the same trade was submitted ${ago}s ago.\n` +
-        `  Wait ${Math.ceil((FlashClient.TRADE_CACHE_TTL_MS - (now - lastTime)) / 1000)}s or check "positions" to verify.`
+          `  Wait ${Math.ceil((FlashClient.TRADE_CACHE_TTL_MS - (now - lastTime)) / 1000)}s or check "positions" to verify.`,
       );
     }
   }
@@ -1206,7 +1292,7 @@ export class FlashClient implements IFlashClient {
     side: TradeSide,
     collateralAmount: number,
     leverage: number,
-    collateralToken?: string
+    collateralToken?: string,
   ): Promise<OpenPositionResult> {
     const logger = getLogger();
 
@@ -1218,8 +1304,7 @@ export class FlashClient implements IFlashClient {
     const sideStr = side === TradeSide.Long ? 'long' : 'short';
     if (collateralAmount < 10) {
       throw new Error(
-        `Minimum collateral is $10 (got $${collateralAmount}).\n` +
-        `  Try: open ${leverage}x ${sideStr} ${market} $10`
+        `Minimum collateral is $10 (got $${collateralAmount}).\n` + `  Try: open ${leverage}x ${sideStr} ${market} $10`,
       );
     }
 
@@ -1247,13 +1332,13 @@ export class FlashClient implements IFlashClient {
           if (inputSymbol === 'USDC') {
             try {
               const balances = await this.walletMgr.getTokenBalances();
-              const usdcBalance = balances.tokens.find(t => t.symbol === 'USDC')?.amount ?? 0;
+              const usdcBalance = balances.tokens.find((t) => t.symbol === 'USDC')?.amount ?? 0;
               if (usdcBalance < collateralAmount) {
                 throw new Error(
                   `Insufficient USDC collateral.\n` +
-                  `  Required: $${collateralAmount.toFixed(2)}\n` +
-                  `  Available: $${usdcBalance.toFixed(2)}\n` +
-                  `  Deposit USDC to trade on Flash Trade.`
+                    `  Required: $${collateralAmount.toFixed(2)}\n` +
+                    `  Available: $${usdcBalance.toFixed(2)}\n` +
+                    `  Deposit USDC to trade on Flash Trade.`,
                 );
               }
             } catch (e: unknown) {
@@ -1278,8 +1363,12 @@ export class FlashClient implements IFlashClient {
       const inputToken = this.findToken(poolConfig, collateralSymbol);
 
       logger.info('TRADE', 'Trade Request', {
-        market, side, collateralToken: inputToken.symbol,
-        collateralAmount, leverage, size: collateralAmount * leverage,
+        market,
+        side,
+        collateralToken: inputToken.symbol,
+        collateralAmount,
+        leverage,
+        size: collateralAmount * leverage,
       });
       const targetPrice = priceMap.get(targetToken.symbol);
       const inputPrice = priceMap.get(inputToken.symbol);
@@ -1287,7 +1376,10 @@ export class FlashClient implements IFlashClient {
       if (!inputPrice) throw new Error(`Oracle unavailable for ${inputToken.symbol}. Try again later.`);
 
       const priceAfterSlippage = this.perpClient.getPriceAfterSlippage(
-        true, new BN(this.config.defaultSlippageBps), targetPrice.price, sdkSide
+        true,
+        new BN(this.config.defaultSlippageBps),
+        targetPrice.price,
+        sdkSide,
       );
 
       const collateralNative = uiDecimalsToNative(collateralAmount.toString(), inputToken.decimals);
@@ -1295,9 +1387,11 @@ export class FlashClient implements IFlashClient {
       const outputCustody = this.findCustody(poolConfig, targetToken.symbol);
 
       const custodyAccounts = await withRetry(
-        () => this.perpClient.program.account.custody.fetchMultiple([
-          inputCustody.custodyAccount, outputCustody.custodyAccount,
-        ]),
+        () =>
+          this.perpClient.program.account.custody.fetchMultiple([
+            inputCustody.custodyAccount,
+            outputCustody.custodyAccount,
+          ]),
         'custody-fetch',
         { maxAttempts: 2 },
       );
@@ -1307,12 +1401,18 @@ export class FlashClient implements IFlashClient {
       }
 
       const sizeAmount = this.perpClient.getSizeAmountFromLeverageAndCollateral(
-        collateralNative, leverage.toString(), targetToken as unknown as Token, inputToken as unknown as Token, sdkSide,
-        targetPrice.price, targetPrice.emaPrice,
+        collateralNative,
+        leverage.toString(),
+        targetToken as unknown as Token,
+        inputToken as unknown as Token,
+        sdkSide,
+        targetPrice.price,
+        targetPrice.emaPrice,
         CustodyAccount.from(outputCustody.custodyAccount, custodyAccounts[1]),
-        inputPrice.price, inputPrice.emaPrice,
+        inputPrice.price,
+        inputPrice.emaPrice,
         CustodyAccount.from(inputCustody.custodyAccount, custodyAccounts[0]),
-        BN_ZERO
+        BN_ZERO,
       );
 
       // ── Determine the correct collateral token for this market+side ──
@@ -1321,9 +1421,7 @@ export class FlashClient implements IFlashClient {
       // For virtual tokens (PYTH, KMNO, MET): long collateral = JUP, short collateral = USDC
       // We MUST look this up from poolConfig.markets rather than assuming collateral = target.
       const poolMarkets = getTypedMarkets(poolConfig);
-      const matchedMarket = poolMarkets.find(
-        m => m.targetMint.equals(targetToken.mintKey) && m.side === sdkSide
-      );
+      const matchedMarket = poolMarkets.find((m) => m.targetMint.equals(targetToken.mintKey) && m.side === sdkSide);
       let marketCollateralSymbol: string;
       if (matchedMarket) {
         marketCollateralSymbol = this.resolveTokenSymbol(poolConfig, matchedMarket.collateralMint);
@@ -1333,8 +1431,11 @@ export class FlashClient implements IFlashClient {
         marketCollateralSymbol = targetToken.symbol;
       }
 
-      logger.debug('TRADE', `Instruction routing: market=${market} side=${sideStr} ` +
-        `inputToken=${inputToken.symbol} marketCollateral=${marketCollateralSymbol}`);
+      logger.debug(
+        'TRADE',
+        `Instruction routing: market=${market} side=${sideStr} ` +
+          `inputToken=${inputToken.symbol} marketCollateral=${marketCollateralSymbol}`,
+      );
 
       // ── Check if a position already exists → use increaseSize instead of openPosition ──
       // Flash Trade protocol rejects openPosition when a same-market same-side position exists.
@@ -1356,29 +1457,62 @@ export class FlashClient implements IFlashClient {
       let result: { instructions: TransactionInstruction[]; additionalSigners: Signer[] };
       if (existingPositionPubkey) {
         // Increase existing position size
-        logger.debug('TRADE', `Using increaseSize(${targetToken.symbol}, ${marketCollateralSymbol}, ${existingPositionPubkey.toBase58()})`);
-        result = await quietSdk(() => this.perpClient.increaseSize(
-          targetToken.symbol, marketCollateralSymbol, existingPositionPubkey!,
-          sdkSide, poolConfig, priceAfterSlippage, sizeAmount, privilege,
-          stakeAcct, refAcct
-        ));
+        logger.debug(
+          'TRADE',
+          `Using increaseSize(${targetToken.symbol}, ${marketCollateralSymbol}, ${existingPositionPubkey.toBase58()})`,
+        );
+        result = await quietSdk(() =>
+          this.perpClient.increaseSize(
+            targetToken.symbol,
+            marketCollateralSymbol,
+            existingPositionPubkey!,
+            sdkSide,
+            poolConfig,
+            priceAfterSlippage,
+            sizeAmount,
+            privilege,
+            stakeAcct,
+            refAcct,
+          ),
+        );
       } else if (inputToken.symbol === marketCollateralSymbol) {
         // User's input token matches the market's collateral custody → direct open
         logger.debug('TRADE', `Using openPosition(${targetToken.symbol}, ${marketCollateralSymbol})`);
-        result = await quietSdk(() => this.perpClient.openPosition(
-          targetToken.symbol, marketCollateralSymbol, priceAfterSlippage,
-          collateralNative, sizeAmount, sdkSide, poolConfig, privilege,
-          stakeAcct, refAcct
-        ));
+        result = await quietSdk(() =>
+          this.perpClient.openPosition(
+            targetToken.symbol,
+            marketCollateralSymbol,
+            priceAfterSlippage,
+            collateralNative,
+            sizeAmount,
+            sdkSide,
+            poolConfig,
+            privilege,
+            stakeAcct,
+            refAcct,
+          ),
+        );
       } else {
         // User's input token differs from market collateral → swap first
-        logger.debug('TRADE', `Using swapAndOpen(${targetToken.symbol}, ${marketCollateralSymbol}, ${inputToken.symbol})`);
-        result = await quietSdk(() => this.perpClient.swapAndOpen(
-          targetToken.symbol, marketCollateralSymbol, inputToken.symbol,
-          collateralNative, priceAfterSlippage, sizeAmount, sdkSide,
-          poolConfig, privilege,
-          stakeAcct, refAcct
-        ));
+        logger.debug(
+          'TRADE',
+          `Using swapAndOpen(${targetToken.symbol}, ${marketCollateralSymbol}, ${inputToken.symbol})`,
+        );
+        result = await quietSdk(() =>
+          this.perpClient.swapAndOpen(
+            targetToken.symbol,
+            marketCollateralSymbol,
+            inputToken.symbol,
+            collateralNative,
+            priceAfterSlippage,
+            sizeAmount,
+            sdkSide,
+            poolConfig,
+            privilege,
+            stakeAcct,
+            refAcct,
+          ),
+        );
       }
 
       // Prepend ATA createIdempotent only for direct openPosition/increaseSize.
@@ -1400,7 +1534,13 @@ export class FlashClient implements IFlashClient {
       // Force 420k minimum for swapAndOpen regardless of config (matches Flash UI)
       const cuOverride = isSwapAndOpen ? Math.max(this.config.computeUnitLimit, 420_000) : undefined;
 
-      const txSignature = await this.sendTx(allInstructions, result.additionalSigners, poolConfig, undefined, cuOverride);
+      const txSignature = await this.sendTx(
+        allInstructions,
+        result.additionalSigners,
+        poolConfig,
+        undefined,
+        cuOverride,
+      );
       this.recordRecentTrade(cacheKey);
 
       // Compute SDK-exact liquidation price for the return value
@@ -1410,8 +1550,13 @@ export class FlashClient implements IFlashClient {
         const openSizeUsd = targetPrice.price.getAssetAmountUsd(sizeAmount, targetToken.decimals);
         const openCollateralUsd = inputPrice.price.getAssetAmountUsd(collateralNative, inputToken.decimals);
         const liqResult = this.perpClient.getLiquidationPriceWithOrder(
-          openCollateralUsd, sizeAmount, openSizeUsd, targetToken.decimals,
-          targetPrice.price, sdkSide, targetCustodyAcct,
+          openCollateralUsd,
+          sizeAmount,
+          openSizeUsd,
+          targetToken.decimals,
+          targetPrice.price,
+          sdkSide,
+          targetCustodyAcct,
         );
         const liqUi = parseFloat(liqResult.toUiPrice(8));
         if (Number.isFinite(liqUi) && liqUi > 0) openLiqPrice = liqUi;
@@ -1427,14 +1572,23 @@ export class FlashClient implements IFlashClient {
             const feeRates = await getProtocolFeeRates(market, this.perpClient);
             const sizeUsd = collateralAmount * leverage;
             const cliLiq = computeSimulationLiquidationPrice(
-              targetPrice.uiPrice, sizeUsd, collateralAmount, side,
-              feeRates.maintenanceMarginRate, feeRates.closeFeeRate,
+              targetPrice.uiPrice,
+              sizeUsd,
+              collateralAmount,
+              side,
+              feeRates.maintenanceMarginRate,
+              feeRates.closeFeeRate,
             );
             if (cliLiq > 0) {
               await checkLiquidationDivergence(
-                cliLiq, this.perpClient,
-                targetPrice.price, BN_ZERO, sdkSide,
-                targetCustodyAcct, null, market,
+                cliLiq,
+                this.perpClient,
+                targetPrice.price,
+                BN_ZERO,
+                sdkSide,
+                targetCustodyAcct,
+                null,
+                market,
               );
             }
           } catch (divErr: unknown) {
@@ -1450,8 +1604,12 @@ export class FlashClient implements IFlashClient {
       }
 
       logger.trade('OPEN', {
-        market, side, collateral: collateralAmount, leverage,
-        price: targetPrice.uiPrice, tx: txSignature,
+        market,
+        side,
+        collateral: collateralAmount,
+        leverage,
+        price: targetPrice.uiPrice,
+        tx: txSignature,
       });
 
       return {
@@ -1468,8 +1626,11 @@ export class FlashClient implements IFlashClient {
   // ─── Close Position ───────────────────────────────────────────────────────
 
   async closePosition(
-    market: string, side: TradeSide, receiveToken?: string,
-    closePercent?: number, closeAmount?: number
+    market: string,
+    side: TradeSide,
+    receiveToken?: string,
+    closePercent?: number,
+    closeAmount?: number,
   ): Promise<ClosePositionResult> {
     const logger = getLogger();
 
@@ -1488,22 +1649,20 @@ export class FlashClient implements IFlashClient {
         : this.findToken(poolConfig, DEFAULT_COLLATERAL_TOKEN);
 
       // Parallel: SOL check + price fetch
-      const [, priceMap] = await Promise.all([
-        this.ensureSufficientSol(),
-        this.getPriceMap(poolConfig),
-      ]);
+      const [, priceMap] = await Promise.all([this.ensureSufficientSol(), this.getPriceMap(poolConfig)]);
       const targetPrice = priceMap.get(targetToken.symbol);
       if (!targetPrice) throw new Error(`Oracle unavailable for ${targetToken.symbol}. Try again later.`);
 
       const priceAfterSlippage = this.perpClient.getPriceAfterSlippage(
-        false, new BN(this.config.defaultSlippageBps), targetPrice.price, sdkSide
+        false,
+        new BN(this.config.defaultSlippageBps),
+        targetPrice.price,
+        sdkSide,
       );
 
       // ── Determine the correct collateral token for this market+side ──
       const poolMarkets = getTypedMarkets(poolConfig);
-      const matchedMarket = poolMarkets.find(
-        m => m.targetMint.equals(targetToken.mintKey) && m.side === sdkSide
-      );
+      const matchedMarket = poolMarkets.find((m) => m.targetMint.equals(targetToken.mintKey) && m.side === sdkSide);
       let marketCollateralSymbol: string;
       if (matchedMarket) {
         marketCollateralSymbol = this.resolveTokenSymbol(poolConfig, matchedMarket.collateralMint);
@@ -1513,16 +1672,13 @@ export class FlashClient implements IFlashClient {
       }
 
       // ── Determine if this is a partial or full close ──
-      const isPartial = (closePercent !== undefined && closePercent < 100) ||
-                        (closeAmount !== undefined);
+      const isPartial = (closePercent !== undefined && closePercent < 100) || closeAmount !== undefined;
 
       // Fetch position data for PnL computation and partial close sizing
       let positionSizeUsd = 0;
       let pnl = 0;
       const existingPositions = await this.getPositions();
-      const pos = existingPositions.find(
-        p => p.market?.toUpperCase() === market.toUpperCase() && p.side === side
-      );
+      const pos = existingPositions.find((p) => p.market?.toUpperCase() === market.toUpperCase() && p.side === side);
       if (pos && pos.entryPrice > 0 && pos.sizeUsd > 0) {
         positionSizeUsd = pos.sizeUsd;
         const priceDelta = targetPrice.uiPrice - pos.entryPrice;
@@ -1537,14 +1693,16 @@ export class FlashClient implements IFlashClient {
         closeSizeUsd = positionSizeUsd * (closePercent / 100);
       } else if (closeAmount !== undefined) {
         if (closeAmount > positionSizeUsd) {
-          throw new Error(`Close amount $${closeAmount.toFixed(2)} exceeds position size $${positionSizeUsd.toFixed(2)}`);
+          throw new Error(
+            `Close amount $${closeAmount.toFixed(2)} exceeds position size $${positionSizeUsd.toFixed(2)}`,
+          );
         }
         closeSizeUsd = closeAmount;
       }
 
       // If remaining size would be negligibly small (< $0.50), close entirely
       const remainingAfterClose = positionSizeUsd - closeSizeUsd;
-      const shouldFullClose = !isPartial || remainingAfterClose < 0.50 || closeSizeUsd >= positionSizeUsd;
+      const shouldFullClose = !isPartial || remainingAfterClose < 0.5 || closeSizeUsd >= positionSizeUsd;
 
       // Scale PnL proportionally for partial close
       if (isPartial && !shouldFullClose && positionSizeUsd > 0) {
@@ -1552,9 +1710,12 @@ export class FlashClient implements IFlashClient {
         if (!Number.isFinite(pnl)) pnl = 0;
       }
 
-      logger.debug('TRADE', `Close routing: market=${market} side=${sideStr} ` +
-        `partial=${isPartial} fullClose=${shouldFullClose} closeSizeUsd=${closeSizeUsd.toFixed(2)} ` +
-        `receiveToken=${receivingToken.symbol} marketCollateral=${marketCollateralSymbol}`);
+      logger.debug(
+        'TRADE',
+        `Close routing: market=${market} side=${sideStr} ` +
+          `partial=${isPartial} fullClose=${shouldFullClose} closeSizeUsd=${closeSizeUsd.toFixed(2)} ` +
+          `receiveToken=${receivingToken.symbol} marketCollateral=${marketCollateralSymbol}`,
+      );
 
       const ref = this.getReferralParams();
       const privilege = ref?.privilege ?? Privilege.None;
@@ -1569,11 +1730,18 @@ export class FlashClient implements IFlashClient {
         // closeAndSwap can fail with IllegalOwner on pools where collateral != USDC
         // (e.g., Governance.1 PYTH LONG uses JUP collateral).
         logger.debug('TRADE', `Using closePosition(${targetToken.symbol}, ${marketCollateralSymbol})`);
-        result = await quietSdk(() => this.perpClient.closePosition(
-          targetToken.symbol, marketCollateralSymbol, priceAfterSlippage,
-          sdkSide, poolConfig, privilege,
-          stakeAcct, refAcct
-        ));
+        result = await quietSdk(() =>
+          this.perpClient.closePosition(
+            targetToken.symbol,
+            marketCollateralSymbol,
+            priceAfterSlippage,
+            sdkSide,
+            poolConfig,
+            privilege,
+            stakeAcct,
+            refAcct,
+          ),
+        );
       } else {
         // ── Partial close via decreaseSize ──
         const { position } = await this.findUserPosition(poolConfig, market, side);
@@ -1598,13 +1766,24 @@ export class FlashClient implements IFlashClient {
           throw new Error('Computed close size is too small');
         }
 
-        logger.debug('TRADE', `Using decreaseSize(${targetToken.symbol}, ${marketCollateralSymbol}, sizeDelta=${sizeDelta.toString()})`);
-        result = await quietSdk(() => this.perpClient.decreaseSize(
-          targetToken.symbol, marketCollateralSymbol, sdkSide,
-          position.pubkey, poolConfig, priceAfterSlippage,
-          sizeDelta, privilege,
-          stakeAcct, refAcct
-        ));
+        logger.debug(
+          'TRADE',
+          `Using decreaseSize(${targetToken.symbol}, ${marketCollateralSymbol}, sizeDelta=${sizeDelta.toString()})`,
+        );
+        result = await quietSdk(() =>
+          this.perpClient.decreaseSize(
+            targetToken.symbol,
+            marketCollateralSymbol,
+            sdkSide,
+            position.pubkey,
+            poolConfig,
+            priceAfterSlippage,
+            sizeDelta,
+            privilege,
+            stakeAcct,
+            refAcct,
+          ),
+        );
       }
 
       // ── ATA handling ──
@@ -1621,7 +1800,10 @@ export class FlashClient implements IFlashClient {
       if (shouldFullClose) {
         try {
           const cancelResult = await this.perpClient.cancelAllTriggerOrders(
-            targetToken.symbol, marketCollateralSymbol, sdkSide, poolConfig
+            targetToken.symbol,
+            marketCollateralSymbol,
+            sdkSide,
+            poolConfig,
           );
           cancelIxs = cancelResult.instructions;
           cancelSigners = cancelResult.additionalSigners;
@@ -1640,7 +1822,10 @@ export class FlashClient implements IFlashClient {
 
       const closeAction = shouldFullClose ? 'CLOSE' : 'PARTIAL_CLOSE';
       logger.trade(closeAction, {
-        market, side, price: targetPrice.uiPrice, pnl,
+        market,
+        side,
+        price: targetPrice.uiPrice,
+        pnl,
         closeSizeUsd: shouldFullClose ? positionSizeUsd : closeSizeUsd,
         tx: txSignature,
       });
@@ -1683,14 +1868,24 @@ export class FlashClient implements IFlashClient {
       if (inputToken.symbol === collateralSymbol) {
         // Input matches position collateral — direct addCollateral
         result = await this.perpClient.addCollateral(
-          amountNative, market, collateralSymbol, toSdkSide(side), position.pubkey, poolConfig
+          amountNative,
+          market,
+          collateralSymbol,
+          toSdkSide(side),
+          position.pubkey,
+          poolConfig,
         );
       } else {
         // Position collateral differs from input (e.g. position uses SOL, input is USDC)
         // Use swapAndAddCollateral to swap input into position's collateral token
         result = await this.perpClient.swapAndAddCollateral(
-          market, inputToken.symbol, collateralSymbol, amountNative,
-          toSdkSide(side), position.pubkey, poolConfig
+          market,
+          inputToken.symbol,
+          collateralSymbol,
+          amountNative,
+          toSdkSide(side),
+          position.pubkey,
+          poolConfig,
         );
       }
 
@@ -1727,14 +1922,23 @@ export class FlashClient implements IFlashClient {
       if (outputToken.symbol === collateralSymbol) {
         // Position collateral matches desired output — direct removeCollateral
         result = await this.perpClient.removeCollateral(
-          amountNative, market, collateralSymbol, toSdkSide(side), position.pubkey, poolConfig
+          amountNative,
+          market,
+          collateralSymbol,
+          toSdkSide(side),
+          position.pubkey,
+          poolConfig,
         );
       } else {
         // Position collateral differs from desired output (e.g. collateral is SOL, want USDC)
         // Use removeCollateralAndSwap to withdraw and swap to output token
         result = await this.perpClient.removeCollateralAndSwap(
-          market, collateralSymbol, outputToken.symbol, amountNative,
-          toSdkSide(side), poolConfig
+          market,
+          collateralSymbol,
+          outputToken.symbol,
+          amountNative,
+          toSdkSide(side),
+          poolConfig,
         );
       }
 
@@ -1781,7 +1985,10 @@ export class FlashClient implements IFlashClient {
     if (!inputPrice) throw new Error(`Oracle unavailable for ${inputToken.symbol}.`);
 
     const priceAfterSlippage = this.perpClient.getPriceAfterSlippage(
-      true, new BN(this.config.defaultSlippageBps), targetPrice.price, sdkSide,
+      true,
+      new BN(this.config.defaultSlippageBps),
+      targetPrice.price,
+      sdkSide,
     );
 
     const collateralNative = uiDecimalsToNative(collateralAmount.toString(), inputToken.decimals);
@@ -1789,9 +1996,11 @@ export class FlashClient implements IFlashClient {
     const outputCustody = this.findCustody(poolConfig, targetToken.symbol);
 
     const custodyAccounts = await withRetry(
-      () => this.perpClient.program.account.custody.fetchMultiple([
-        inputCustody.custodyAccount, outputCustody.custodyAccount,
-      ]),
+      () =>
+        this.perpClient.program.account.custody.fetchMultiple([
+          inputCustody.custodyAccount,
+          outputCustody.custodyAccount,
+        ]),
       'custody-fetch-preview',
       { maxAttempts: 2 },
     );
@@ -1801,19 +2010,23 @@ export class FlashClient implements IFlashClient {
     }
 
     const sizeAmount = this.perpClient.getSizeAmountFromLeverageAndCollateral(
-      collateralNative, leverage.toString(), targetToken as unknown as Token, inputToken as unknown as Token, sdkSide,
-      targetPrice.price, targetPrice.emaPrice,
+      collateralNative,
+      leverage.toString(),
+      targetToken as unknown as Token,
+      inputToken as unknown as Token,
+      sdkSide,
+      targetPrice.price,
+      targetPrice.emaPrice,
       CustodyAccount.from(outputCustody.custodyAccount, custodyAccounts[1]),
-      inputPrice.price, inputPrice.emaPrice,
+      inputPrice.price,
+      inputPrice.emaPrice,
       CustodyAccount.from(inputCustody.custodyAccount, custodyAccounts[0]),
       BN_ZERO,
     );
 
     // ── Determine the correct collateral token for this market+side ──
     const poolMarkets = getTypedMarkets(poolConfig);
-    const matchedMarket = poolMarkets.find(
-      m => m.targetMint.equals(targetToken.mintKey) && m.side === sdkSide
-    );
+    const matchedMarket = poolMarkets.find((m) => m.targetMint.equals(targetToken.mintKey) && m.side === sdkSide);
     const marketCollateralSymbol = matchedMarket
       ? this.resolveTokenSymbol(poolConfig, matchedMarket.collateralMint)
       : targetToken.symbol;
@@ -1826,16 +2039,30 @@ export class FlashClient implements IFlashClient {
     let result: { instructions: TransactionInstruction[]; additionalSigners: Signer[] };
     if (inputToken.symbol === marketCollateralSymbol) {
       result = await this.perpClient.openPosition(
-        targetToken.symbol, marketCollateralSymbol, priceAfterSlippage,
-        collateralNative, sizeAmount, sdkSide, poolConfig, privilege,
-        stakeAcct, refAcct,
+        targetToken.symbol,
+        marketCollateralSymbol,
+        priceAfterSlippage,
+        collateralNative,
+        sizeAmount,
+        sdkSide,
+        poolConfig,
+        privilege,
+        stakeAcct,
+        refAcct,
       );
     } else {
       result = await this.perpClient.swapAndOpen(
-        targetToken.symbol, marketCollateralSymbol, inputToken.symbol,
-        collateralNative, priceAfterSlippage, sizeAmount, sdkSide,
-        poolConfig, privilege,
-        stakeAcct, refAcct,
+        targetToken.symbol,
+        marketCollateralSymbol,
+        inputToken.symbol,
+        collateralNative,
+        priceAfterSlippage,
+        sizeAmount,
+        sdkSide,
+        poolConfig,
+        privilege,
+        stakeAcct,
+        refAcct,
       );
     }
 
@@ -1851,7 +2078,9 @@ export class FlashClient implements IFlashClient {
     let previewALTs: AddressLookupTableAccount[] = [];
     try {
       previewALTs = await resolveALTs(this.perpClient, poolConfig);
-    } catch { /* non-critical for preview */ }
+    } catch {
+      /* non-critical for preview */
+    }
 
     const { blockhash } = await this.getBlockhash(this.connection);
     const message = MessageV0.compile({
@@ -1880,8 +2109,13 @@ export class FlashClient implements IFlashClient {
     let liqPrice = 0;
     try {
       const liqOraclePrice = this.perpClient.getLiquidationPriceWithOrder(
-        collateralUsd, sizeAmount, sizeUsd, targetToken.decimals,
-        targetPrice.price, sdkSide, targetCustodyAcct,
+        collateralUsd,
+        sizeAmount,
+        sizeUsd,
+        targetToken.decimals,
+        targetPrice.price,
+        sdkSide,
+        targetCustodyAcct,
       );
       liqPrice = parseFloat(liqOraclePrice.toUiPrice(8));
       if (!Number.isFinite(liqPrice) || liqPrice < 0) liqPrice = 0;
@@ -1946,7 +2180,7 @@ export class FlashClient implements IFlashClient {
     // Query ALL tradeable pools in parallel — not just the default pool.
     // Users may have positions across Crypto.1, Governance.1, Virtual.1, etc.
     const seen = new Set<string>();
-    const uniquePools = POOL_NAMES.filter(name => {
+    const uniquePools = POOL_NAMES.filter((name) => {
       if (seen.has(name) || !isTradeablePool(name)) return false;
       seen.add(name);
       return true;
@@ -1957,7 +2191,7 @@ export class FlashClient implements IFlashClient {
         const positions: Position[] = [];
         await this.getPositionsForPool(poolName, positions);
         return positions;
-      })
+      }),
     );
 
     const allPositions: Position[] = [];
@@ -1970,9 +2204,8 @@ export class FlashClient implements IFlashClient {
   }
 
   private async getPositionsForPool(poolName: string, positions: Position[]): Promise<void> {
-    const poolConfig = poolName === this.poolConfig.poolName
-      ? this.poolConfig
-      : PoolConfig.fromIdsByName(poolName, this.config.network);
+    const poolConfig =
+      poolName === this.poolConfig.poolName ? this.poolConfig : PoolConfig.fromIdsByName(poolName, this.config.network);
 
     const rawPositions = await this.perpClient.getUserPositions(this.wallet.publicKey, poolConfig);
     if (rawPositions.length === 0) return;
@@ -1983,7 +2216,7 @@ export class FlashClient implements IFlashClient {
     const custodies = poolConfig.custodies as Array<{ custodyAccount: PublicKey; symbol: string }>;
 
     // Batch-fetch all custody accounts for SDK liquidation math
-    const custodyKeys = custodies.map(c => c.custodyAccount);
+    const custodyKeys = custodies.map((c) => c.custodyAccount);
     const custodyAccountMap = new Map<string, CustodyAccount>();
     try {
       const custodyData = await this.perpClient.program.account.custody.fetchMultiple(custodyKeys);
@@ -2001,10 +2234,16 @@ export class FlashClient implements IFlashClient {
     }
 
     for (const raw of rawPositions as unknown as Array<{
-      pubkey: PublicKey; market: PublicKey;
-      entryPrice?: { price: BN; exponent: number } | BN; sizeUsd?: BN; collateralUsd?: BN; openTime?: BN;
-      unsettledFeesUsd?: BN; sizeAmount?: BN;
-      sizeDecimals?: number; collateralDecimals?: number;
+      pubkey: PublicKey;
+      market: PublicKey;
+      entryPrice?: { price: BN; exponent: number } | BN;
+      sizeUsd?: BN;
+      collateralUsd?: BN;
+      openTime?: BN;
+      unsettledFeesUsd?: BN;
+      sizeAmount?: BN;
+      sizeDecimals?: number;
+      collateralDecimals?: number;
     }>) {
       try {
         const marketConfig = markets.find((m) => m.marketAccount.equals(raw.market));
@@ -2019,7 +2258,12 @@ export class FlashClient implements IFlashClient {
         // Entry price is a ContractOraclePrice { price: BN, exponent: number }
         const rawEntryField = raw.entryPrice;
         let parsedEntry = 0;
-        if (rawEntryField && typeof rawEntryField === 'object' && 'price' in rawEntryField && 'exponent' in rawEntryField) {
+        if (
+          rawEntryField &&
+          typeof rawEntryField === 'object' &&
+          'price' in rawEntryField &&
+          'exponent' in rawEntryField
+        ) {
           parsedEntry = parseFloat(rawEntryField.price.toString()) * Math.pow(10, rawEntryField.exponent);
         } else if (rawEntryField && BN.isBN(rawEntryField)) {
           const oracleExp = Number(tokenPrice.price.exponent.toString());
@@ -2030,7 +2274,9 @@ export class FlashClient implements IFlashClient {
         // NOT the token's native decimals (sizeDecimals/collateralDecimals are TOKEN decimals).
         const USD_DECIMALS = 6;
         const parsedSize = raw.sizeUsd ? parseFloat(raw.sizeUsd.toString()) / Math.pow(10, USD_DECIMALS) : 0;
-        const parsedCollateral = raw.collateralUsd ? parseFloat(raw.collateralUsd.toString()) / Math.pow(10, USD_DECIMALS) : 0;
+        const parsedCollateral = raw.collateralUsd
+          ? parseFloat(raw.collateralUsd.toString()) / Math.pow(10, USD_DECIMALS)
+          : 0;
         const parsedCurrentPrice = tokenPrice.uiPrice;
 
         // NaN/Infinity guard
@@ -2040,7 +2286,10 @@ export class FlashClient implements IFlashClient {
         const currentPrice = Number.isFinite(parsedCurrentPrice) ? parsedCurrentPrice : 0;
 
         if (entryPrice <= 0 || sizeUsd <= 0 || collateralUsd <= 0) {
-          getLogger().warn('CLIENT', `Skipping position with invalid values: entry=${entryPrice} size=${sizeUsd} collateral=${collateralUsd}`);
+          getLogger().warn(
+            'CLIENT',
+            `Skipping position with invalid values: entry=${entryPrice} size=${sizeUsd} collateral=${collateralUsd}`,
+          );
           continue;
         }
 
@@ -2055,7 +2304,13 @@ export class FlashClient implements IFlashClient {
         // SDK liquidation price — uses the same math as the Flash Trade protocol
         let liquidationPrice = 0;
         const targetCustodyAcct = custodyAccountMap.get(targetToken.symbol);
-        if (targetCustodyAcct && raw.entryPrice && typeof raw.entryPrice === 'object' && 'price' in raw.entryPrice && 'exponent' in raw.entryPrice) {
+        if (
+          targetCustodyAcct &&
+          raw.entryPrice &&
+          typeof raw.entryPrice === 'object' &&
+          'price' in raw.entryPrice &&
+          'exponent' in raw.entryPrice
+        ) {
           try {
             const entryOraclePrice = OraclePrice.from({
               price: raw.entryPrice.price,
@@ -2065,9 +2320,16 @@ export class FlashClient implements IFlashClient {
             });
             const unsettledFees = raw.unsettledFeesUsd ?? BN_ZERO;
             // Cast raw decoded position data to PositionAccount for SDK liquidation math
-            const posAcct = PositionAccount.from(raw.pubkey, raw as unknown as ConstructorParameters<typeof PositionAccount>[1]);
+            const posAcct = PositionAccount.from(
+              raw.pubkey,
+              raw as unknown as ConstructorParameters<typeof PositionAccount>[1],
+            );
             const liqOraclePrice = this.perpClient.getLiquidationPriceContractHelper(
-              entryOraclePrice, unsettledFees, marketConfig.side, targetCustodyAcct, posAcct,
+              entryOraclePrice,
+              unsettledFees,
+              marketConfig.side,
+              targetCustodyAcct,
+              posAcct,
             );
             const liqUi = parseFloat(liqOraclePrice.toUiPrice(8));
             if (Number.isFinite(liqUi) && liqUi > 0) {
@@ -2108,7 +2370,6 @@ export class FlashClient implements IFlashClient {
         getLogger().warn('CLIENT', `Failed to parse position: ${getErrorMessage(error)}`);
       }
     }
-
   }
 
   async getMarketData(market?: string): Promise<MarketData[]> {
@@ -2120,7 +2381,7 @@ export class FlashClient implements IFlashClient {
         poolConfigs.push(
           poolName === this.poolConfig.poolName
             ? this.poolConfig
-            : PoolConfig.fromIdsByName(poolName, this.config.network)
+            : PoolConfig.fromIdsByName(poolName, this.config.network),
         );
       } else {
         // Fallback to default pool
@@ -2134,52 +2395,53 @@ export class FlashClient implements IFlashClient {
         seen.add(name);
         try {
           poolConfigs.push(
-            name === this.poolConfig.poolName
-              ? this.poolConfig
-              : PoolConfig.fromIdsByName(name, this.config.network)
+            name === this.poolConfig.poolName ? this.poolConfig : PoolConfig.fromIdsByName(name, this.config.network),
           );
-        } catch { /* skip unloadable pools */ }
+        } catch {
+          /* skip unloadable pools */
+        }
       }
     }
 
     const results: MarketData[] = [];
     const seenSymbols = new Set<string>();
 
-    await Promise.all(poolConfigs.map(async (pc) => {
-      try {
-        const priceMap = await this.getPriceMap(pc);
-        const tokens = pc.tokens as Array<{ symbol: string }>;
+    await Promise.all(
+      poolConfigs.map(async (pc) => {
+        try {
+          const priceMap = await this.getPriceMap(pc);
+          const tokens = pc.tokens as Array<{ symbol: string }>;
 
-        for (const token of tokens) {
-          if (market && token.symbol !== market) continue;
-          if (seenSymbols.has(token.symbol)) continue;
-          if (!priceMap.has(token.symbol)) continue;
+          for (const token of tokens) {
+            if (market && token.symbol !== market) continue;
+            if (seenSymbols.has(token.symbol)) continue;
+            if (!priceMap.has(token.symbol)) continue;
 
-          seenSymbols.add(token.symbol);
-          const tp = priceMap.get(token.symbol)!;
-          results.push({
-            symbol: token.symbol,
-            price: tp.uiPrice,
-            priceChange24h: 0,
-            openInterestLong: 0,
-            openInterestShort: 0,
-            maxLeverage: getMaxLeverage(token.symbol, false),
-            fundingRate: 0, // Flash Trade uses lock fees, not periodic funding rates
-          });
+            seenSymbols.add(token.symbol);
+            const tp = priceMap.get(token.symbol)!;
+            results.push({
+              symbol: token.symbol,
+              price: tp.uiPrice,
+              priceChange24h: 0,
+              openInterestLong: 0,
+              openInterestShort: 0,
+              maxLeverage: getMaxLeverage(token.symbol, false),
+              fundingRate: 0, // Flash Trade uses lock fees, not periodic funding rates
+            });
+          }
+        } catch {
+          /* skip pools with price fetch failures */
         }
-      } catch { /* skip pools with price fetch failures */ }
-    }));
+      }),
+    );
 
     return results;
   }
 
   async getPortfolio(): Promise<Portfolio> {
     const [solBalance, usdcBalance, positions] = await withRetry(
-      () => Promise.all([
-        this.connection.getBalance(this.wallet.publicKey),
-        this.getUsdcBalance(),
-        this.getPositions(),
-      ]),
+      () =>
+        Promise.all([this.connection.getBalance(this.wallet.publicKey), this.getUsdcBalance(), this.getPositions()]),
       'portfolio-fetch',
       { maxAttempts: 2 },
     );
@@ -2204,10 +2466,7 @@ export class FlashClient implements IFlashClient {
   private async getUsdcBalance(): Promise<number> {
     try {
       const accounts = await withRetry(
-        () => this.connection.getParsedTokenAccountsByOwner(
-          this.wallet.publicKey,
-          { mint: USDC_MINT }
-        ),
+        () => this.connection.getParsedTokenAccountsByOwner(this.wallet.publicKey, { mint: USDC_MINT }),
         'usdc-balance',
         { maxAttempts: 2 },
       );
@@ -2229,10 +2488,10 @@ export class FlashClient implements IFlashClient {
   private async getTokenBalance(mint: PublicKey): Promise<BN> {
     try {
       const { TOKEN_PROGRAM_ID } = await import('@solana/spl-token');
-      const accounts = await this.connection.getTokenAccountsByOwner(
-        this.wallet.publicKey,
-        { mint, programId: TOKEN_PROGRAM_ID },
-      );
+      const accounts = await this.connection.getTokenAccountsByOwner(this.wallet.publicKey, {
+        mint,
+        programId: TOKEN_PROGRAM_ID,
+      });
       if (accounts.value.length > 0) {
         const data = accounts.value[0].account.data;
         // SPL token account: amount is at offset 64, 8 bytes little-endian
@@ -2242,10 +2501,10 @@ export class FlashClient implements IFlashClient {
 
       // Fallback: try Token2022 program (sFLP tokens may use this program)
       const token2022ProgramId = new PublicKey(TOKEN_2022_PROGRAM);
-      const accounts2022 = await this.connection.getTokenAccountsByOwner(
-        this.wallet.publicKey,
-        { mint, programId: token2022ProgramId },
-      );
+      const accounts2022 = await this.connection.getTokenAccountsByOwner(this.wallet.publicKey, {
+        mint,
+        programId: token2022ProgramId,
+      });
       if (accounts2022.value.length > 0) {
         const data = accounts2022.value[0].account.data;
         const amount = data.readBigUInt64LE(64);
@@ -2290,9 +2549,7 @@ export class FlashClient implements IFlashClient {
   private resolveOrderTokens(poolConfig: PoolConfig, market: string, sdkSide: typeof Side.Long | typeof Side.Short) {
     const targetToken = this.findToken(poolConfig, market);
     const poolMarkets = getTypedMarkets(poolConfig);
-    const matchedMarket = poolMarkets.find(
-      m => m.targetMint.equals(targetToken.mintKey) && m.side === sdkSide
-    );
+    const matchedMarket = poolMarkets.find((m) => m.targetMint.equals(targetToken.mintKey) && m.side === sdkSide);
     let collateralSymbol: string;
     if (matchedMarket) {
       collateralSymbol = this.resolveTokenSymbol(poolConfig, matchedMarket.collateralMint);
@@ -2314,7 +2571,10 @@ export class FlashClient implements IFlashClient {
       const poolAddress = poolConfig.poolAddress.toBase58();
       const ixs = await createBackupOracleInstruction(poolAddress, true);
       if (ixs.length > 0) {
-        logger.info('ORACLE', `Fetched ${ixs.length} backup oracle instruction(s) for pool ${poolAddress.slice(0, 8)}… (${ixs[0].data.length} bytes)`);
+        logger.info(
+          'ORACLE',
+          `Fetched ${ixs.length} backup oracle instruction(s) for pool ${poolAddress.slice(0, 8)}… (${ixs[0].data.length} bytes)`,
+        );
         // Whitelist any program IDs used by the oracle instructions (e.g. Ed25519SigVerify)
         for (const ix of ixs) {
           const progId = ix.programId.toBase58();
@@ -2375,10 +2635,13 @@ export class FlashClient implements IFlashClient {
       const inputCustody = this.findCustody(poolConfig, inputToken.symbol);
       const outputCustody = this.findCustody(poolConfig, targetSymbol);
       const custodyAccounts = await withRetry(
-        () => this.perpClient.program.account.custody.fetchMultiple([
-          inputCustody.custodyAccount, outputCustody.custodyAccount,
-        ]),
-        'custody-fetch', { maxAttempts: 2 },
+        () =>
+          this.perpClient.program.account.custody.fetchMultiple([
+            inputCustody.custodyAccount,
+            outputCustody.custodyAccount,
+          ]),
+        'custody-fetch',
+        { maxAttempts: 2 },
       );
       if (!custodyAccounts[0] || !custodyAccounts[1]) {
         throw new Error('Failed to fetch custody accounts from chain');
@@ -2399,24 +2662,41 @@ export class FlashClient implements IFlashClient {
       });
 
       const sizeAmount = this.perpClient.getSizeAmountFromLeverageAndCollateral(
-        collateralNative, leverage.toString(), targetToken as unknown as Token, inputToken as unknown as Token, sdkSide,
-        limitOraclePrice, limitOraclePrice,
+        collateralNative,
+        leverage.toString(),
+        targetToken as unknown as Token,
+        inputToken as unknown as Token,
+        sdkSide,
+        limitOraclePrice,
+        limitOraclePrice,
         CustodyAccount.from(outputCustody.custodyAccount, custodyAccounts[1]),
-        inputPrice.price, inputPrice.emaPrice,
+        inputPrice.price,
+        inputPrice.emaPrice,
         CustodyAccount.from(inputCustody.custodyAccount, custodyAccounts[0]),
-        BN_ZERO
+        BN_ZERO,
       );
 
       const limitPriceContract = this.toContractOraclePrice(limitPrice);
       const slPrice = stopLoss ? this.toContractOraclePrice(stopLoss) : this.zeroContractPrice();
       const tpPrice = takeProfit ? this.toContractOraclePrice(takeProfit) : this.zeroContractPrice();
 
-      logger.info('CLIENT', `Limit order: target=${targetSymbol} collateral=${collateralSymbol} reserve=${reserveSymbol} receive=${receiveSymbol} side=${sdkSide === Side.Long ? 'Long' : 'Short'} price=${limitPrice} collateralNative=${collateralNative.toString()} sizeAmount=${sizeAmount.toString()}`);
+      logger.info(
+        'CLIENT',
+        `Limit order: target=${targetSymbol} collateral=${collateralSymbol} reserve=${reserveSymbol} receive=${receiveSymbol} side=${sdkSide === Side.Long ? 'Long' : 'Short'} price=${limitPrice} collateralNative=${collateralNative.toString()} sizeAmount=${sizeAmount.toString()}`,
+      );
 
       const result = await this.perpClient.placeLimitOrder(
-        targetSymbol, collateralSymbol, reserveSymbol, receiveSymbol,
-        sdkSide, limitPriceContract, collateralNative, sizeAmount,
-        slPrice, tpPrice, poolConfig
+        targetSymbol,
+        collateralSymbol,
+        reserveSymbol,
+        receiveSymbol,
+        sdkSide,
+        limitPriceContract,
+        collateralNative,
+        sizeAmount,
+        slPrice,
+        tpPrice,
+        poolConfig,
       );
 
       // Prepend backup oracle instruction — required for on-chain oracle freshness constraint.
@@ -2425,7 +2705,6 @@ export class FlashClient implements IFlashClient {
       const oracleIxs = await oracleIxsPromise;
       const allInstructions = [...oracleIxs, ...result.instructions];
       const cuOverride = oracleIxs.length > 0 ? 450_000 : undefined;
-
 
       let txSignature: string;
       try {
@@ -2445,7 +2724,12 @@ export class FlashClient implements IFlashClient {
       }
 
       logger.trade('LIMIT_ORDER', {
-        market, side, collateral, leverage, limitPrice, tx: txSignature,
+        market,
+        side,
+        collateral,
+        leverage,
+        limitPrice,
+        tx: txSignature,
       });
 
       return {
@@ -2488,15 +2772,23 @@ export class FlashClient implements IFlashClient {
       const triggerPriceContract = this.toContractOraclePrice(triggerPrice);
 
       const result = await this.perpClient.placeTriggerOrder(
-        targetSymbol, collateralSymbol, receiveSymbol,
-        sdkSide, triggerPriceContract, posData.sizeAmount,
-        isStopLoss, poolConfig
+        targetSymbol,
+        collateralSymbol,
+        receiveSymbol,
+        sdkSide,
+        triggerPriceContract,
+        posData.sizeAmount,
+        isStopLoss,
+        poolConfig,
       );
 
       const txSignature = await this.sendTx(result.instructions, result.additionalSigners, poolConfig);
 
       logger.trade(isStopLoss ? 'SET_SL' : 'SET_TP', {
-        market, side, triggerPrice, tx: txSignature,
+        market,
+        side,
+        triggerPrice,
+        tx: txSignature,
       });
 
       return {
@@ -2529,9 +2821,14 @@ export class FlashClient implements IFlashClient {
     const triggerPriceContract = this.toContractOraclePrice(triggerPrice);
 
     return this.perpClient.placeTriggerOrder(
-      targetSymbol, collateralSymbol, receiveSymbol,
-      sdkSide, triggerPriceContract, sizeAmount,
-      isStopLoss, poolConfig,
+      targetSymbol,
+      collateralSymbol,
+      receiveSymbol,
+      sdkSide,
+      triggerPriceContract,
+      sizeAmount,
+      isStopLoss,
+      poolConfig,
     );
   }
 
@@ -2564,8 +2861,7 @@ export class FlashClient implements IFlashClient {
     const sideStr = side === TradeSide.Long ? 'long' : 'short';
     if (collateralAmount < 10) {
       throw new Error(
-        `Minimum collateral is $10 (got $${collateralAmount}).\n` +
-        `  Try: open ${leverage}x ${sideStr} ${market} $10`
+        `Minimum collateral is $10 (got $${collateralAmount}).\n` + `  Try: open ${leverage}x ${sideStr} ${market} $10`,
       );
     }
 
@@ -2584,13 +2880,13 @@ export class FlashClient implements IFlashClient {
           if (inputSymbol === 'USDC') {
             try {
               const balances = await this.walletMgr.getTokenBalances();
-              const usdcBalance = balances.tokens.find(t => t.symbol === 'USDC')?.amount ?? 0;
+              const usdcBalance = balances.tokens.find((t) => t.symbol === 'USDC')?.amount ?? 0;
               if (usdcBalance < collateralAmount) {
                 throw new Error(
                   `Insufficient USDC collateral.\n` +
-                  `  Required: $${collateralAmount.toFixed(2)}\n` +
-                  `  Available: $${usdcBalance.toFixed(2)}\n` +
-                  `  Deposit USDC to trade on Flash Trade.`
+                    `  Required: $${collateralAmount.toFixed(2)}\n` +
+                    `  Available: $${usdcBalance.toFixed(2)}\n` +
+                    `  Deposit USDC to trade on Flash Trade.`,
                 );
               }
             } catch (e: unknown) {
@@ -2613,7 +2909,10 @@ export class FlashClient implements IFlashClient {
       if (!inputPrice) throw new Error(`Oracle unavailable for ${inputToken.symbol}. Try again later.`);
 
       const priceAfterSlippage = this.perpClient.getPriceAfterSlippage(
-        true, new BN(this.config.defaultSlippageBps), targetPrice.price, sdkSide,
+        true,
+        new BN(this.config.defaultSlippageBps),
+        targetPrice.price,
+        sdkSide,
       );
 
       const collateralNative = uiDecimalsToNative(collateralAmount.toString(), inputToken.decimals);
@@ -2621,9 +2920,11 @@ export class FlashClient implements IFlashClient {
       const outputCustody = this.findCustody(poolConfig, targetToken.symbol);
 
       const custodyAccounts = await withRetry(
-        () => this.perpClient.program.account.custody.fetchMultiple([
-          inputCustody.custodyAccount, outputCustody.custodyAccount,
-        ]),
+        () =>
+          this.perpClient.program.account.custody.fetchMultiple([
+            inputCustody.custodyAccount,
+            outputCustody.custodyAccount,
+          ]),
         'custody-fetch',
         { maxAttempts: 2 },
       );
@@ -2632,19 +2933,23 @@ export class FlashClient implements IFlashClient {
       }
 
       const sizeAmount = this.perpClient.getSizeAmountFromLeverageAndCollateral(
-        collateralNative, leverage.toString(), targetToken as unknown as Token, inputToken as unknown as Token, sdkSide,
-        targetPrice.price, targetPrice.emaPrice,
+        collateralNative,
+        leverage.toString(),
+        targetToken as unknown as Token,
+        inputToken as unknown as Token,
+        sdkSide,
+        targetPrice.price,
+        targetPrice.emaPrice,
         CustodyAccount.from(outputCustody.custodyAccount, custodyAccounts[1]),
-        inputPrice.price, inputPrice.emaPrice,
+        inputPrice.price,
+        inputPrice.emaPrice,
         CustodyAccount.from(inputCustody.custodyAccount, custodyAccounts[0]),
         BN_ZERO,
       );
 
       // Resolve market collateral
       const poolMarkets = getTypedMarkets(poolConfig);
-      const matchedMarket = poolMarkets.find(
-        m => m.targetMint.equals(targetToken.mintKey) && m.side === sdkSide,
-      );
+      const matchedMarket = poolMarkets.find((m) => m.targetMint.equals(targetToken.mintKey) && m.side === sdkSide);
       const marketCollateralSymbol = matchedMarket
         ? this.resolveTokenSymbol(poolConfig, matchedMarket.collateralMint)
         : targetToken.symbol;
@@ -2667,22 +2972,43 @@ export class FlashClient implements IFlashClient {
       let openResult: SdkResult;
       if (existingPositionPubkey) {
         openResult = await this.perpClient.increaseSize(
-          targetToken.symbol, marketCollateralSymbol, existingPositionPubkey,
-          sdkSide, poolConfig, priceAfterSlippage, sizeAmount, privilege,
-          stakeAcct, refAcct,
+          targetToken.symbol,
+          marketCollateralSymbol,
+          existingPositionPubkey,
+          sdkSide,
+          poolConfig,
+          priceAfterSlippage,
+          sizeAmount,
+          privilege,
+          stakeAcct,
+          refAcct,
         );
       } else if (inputToken.symbol === marketCollateralSymbol) {
         openResult = await this.perpClient.openPosition(
-          targetToken.symbol, marketCollateralSymbol, priceAfterSlippage,
-          collateralNative, sizeAmount, sdkSide, poolConfig, privilege,
-          stakeAcct, refAcct,
+          targetToken.symbol,
+          marketCollateralSymbol,
+          priceAfterSlippage,
+          collateralNative,
+          sizeAmount,
+          sdkSide,
+          poolConfig,
+          privilege,
+          stakeAcct,
+          refAcct,
         );
       } else {
         openResult = await this.perpClient.swapAndOpen(
-          targetToken.symbol, marketCollateralSymbol, inputToken.symbol,
-          collateralNative, priceAfterSlippage, sizeAmount, sdkSide,
-          poolConfig, privilege,
-          stakeAcct, refAcct,
+          targetToken.symbol,
+          marketCollateralSymbol,
+          inputToken.symbol,
+          collateralNative,
+          priceAfterSlippage,
+          sizeAmount,
+          sdkSide,
+          poolConfig,
+          privilege,
+          stakeAcct,
+          refAcct,
         );
       }
 
@@ -2692,9 +3018,7 @@ export class FlashClient implements IFlashClient {
 
       if (takeProfit !== undefined && !existingPositionPubkey) {
         try {
-          tpResult = await this.buildTriggerOrderInstructions(
-            market, side, takeProfit, false, sizeAmount, poolConfig,
-          );
+          tpResult = await this.buildTriggerOrderInstructions(market, side, takeProfit, false, sizeAmount, poolConfig);
         } catch (err: unknown) {
           logger.info('CLIENT', `Failed to build TP instructions: ${getErrorMessage(err)}`);
         }
@@ -2702,9 +3026,7 @@ export class FlashClient implements IFlashClient {
 
       if (stopLoss !== undefined && !existingPositionPubkey) {
         try {
-          slResult = await this.buildTriggerOrderInstructions(
-            market, side, stopLoss, true, sizeAmount, poolConfig,
-          );
+          slResult = await this.buildTriggerOrderInstructions(market, side, stopLoss, true, sizeAmount, poolConfig);
         } catch (err: unknown) {
           logger.info('CLIENT', `Failed to build SL instructions: ${getErrorMessage(err)}`);
         }
@@ -2729,10 +3051,7 @@ export class FlashClient implements IFlashClient {
       // target token before swap_and_open. The idempotent variant is a no-op if
       // the ATA already exists, so no RPC check needed.
       {
-        const ataIxs = buildATAIdempotentIxs(
-          this.wallet.publicKey,
-          [targetToken.mintKey],
-        );
+        const ataIxs = buildATAIdempotentIxs(this.wallet.publicKey, [targetToken.mintKey]);
         if (ataIxs.length > 0) {
           // Prepend ATA creation before all other instructions
           batch.instructions.unshift(...ataIxs);
@@ -2757,12 +3076,16 @@ export class FlashClient implements IFlashClient {
         if (tpResult) {
           try {
             await this.sendTx(tpResult.instructions, tpResult.additionalSigners, poolConfig, altAccounts);
-          } catch { /* TP is non-critical */ }
+          } catch {
+            /* TP is non-critical */
+          }
         }
         if (slResult) {
           try {
             await this.sendTx(slResult.instructions, slResult.additionalSigners, poolConfig, altAccounts);
-          } catch { /* SL is non-critical */ }
+          } catch {
+            /* SL is non-critical */
+          }
         }
       } else {
         // Just the open position
@@ -2778,8 +3101,13 @@ export class FlashClient implements IFlashClient {
         const openSizeUsd = targetPrice.price.getAssetAmountUsd(sizeAmount, targetToken.decimals);
         const openCollateralUsd = inputPrice.price.getAssetAmountUsd(collateralNative, inputToken.decimals);
         const liqResult = this.perpClient.getLiquidationPriceWithOrder(
-          openCollateralUsd, sizeAmount, openSizeUsd, targetToken.decimals,
-          targetPrice.price, sdkSide, _targetCustodyAcct,
+          openCollateralUsd,
+          sizeAmount,
+          openSizeUsd,
+          targetToken.decimals,
+          targetPrice.price,
+          sdkSide,
+          _targetCustodyAcct,
         );
         const liqUi = parseFloat(liqResult.toUiPrice(8));
         if (Number.isFinite(liqUi) && liqUi > 0) openLiqPrice = liqUi;
@@ -2814,31 +3142,34 @@ export class FlashClient implements IFlashClient {
     const { targetSymbol, collateralSymbol } = this.resolveOrderTokens(poolConfig, market, sdkSide);
 
     const result = await this.perpClient.cancelTriggerOrder(
-      targetSymbol, collateralSymbol, sdkSide, orderId, isStopLoss, poolConfig
+      targetSymbol,
+      collateralSymbol,
+      sdkSide,
+      orderId,
+      isStopLoss,
+      poolConfig,
     );
 
     const txSignature = await this.sendTx(result.instructions, result.additionalSigners, poolConfig);
 
     logger.trade(isStopLoss ? 'CANCEL_SL' : 'CANCEL_TP', {
-      market, side, orderId, tx: txSignature,
+      market,
+      side,
+      orderId,
+      tx: txSignature,
     });
 
     return { txSignature };
   }
 
-  async cancelAllTriggerOrders(
-    market: string,
-    side: TradeSide,
-  ): Promise<CancelOrderResult> {
+  async cancelAllTriggerOrders(market: string, side: TradeSide): Promise<CancelOrderResult> {
     const logger = getLogger();
 
     const poolConfig = this.getPoolConfigForMarket(market);
     const sdkSide = toSdkSide(side);
     const { targetSymbol, collateralSymbol } = this.resolveOrderTokens(poolConfig, market, sdkSide);
 
-    const result = await this.perpClient.cancelAllTriggerOrders(
-      targetSymbol, collateralSymbol, sdkSide, poolConfig
-    );
+    const result = await this.perpClient.cancelAllTriggerOrders(targetSymbol, collateralSymbol, sdkSide, poolConfig);
 
     const txSignature = await this.sendTx(result.instructions, result.additionalSigners, poolConfig);
 
@@ -2847,11 +3178,7 @@ export class FlashClient implements IFlashClient {
     return { txSignature };
   }
 
-  async cancelLimitOrder(
-    market: string,
-    side: TradeSide,
-    orderId: number,
-  ): Promise<CancelOrderResult> {
+  async cancelLimitOrder(market: string, side: TradeSide, orderId: number): Promise<CancelOrderResult> {
     const logger = getLogger();
 
     const poolConfig = this.getPoolConfigForMarket(market);
@@ -2874,15 +3201,28 @@ export class FlashClient implements IFlashClient {
 
       // Edit with zero size effectively cancels
       const result = await this.perpClient.editLimitOrder(
-        targetToken.symbol, collateralToken.symbol, reserveToken.symbol, receiveToken.symbol,
-        sdkSide, orderId, this.zeroContractPrice(), BN_ZERO,
-        this.zeroContractPrice(), this.zeroContractPrice(),
-        poolConfig
+        targetToken.symbol,
+        collateralToken.symbol,
+        reserveToken.symbol,
+        receiveToken.symbol,
+        sdkSide,
+        orderId,
+        this.zeroContractPrice(),
+        BN_ZERO,
+        this.zeroContractPrice(),
+        this.zeroContractPrice(),
+        poolConfig,
       );
 
       const oracleIxs = await oracleIxsPromise;
       const cuOverride = oracleIxs.length > 0 ? 450_000 : undefined;
-      const txSignature = await this.sendTx([...oracleIxs, ...result.instructions], result.additionalSigners, poolConfig, undefined, cuOverride);
+      const txSignature = await this.sendTx(
+        [...oracleIxs, ...result.instructions],
+        result.additionalSigners,
+        poolConfig,
+        undefined,
+        cuOverride,
+      );
       logger.trade('CANCEL_LIMIT', { market, side, orderId, tx: txSignature });
       return { txSignature };
     } catch (err: unknown) {
@@ -2910,9 +3250,9 @@ export class FlashClient implements IFlashClient {
     const oracleIxsPromise = this.fetchBackupOracleIxs(poolConfig);
     const orders = await this.perpClient.getUserOrderAccounts(this.wallet.publicKey, poolConfig);
     const targetToken = this.findToken(poolConfig, market);
-    const matchedOrder = orders.find(o => {
+    const matchedOrder = orders.find((o) => {
       const poolMarkets = getTypedMarkets(poolConfig);
-      const marketConfig = poolMarkets.find(m => m.targetMint.equals(targetToken.mintKey) && m.side === sdkSide);
+      const marketConfig = poolMarkets.find((m) => m.targetMint.equals(targetToken.mintKey) && m.side === sdkSide);
       return marketConfig && o.market.equals(marketConfig.marketAccount);
     });
     if (!matchedOrder) throw new Error(`No order account found for ${market} ${side}`);
@@ -2922,16 +3262,28 @@ export class FlashClient implements IFlashClient {
     const existingOrder = matchedOrder.limitOrders[orderId];
 
     const result = await this.perpClient.editLimitOrder(
-      targetSymbol, collateralSymbol, reserveSymbol, receiveSymbol,
-      sdkSide, orderId, this.toContractOraclePrice(newLimitPrice),
+      targetSymbol,
+      collateralSymbol,
+      reserveSymbol,
+      receiveSymbol,
+      sdkSide,
+      orderId,
+      this.toContractOraclePrice(newLimitPrice),
       existingOrder.sizeAmount,
-      existingOrder.stopLossPrice, existingOrder.takeProfitPrice,
-      poolConfig
+      existingOrder.stopLossPrice,
+      existingOrder.takeProfitPrice,
+      poolConfig,
     );
 
     const oracleIxs = await oracleIxsPromise;
     const cuOverride = oracleIxs.length > 0 ? 450_000 : undefined;
-    const txSignature = await this.sendTx([...oracleIxs, ...result.instructions], result.additionalSigners, poolConfig, undefined, cuOverride);
+    const txSignature = await this.sendTx(
+      [...oracleIxs, ...result.instructions],
+      result.additionalSigners,
+      poolConfig,
+      undefined,
+      cuOverride,
+    );
 
     logger.trade('EDIT_LIMIT', { market, side, orderId, newLimitPrice, tx: txSignature });
 
@@ -2954,11 +3306,11 @@ export class FlashClient implements IFlashClient {
 
           // Resolve market symbol from the market account
           const poolMarkets = getTypedMarkets(pc);
-          const matchedMarket = poolMarkets.find(m => m.marketAccount.equals(oa.market));
+          const matchedMarket = poolMarkets.find((m) => m.marketAccount.equals(oa.market));
           if (!matchedMarket) continue;
 
           const tokens = pc.tokens as Array<{ symbol: string; mintKey: PublicKey }>;
-          const targetToken = tokens.find(t => t.mintKey.equals(matchedMarket.targetMint));
+          const targetToken = tokens.find((t) => t.mintKey.equals(matchedMarket.targetMint));
           if (!targetToken) continue;
 
           const marketSymbol = targetToken.symbol;
@@ -3033,7 +3385,7 @@ export class FlashClient implements IFlashClient {
   private getPoolConfigForToken(tokenSymbol: string): PoolConfig {
     // First check default pool
     const tokens = this.poolConfig.tokens as Array<{ symbol: string }>;
-    if (tokens.some(t => t.symbol === tokenSymbol)) {
+    if (tokens.some((t) => t.symbol === tokenSymbol)) {
       return this.poolConfig;
     }
     // Try all known pools
@@ -3042,7 +3394,7 @@ export class FlashClient implements IFlashClient {
       try {
         const pc = PoolConfig.fromIdsByName(poolName, this.config.network);
         const poolTokens = pc.tokens as Array<{ symbol: string }>;
-        if (poolTokens.some(t => t.symbol === tokenSymbol)) {
+        if (poolTokens.some((t) => t.symbol === tokenSymbol)) {
           return pc;
         }
       } catch {
@@ -3052,12 +3404,7 @@ export class FlashClient implements IFlashClient {
     throw new Error(`Token ${tokenSymbol} not found in any pool`);
   }
 
-  async swap(
-    inputToken: string,
-    outputToken: string,
-    amountIn: number,
-    minAmountOut?: number,
-  ) {
+  async swap(inputToken: string, outputToken: string, amountIn: number, minAmountOut?: number) {
     const logger = getLogger();
     // Find a pool containing both tokens — try input token's pool first
     const poolConfig = this.getPoolConfigForToken(inputToken);
@@ -3066,19 +3413,11 @@ export class FlashClient implements IFlashClient {
     const outToken = this.findToken(poolConfig, outputToken);
 
     const nativeAmountIn = uiDecimalsToNative(amountIn.toString(), inToken.decimals);
-    const minOut = minAmountOut
-      ? uiDecimalsToNative(minAmountOut.toString(), outToken.decimals)
-      : BN_ZERO; // 0 = accept any amount (slippage handled by pool)
+    const minOut = minAmountOut ? uiDecimalsToNative(minAmountOut.toString(), outToken.decimals) : BN_ZERO; // 0 = accept any amount (slippage handled by pool)
 
     logger.info('CLIENT', `Swap ${amountIn} ${inputToken} → ${outputToken}`);
 
-    const result = await this.perpClient.swap(
-      inToken.symbol,
-      outToken.symbol,
-      nativeAmountIn,
-      minOut,
-      poolConfig,
-    );
+    const result = await this.perpClient.swap(inToken.symbol, outToken.symbol, nativeAmountIn, minOut, poolConfig);
 
     const sig = await this.sendTx(result.instructions, result.additionalSigners, poolConfig);
 
@@ -3108,7 +3447,8 @@ export class FlashClient implements IFlashClient {
     this.allowedPrograms.add(pc.programId.toBase58());
     if (pc.perpComposibilityProgramId) this.allowedPrograms.add(pc.perpComposibilityProgramId.toBase58());
     if (pc.fbNftRewardProgramId) this.allowedPrograms.add(pc.fbNftRewardProgramId.toBase58());
-    if (pc.rewardDistributionProgram?.programId) this.allowedPrograms.add(pc.rewardDistributionProgram.programId.toBase58());
+    if (pc.rewardDistributionProgram?.programId)
+      this.allowedPrograms.add(pc.rewardDistributionProgram.programId.toBase58());
     ALLOWED_PROGRAM_IDS = this.allowedPrograms;
     return pc;
   }
@@ -3172,19 +3512,22 @@ export class FlashClient implements IFlashClient {
       throw new Error(`${percent}% of ${flpSymbol} balance rounds to zero.`);
     }
 
-    logger.debug('CLIENT', `FLP balance: ${flpBalance.toString()}, withdrawing: ${withdrawAmount.toString()} (${percent}%), rawLp=${useRawLp}`);
+    logger.debug(
+      'CLIENT',
+      `FLP balance: ${flpBalance.toString()}, withdrawing: ${withdrawAmount.toString()} (${percent}%), rawLp=${useRawLp}`,
+    );
 
     let result: { instructions: TransactionInstruction[]; additionalSigners: Signer[] };
     if (useRawLp) {
       // Raw LP tokens from withdrawStake — use removeLiquidity (needs ALTs for large tx)
-      result = await quietSdk(() => this.perpClient.removeLiquidity(
-        'USDC', withdrawAmount, BN_ZERO, poolConfig, true, true,
-      ));
+      result = await quietSdk(() =>
+        this.perpClient.removeLiquidity('USDC', withdrawAmount, BN_ZERO, poolConfig, true, true),
+      );
     } else {
       // Compounding FLP tokens — use removeCompoundingLiquidity
-      result = await quietSdk(() => this.perpClient.removeCompoundingLiquidity(
-        withdrawAmount, BN_ZERO, token.symbol, flpMint, poolConfig,
-      ));
+      result = await quietSdk(() =>
+        this.perpClient.removeCompoundingLiquidity(withdrawAmount, BN_ZERO, token.symbol, flpMint, poolConfig),
+      );
     }
 
     const sig = await this.sendTx(result.instructions, result.additionalSigners, poolConfig);
@@ -3251,17 +3594,24 @@ export class FlashClient implements IFlashClient {
 
     // If tokens are already deactivated (from a previous partial unstake), withdraw + convert them
     if (totalStaked.isZero() && !deactivatedAmount.isZero()) {
-      logger.info('CLIENT', `Found ${deactivatedAmount.toString()} deactivated ${sflpSymbol} — withdrawing and converting to USDC`);
+      logger.info(
+        'CLIENT',
+        `Found ${deactivatedAmount.toString()} deactivated ${sflpSymbol} — withdrawing and converting to USDC`,
+      );
       const withdrawResult = await quietSdk(() => this.perpClient.withdrawStake(poolConfig, false, true, true));
       const sig1 = await this.sendTx(withdrawResult.instructions, withdrawResult.additionalSigners, poolConfig);
       try {
-        const removeResult = await quietSdk(() => this.perpClient.removeLiquidity(
-          'USDC', deactivatedAmount, BN_ZERO, poolConfig, true, true,
-        ));
+        const removeResult = await quietSdk(() =>
+          this.perpClient.removeLiquidity('USDC', deactivatedAmount, BN_ZERO, poolConfig, true, true),
+        );
         const sig2 = await this.sendTx(removeResult.instructions, removeResult.additionalSigners, poolConfig);
         return { txSignature: sig2, action: 'unstake', message: `Recovered deactivated ${sflpSymbol} → USDC` };
       } catch {
-        return { txSignature: sig1, action: 'unstake', message: `Withdrew deactivated LP tokens. Use "earn withdraw" to convert to USDC.` };
+        return {
+          txSignature: sig1,
+          action: 'unstake',
+          message: `Withdrew deactivated LP tokens. Use "earn withdraw" to convert to USDC.`,
+        };
       }
     }
 
@@ -3274,14 +3624,20 @@ export class FlashClient implements IFlashClient {
       throw new Error(`${percent}% of ${sflpSymbol} balance rounds to zero.`);
     }
 
-    logger.info('CLIENT', `Unstake ${sflpSymbol}: ${unstakeAmount.toString()} native (${percent}%), active=${activeAmount.toString()}, pending=${pendingActivation.toString()}`);
+    logger.info(
+      'CLIENT',
+      `Unstake ${sflpSymbol}: ${unstakeAmount.toString()} native (${percent}%), active=${activeAmount.toString()}, pending=${pendingActivation.toString()}`,
+    );
 
     // If there's pending activation, refresh stake first to activate it
     const preInstructions: TransactionInstruction[] = [];
     if (!pendingActivation.isZero()) {
       try {
         const refreshIx = await this.perpClient.refreshStakeWithTokenStake(
-          'USDC', poolConfig, flpStakePda, this.wallet.publicKey,
+          'USDC',
+          poolConfig,
+          flpStakePda,
+          this.wallet.publicKey,
         );
         preInstructions.push(refreshIx);
         logger.info('CLIENT', `Prepending refreshStake to activate ${pendingActivation.toString()} pending sFLP`);
@@ -3296,12 +3652,8 @@ export class FlashClient implements IFlashClient {
     // 3. removeLiquidity → burns LP tokens → USDC
 
     // Step 1+2: unstake + withdraw in one transaction
-    const unstakeResult = await quietSdk(() => this.perpClient.unstakeInstant(
-      'USDC', unstakeAmount, poolConfig,
-    ));
-    const withdrawResult = await quietSdk(() => this.perpClient.withdrawStake(
-      poolConfig, false, true, true,
-    ));
+    const unstakeResult = await quietSdk(() => this.perpClient.unstakeInstant('USDC', unstakeAmount, poolConfig));
+    const withdrawResult = await quietSdk(() => this.perpClient.withdrawStake(poolConfig, false, true, true));
 
     const tx1Ixs = [...preInstructions, ...unstakeResult.instructions, ...withdrawResult.instructions];
     const tx1Signers = [...unstakeResult.additionalSigners, ...withdrawResult.additionalSigners];
@@ -3310,9 +3662,9 @@ export class FlashClient implements IFlashClient {
 
     // Step 3: burn LP tokens → USDC (separate tx — too large to combine with ALTs)
     try {
-      const removeResult = await quietSdk(() => this.perpClient.removeLiquidity(
-        'USDC', unstakeAmount, BN_ZERO, poolConfig, true, true,
-      ));
+      const removeResult = await quietSdk(() =>
+        this.perpClient.removeLiquidity('USDC', unstakeAmount, BN_ZERO, poolConfig, true, true),
+      );
       const sig2 = await this.sendTx(removeResult.instructions, removeResult.additionalSigners, poolConfig);
       logger.info('CLIENT', `Remove liquidity tx: ${sig2}`);
 
@@ -3351,10 +3703,7 @@ export class FlashClient implements IFlashClient {
 
     logger.info('CLIENT', `Claim rewards from ${poolConfig.poolName}`);
 
-    const result = await this.perpClient.collectStakeFees(
-      'USDC',
-      poolConfig,
-    );
+    const result = await this.perpClient.collectStakeFees('USDC', poolConfig);
 
     const sig = await this.sendTx(result.instructions, result.additionalSigners, poolConfig);
 

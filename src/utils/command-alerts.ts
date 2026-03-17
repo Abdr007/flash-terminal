@@ -149,12 +149,7 @@ export function limitOrderSyntaxAlert(): CommandAlert {
 export function invalidLeverageAlert(value: number): CommandAlert {
   return {
     type: 'parameter',
-    message: [
-      '',
-      alertHeader(`Invalid leverage: ${value}x`),
-      chalk.dim('  Allowed range: 1.1x – 100x'),
-      '',
-    ].join('\n'),
+    message: ['', alertHeader(`Invalid leverage: ${value}x`), chalk.dim('  Allowed range: 1.1x – 100x'), ''].join('\n'),
   };
 }
 
@@ -185,12 +180,9 @@ export function invalidPercentageAlert(value: number): CommandAlert {
 export function invalidPriceAlert(value: number): CommandAlert {
   return {
     type: 'parameter',
-    message: [
-      '',
-      alertHeader(`Invalid price: $${value}`),
-      chalk.dim('  Price must be a positive number.'),
-      '',
-    ].join('\n'),
+    message: ['', alertHeader(`Invalid price: $${value}`), chalk.dim('  Price must be a positive number.'), ''].join(
+      '\n',
+    ),
   };
 }
 
@@ -241,9 +233,9 @@ export function detectMalformedCommand(input: string): CommandAlert | null {
     const tokens = lower.split(' ');
     if (tokens.length >= 2) {
       // Check for missing leverage
-      const hasLeverage = tokens.some(t => /^\d+(?:\.\d+)?x?$/.test(t) && t !== tokens[0]);
-      const hasSide = tokens.some(t => t === 'long' || t === 'short');
-      const hasAmount = tokens.some(t => /^\$?\d+(?:\.\d+)?$/.test(t));
+      const hasLeverage = tokens.some((t) => /^\d+(?:\.\d+)?x?$/.test(t) && t !== tokens[0]);
+      const hasSide = tokens.some((t) => t === 'long' || t === 'short');
+      const hasAmount = tokens.some((t) => /^\$?\d+(?:\.\d+)?$/.test(t));
 
       if (!hasLeverage || !hasSide || !hasAmount) {
         return openSyntaxAlert();

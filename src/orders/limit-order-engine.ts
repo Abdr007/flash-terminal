@@ -38,12 +38,7 @@ export interface LimitOrder {
 }
 
 /** Callback to execute an open. Provided by the terminal at init time. */
-export type OpenExecutor = (
-  market: string,
-  side: TradeSide,
-  leverage: number,
-  collateralUsd: number,
-) => Promise<void>;
+export type OpenExecutor = (market: string, side: TradeSide, leverage: number, collateralUsd: number) => Promise<void>;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -103,13 +98,7 @@ export class LimitOrderEngine {
   /**
    * Place a new limit order. Returns formatted CLI output.
    */
-  placeOrder(
-    market: string,
-    side: TradeSide,
-    leverage: number,
-    collateralUsd: number,
-    limitPrice: number,
-  ): string {
+  placeOrder(market: string, side: TradeSide, leverage: number, collateralUsd: number, limitPrice: number): string {
     if (this.orders.size >= MAX_LIMIT_ORDERS) {
       return chalk.red(`  Maximum limit orders (${MAX_LIMIT_ORDERS}) reached. Cancel an order first.`);
     }
@@ -140,7 +129,10 @@ export class LimitOrderEngine {
     this.ensurePolling();
 
     const logger = getLogger();
-    logger.info('LIMIT_ORDER', `LIMIT_ORDER_CREATED: ${orderId} ${order.side} ${order.market} ${order.leverage}x $${order.collateralUsd} @ $${order.limitPrice}`);
+    logger.info(
+      'LIMIT_ORDER',
+      `LIMIT_ORDER_CREATED: ${orderId} ${order.side} ${order.market} ${order.leverage}x $${order.collateralUsd} @ $${order.limitPrice}`,
+    );
 
     const sideColor = side === TradeSide.Long ? chalk.green : chalk.red;
 
@@ -174,7 +166,10 @@ export class LimitOrderEngine {
     this.maybeStopPolling();
 
     const logger = getLogger();
-    logger.info('LIMIT_ORDER', `LIMIT_ORDER_CANCELLED: ${orderId} ${order.side} ${order.market} @ $${order.limitPrice}`);
+    logger.info(
+      'LIMIT_ORDER',
+      `LIMIT_ORDER_CANCELLED: ${orderId} ${order.side} ${order.market} @ $${order.limitPrice}`,
+    );
 
     return chalk.green(`  Order "${orderId}" cancelled.`);
   }
@@ -211,11 +206,9 @@ export class LimitOrderEngine {
     ];
 
     for (const [id, order] of activeOrders) {
-      const sideStr = order.side === TradeSide.Long
-        ? chalk.green('LONG ')
-        : chalk.red('SHORT');
+      const sideStr = order.side === TradeSide.Long ? chalk.green('LONG ') : chalk.red('SHORT');
       lines.push(
-        `  ${id.padEnd(12)}${order.market.padEnd(8)}${sideStr}   ${(order.leverage + 'x').padEnd(5)}$${order.collateralUsd.toFixed(2).padEnd(13)}$${order.limitPrice.toFixed(2)}`
+        `  ${id.padEnd(12)}${order.market.padEnd(8)}${sideStr}   ${(order.leverage + 'x').padEnd(5)}$${order.collateralUsd.toFixed(2).padEnd(13)}$${order.limitPrice.toFixed(2)}`,
       );
     }
 
@@ -298,9 +291,10 @@ export class LimitOrderEngine {
       const valuationPrice = priceMap.get(order.market);
       if (!valuationPrice || !Number.isFinite(valuationPrice) || valuationPrice <= 0) continue;
 
-      const conditionMet = order.side === TradeSide.Long
-        ? valuationPrice <= order.limitPrice   // LONG limit order: trigger when price drops to limit
-        : valuationPrice >= order.limitPrice;  // SHORT limit order: trigger when price rises to limit
+      const conditionMet =
+        order.side === TradeSide.Long
+          ? valuationPrice <= order.limitPrice // LONG limit order: trigger when price drops to limit
+          : valuationPrice >= order.limitPrice; // SHORT limit order: trigger when price rises to limit
 
       // Spike protection: increment or reset confirmation ticks
       if (conditionMet) {
@@ -346,11 +340,14 @@ export class LimitOrderEngine {
       order.triggered = true;
       this.executingIds.add(orderId);
 
-      logger.info('LIMIT_ORDER', `LIMIT_ORDER_TRIGGERED: ${orderId} ${order.side} ${order.market} at $${valuationPrice.toFixed(4)} (limit: $${order.limitPrice.toFixed(2)})`);
+      logger.info(
+        'LIMIT_ORDER',
+        `LIMIT_ORDER_TRIGGERED: ${orderId} ${order.side} ${order.market} at $${valuationPrice.toFixed(4)} (limit: $${order.limitPrice.toFixed(2)})`,
+      );
       process.stdout.write(
         chalk.bold.yellow(`\n  [LIMIT] Order ${orderId} triggered — ${order.market} ${order.side.toUpperCase()}`) +
-        chalk.dim(` — price: $${valuationPrice.toFixed(4)}`) +
-        chalk.dim(` — opening position...\n`)
+          chalk.dim(` — price: $${valuationPrice.toFixed(4)}`) +
+          chalk.dim(` — opening position...\n`),
       );
 
       // Fire-and-forget open execution (non-blocking for other orders)
@@ -363,15 +360,14 @@ export class LimitOrderEngine {
     this.maybeStopPolling();
   }
 
-  private async executeOpen(
-    orderId: string,
-    order: LimitOrder,
-    executionPrice: number,
-  ): Promise<void> {
+  private async executeOpen(orderId: string, order: LimitOrder, executionPrice: number): Promise<void> {
     const logger = getLogger();
     try {
       await this.openExecutor!(order.market, order.side, order.leverage, order.collateralUsd);
-      logger.info('LIMIT_ORDER', `Order ${orderId} executed: ${order.side} ${order.market} ${order.leverage}x $${order.collateralUsd} at $${executionPrice.toFixed(4)}`);
+      logger.info(
+        'LIMIT_ORDER',
+        `Order ${orderId} executed: ${order.side} ${order.market} ${order.leverage}x $${order.collateralUsd} at $${executionPrice.toFixed(4)}`,
+      );
     } catch (err) {
       process.stdout.write(chalk.red(`\n  [LIMIT] Order ${orderId} execution failed: ${getErrorMessage(err)}\n`));
       // Mark as not triggered so user can see it failed

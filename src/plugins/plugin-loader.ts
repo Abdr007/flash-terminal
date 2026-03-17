@@ -73,15 +73,16 @@ export async function loadPlugins(context: ToolContext): Promise<ToolDefinition[
       return allTools;
     }
 
-    const pluginFiles = files.filter(f =>
-      (f.endsWith('.js') || f.endsWith('.ts')) &&
-      !f.endsWith('.d.ts') &&
-      !f.endsWith('.js.map') &&
-      !f.startsWith('_') &&
-      !f.includes('/') &&
-      !f.includes('\\') &&
-      f !== 'plugin-loader.ts' &&
-      f !== 'plugin-loader.js'
+    const pluginFiles = files.filter(
+      (f) =>
+        (f.endsWith('.js') || f.endsWith('.ts')) &&
+        !f.endsWith('.d.ts') &&
+        !f.endsWith('.js.map') &&
+        !f.startsWith('_') &&
+        !f.includes('/') &&
+        !f.includes('\\') &&
+        f !== 'plugin-loader.ts' &&
+        f !== 'plugin-loader.js',
     );
 
     for (const file of pluginFiles) {
@@ -99,7 +100,7 @@ export async function loadPlugins(context: ToolContext): Promise<ToolDefinition[
         }
 
         // Check for duplicate names
-        if (loadedPlugins.some(p => p.name === plugin.name)) {
+        if (loadedPlugins.some((p) => p.name === plugin.name)) {
           logger.warn('PLUGINS', `Duplicate plugin name: ${plugin.name} (skipping ${file})`);
           continue;
         }

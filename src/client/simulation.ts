@@ -46,7 +46,9 @@ export class SimulatedFlashClient implements IFlashClient {
   private async withTradeLock<T>(fn: () => Promise<T>): Promise<T> {
     let releasePrev: () => void;
     const prev = this.tradeLock;
-    this.tradeLock = new Promise<void>(resolve => { releasePrev = resolve; });
+    this.tradeLock = new Promise<void>((resolve) => {
+      releasePrev = resolve;
+    });
     await prev;
     try {
       return await fn();
@@ -154,7 +156,12 @@ export class SimulatedFlashClient implements IFlashClient {
     const sizeUsd = 1; // normalized
     const collateralUsd = sizeUsd / leverage;
     return computeSimulationLiquidationPrice(
-      entryPrice, sizeUsd, collateralUsd, side, maintenanceMarginRate, closeFeeRate,
+      entryPrice,
+      sizeUsd,
+      collateralUsd,
+      side,
+      maintenanceMarginRate,
+      closeFeeRate,
     );
   }
 
@@ -191,9 +198,8 @@ export class SimulatedFlashClient implements IFlashClient {
 
     const price = this.getPrice(market);
     // Simulated slippage: shift entry price against the trader (worse fill)
-    const slippageMult = side === TradeSide.Long
-      ? 1 + SIMULATION_SLIPPAGE_BPS / 10_000
-      : 1 - SIMULATION_SLIPPAGE_BPS / 10_000;
+    const slippageMult =
+      side === TradeSide.Long ? 1 + SIMULATION_SLIPPAGE_BPS / 10_000 : 1 - SIMULATION_SLIPPAGE_BPS / 10_000;
     const fillPrice = price * slippageMult;
     const sizeUsd = collateralAmount * leverage;
 
@@ -201,7 +207,13 @@ export class SimulatedFlashClient implements IFlashClient {
     const feeRates = await getProtocolFeeRates(market, null);
     const openFee = calcFeeUsd(sizeUsd, feeRates.openFeeRate);
 
-    const liquidationPrice = this.calcLiquidationPrice(fillPrice, leverage, side, feeRates.maintenanceMarginRate, feeRates.closeFeeRate);
+    const liquidationPrice = this.calcLiquidationPrice(
+      fillPrice,
+      leverage,
+      side,
+      feeRates.maintenanceMarginRate,
+      feeRates.closeFeeRate,
+    );
 
     // Reject positions where liquidation price equals entry (instant liquidation)
     if (liquidationPrice === fillPrice || liquidationPrice <= 0) {
@@ -209,16 +221,16 @@ export class SimulatedFlashClient implements IFlashClient {
     }
 
     if (collateralAmount + openFee > this.state.balance) {
-      throw new Error(`Insufficient balance for collateral + fee: need $${(collateralAmount + openFee).toFixed(2)}, have $${this.state.balance.toFixed(2)}`);
+      throw new Error(
+        `Insufficient balance for collateral + fee: need $${(collateralAmount + openFee).toFixed(2)}, have $${this.state.balance.toFixed(2)}`,
+      );
     }
 
     this.state.balance -= collateralAmount + openFee;
     this.state.totalFeesPaid += openFee;
 
     // Check for existing same-side position — merge if exists (matches Flash Trade protocol)
-    const existing = this.state.positions.find(
-      p => p.market === market.toUpperCase() && p.side === side,
-    );
+    const existing = this.state.positions.find((p) => p.market === market.toUpperCase() && p.side === side);
 
     let txSig: string;
     let finalEntryPrice: number;
@@ -226,9 +238,8 @@ export class SimulatedFlashClient implements IFlashClient {
     if (existing) {
       // Merge: weighted average entry price, sum collateral and size
       const totalSize = existing.sizeUsd + sizeUsd;
-      finalEntryPrice = totalSize > 0
-        ? (existing.entryPrice * existing.sizeUsd + fillPrice * sizeUsd) / totalSize
-        : fillPrice;
+      finalEntryPrice =
+        totalSize > 0 ? (existing.entryPrice * existing.sizeUsd + fillPrice * sizeUsd) / totalSize : fillPrice;
       existing.sizeUsd = totalSize;
       existing.collateralUsd += collateralAmount;
       const mergedLev = existing.collateralUsd > 0 ? existing.sizeUsd / existing.collateralUsd : leverage;
@@ -274,49 +285,51 @@ export class SimulatedFlashClient implements IFlashClient {
   }
 
   async closePosition(
-    market: string, side: TradeSide, _receiveToken?: string,
-    closePercent?: number, closeAmount?: number
+    market: string,
+    side: TradeSide,
+    _receiveToken?: string,
+    closePercent?: number,
+    closeAmount?: number,
   ): Promise<ClosePositionResult> {
     return this.withTradeLock(() => this._closePosition(market, side, closePercent, closeAmount));
   }
 
   private async _closePosition(
-    market: string, side: TradeSide,
-    closePercent?: number, closeAmount?: number
+    market: string,
+    side: TradeSide,
+    closePercent?: number,
+    closeAmount?: number,
   ): Promise<ClosePositionResult> {
     const logger = getLogger();
     await this.refreshPrices();
 
     const upperMarket = market.toUpperCase();
-    const idx = this.state.positions.findIndex(
-      (p) => p.market === upperMarket && p.side === side
-    );
+    const idx = this.state.positions.findIndex((p) => p.market === upperMarket && p.side === side);
     if (idx === -1) throw new Error(`No open ${side} position on ${market}`);
 
     const position = this.state.positions[idx];
     const price = this.getPrice(market);
     const priceDelta = price - position.entryPrice;
     const pnlMultiplier = side === TradeSide.Long ? 1 : -1;
-    const fullPnl = position.entryPrice > 0
-      ? (priceDelta / position.entryPrice) * position.sizeUsd * pnlMultiplier
-      : 0;
+    const fullPnl = position.entryPrice > 0 ? (priceDelta / position.entryPrice) * position.sizeUsd * pnlMultiplier : 0;
 
     // Determine close fraction
-    const isPartial = (closePercent !== undefined && closePercent < 100) ||
-                      (closeAmount !== undefined);
+    const isPartial = (closePercent !== undefined && closePercent < 100) || closeAmount !== undefined;
     let closeFraction = 1;
     if (closePercent !== undefined && closePercent < 100) {
       closeFraction = closePercent / 100;
     } else if (closeAmount !== undefined) {
       if (closeAmount > position.sizeUsd) {
-        throw new Error(`Close amount $${closeAmount.toFixed(2)} exceeds position size $${position.sizeUsd.toFixed(2)}`);
+        throw new Error(
+          `Close amount $${closeAmount.toFixed(2)} exceeds position size $${position.sizeUsd.toFixed(2)}`,
+        );
       }
       closeFraction = closeAmount / position.sizeUsd;
     }
 
     // If remaining would be tiny (< $0.50), close fully
     const remainingSize = position.sizeUsd * (1 - closeFraction);
-    const shouldFullClose = !isPartial || remainingSize < 0.50 || closeFraction >= 1;
+    const shouldFullClose = !isPartial || remainingSize < 0.5 || closeFraction >= 1;
     const effectiveFraction = shouldFullClose ? 1 : closeFraction;
 
     const closedSizeUsd = position.sizeUsd * effectiveFraction;
@@ -383,9 +396,7 @@ export class SimulatedFlashClient implements IFlashClient {
     if (amount > this.state.balance) {
       throw new Error(`Insufficient balance: $${this.state.balance.toFixed(2)} available`);
     }
-    const pos = this.state.positions.find(
-      (p) => p.market === market.toUpperCase() && p.side === side
-    );
+    const pos = this.state.positions.find((p) => p.market === market.toUpperCase() && p.side === side);
     if (!pos) throw new Error(`No open ${side} position on ${market}`);
 
     this.state.balance -= amount;
@@ -419,9 +430,7 @@ export class SimulatedFlashClient implements IFlashClient {
     }
     // Refresh prices before liquidation safety check
     await this.refreshPrices();
-    const pos = this.state.positions.find(
-      (p) => p.market === market.toUpperCase() && p.side === side
-    );
+    const pos = this.state.positions.find((p) => p.market === market.toUpperCase() && p.side === side);
     if (!pos) throw new Error(`No open ${side} position on ${market}`);
     if (amount >= pos.collateralUsd) throw new Error('Cannot remove all collateral — close position instead');
 
@@ -430,13 +439,17 @@ export class SimulatedFlashClient implements IFlashClient {
     const newLev = newCollateral > 0 ? pos.sizeUsd / newCollateral : 0;
     if (newLev > 0) {
       const currentPrice = this.livePrices.get(pos.market) ?? pos.entryPrice;
-      const newLiqPrice = this.calcLiquidationPrice(pos.entryPrice, newLev, side, pos.maintenanceMarginRate, pos.closeFeeRate);
-      const wouldLiquidate = side === TradeSide.Long
-        ? newLiqPrice >= currentPrice
-        : newLiqPrice <= currentPrice;
+      const newLiqPrice = this.calcLiquidationPrice(
+        pos.entryPrice,
+        newLev,
+        side,
+        pos.maintenanceMarginRate,
+        pos.closeFeeRate,
+      );
+      const wouldLiquidate = side === TradeSide.Long ? newLiqPrice >= currentPrice : newLiqPrice <= currentPrice;
       if (wouldLiquidate || newLiqPrice <= 0 || newLiqPrice === pos.entryPrice) {
         throw new Error(
-          `Removing $${amount.toFixed(2)} would push leverage to ${newLev.toFixed(1)}x — position would be liquidated. Reduce the amount.`
+          `Removing $${amount.toFixed(2)} would push leverage to ${newLev.toFixed(1)}x — position would be liquidated. Reduce the amount.`,
         );
       }
     }
@@ -467,10 +480,14 @@ export class SimulatedFlashClient implements IFlashClient {
       const currentPrice = this.livePrices.get(p.market) ?? p.entryPrice;
       const priceDelta = currentPrice - p.entryPrice;
       const pnlMultiplier = p.side === TradeSide.Long ? 1 : -1;
-      const unrealizedPnl = p.entryPrice > 0
-        ? (priceDelta / p.entryPrice) * p.sizeUsd * pnlMultiplier
-        : 0;
-      const liquidationPrice = this.calcLiquidationPrice(p.entryPrice, p.leverage, p.side, p.maintenanceMarginRate, p.closeFeeRate);
+      const unrealizedPnl = p.entryPrice > 0 ? (priceDelta / p.entryPrice) * p.sizeUsd * pnlMultiplier : 0;
+      const liquidationPrice = this.calcLiquidationPrice(
+        p.entryPrice,
+        p.leverage,
+        p.side,
+        p.maintenanceMarginRate,
+        p.closeFeeRate,
+      );
 
       return {
         pubkey: `SIM_${p.id}`,
@@ -509,9 +526,7 @@ export class SimulatedFlashClient implements IFlashClient {
       }
     }
 
-    const symbols = market
-      ? [market.toUpperCase()]
-      : Array.from(this.livePrices.keys());
+    const symbols = market ? [market.toUpperCase()] : Array.from(this.livePrices.keys());
 
     return symbols
       .filter((s) => this.livePrices.has(s) && this.livePrices.get(s)! > 0)
@@ -566,7 +581,13 @@ export class SimulatedFlashClient implements IFlashClient {
     const price = this.getPrice(market);
     const sizeUsd = collateralAmount * leverage;
     const previewFeeRates = await getProtocolFeeRates(market, null);
-    const liqPrice = this.calcLiquidationPrice(price, leverage, side, previewFeeRates.maintenanceMarginRate, previewFeeRates.closeFeeRate);
+    const liqPrice = this.calcLiquidationPrice(
+      price,
+      leverage,
+      side,
+      previewFeeRates.maintenanceMarginRate,
+      previewFeeRates.closeFeeRate,
+    );
     const fee = calcFeeUsd(sizeUsd, previewFeeRates.openFeeRate);
 
     return {

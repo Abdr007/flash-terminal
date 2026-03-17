@@ -151,7 +151,7 @@ async function walletMiddleware(intent: ParsedIntent, context: ToolContext): Pro
   if (wm?.isConnected) return { pass: true };
 
   // Wallet not connected — attempt automatic restoration from stored wallets
-  if (wm && await tryRestoreWalletSession(context)) {
+  if (wm && (await tryRestoreWalletSession(context))) {
     // Restoration succeeded — print a notice and continue
     process.stdout.write(chalk.yellow('  Wallet session restored.\n'));
     return { pass: true };
@@ -214,11 +214,7 @@ function loggingMiddleware(intent: ParsedIntent, context: ToolContext): Middlewa
 
 // ─── Middleware Pipeline ─────────────────────────────────────────────────────
 
-const MIDDLEWARE_CHAIN: Middleware[] = [
-  loggingMiddleware,
-  walletMiddleware,
-  readOnlyMiddleware,
-];
+const MIDDLEWARE_CHAIN: Middleware[] = [loggingMiddleware, walletMiddleware, readOnlyMiddleware];
 
 /**
  * Run all middleware checks before executing a command.

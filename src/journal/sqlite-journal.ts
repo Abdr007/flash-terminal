@@ -114,25 +114,47 @@ export class SqliteJournal {
     const id = `tj_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     const now = Date.now();
 
-    this.db.prepare(`
+    this.db
+      .prepare(
+        `
       INSERT INTO trades (id, market, side, action, collateral, leverage, size_usd, status, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
-    `).run(id, params.market, params.side, params.action, params.collateral ?? null, params.leverage ?? null, params.sizeUsd ?? null, now, now);
+    `,
+      )
+      .run(
+        id,
+        params.market,
+        params.side,
+        params.action,
+        params.collateral ?? null,
+        params.leverage ?? null,
+        params.sizeUsd ?? null,
+        now,
+        now,
+      );
 
     this.prune();
     return id;
   }
 
   recordSent(id: string, signature: string): void {
-    this.db.prepare(`
+    this.db
+      .prepare(
+        `
       UPDATE trades SET status = 'sent', signature = ?, updated_at = ? WHERE id = ?
-    `).run(signature, Date.now(), id);
+    `,
+      )
+      .run(signature, Date.now(), id);
   }
 
   recordConfirmed(id: string): void {
-    this.db.prepare(`
+    this.db
+      .prepare(
+        `
       UPDATE trades SET status = 'confirmed', updated_at = ? WHERE id = ?
-    `).run(Date.now(), id);
+    `,
+      )
+      .run(Date.now(), id);
   }
 
   remove(id: string): void {
@@ -140,25 +162,32 @@ export class SqliteJournal {
   }
 
   getPending(): JournalEntry[] {
-    return (this.db.prepare(
-      "SELECT * FROM trades WHERE status IN ('pending', 'sent') ORDER BY created_at ASC"
-    ).all() as unknown as DbRow[]).map(rowToEntry);
+    return (
+      this.db
+        .prepare("SELECT * FROM trades WHERE status IN ('pending', 'sent') ORDER BY created_at ASC")
+        .all() as unknown as DbRow[]
+    ).map(rowToEntry);
   }
 
   getAll(): JournalEntry[] {
-    return (this.db.prepare(
-      'SELECT * FROM trades ORDER BY created_at DESC LIMIT 100'
-    ).all() as unknown as DbRow[]).map(rowToEntry);
+    return (this.db.prepare('SELECT * FROM trades ORDER BY created_at DESC LIMIT 100').all() as unknown as DbRow[]).map(
+      rowToEntry,
+    );
   }
 
   private prune(): void {
-    const count = (this.db.prepare('SELECT COUNT(*) as cnt FROM trades').get() as { cnt: number } | undefined)?.cnt ?? 0;
+    const count =
+      (this.db.prepare('SELECT COUNT(*) as cnt FROM trades').get() as { cnt: number } | undefined)?.cnt ?? 0;
     if (count > MAX_ENTRIES) {
-      this.db.prepare(`
+      this.db
+        .prepare(
+          `
         DELETE FROM trades WHERE id IN (
           SELECT id FROM trades ORDER BY created_at ASC LIMIT ?
         )
-      `).run(count - MAX_ENTRIES);
+      `,
+        )
+        .run(count - MAX_ENTRIES);
     }
   }
 

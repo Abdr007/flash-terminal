@@ -58,7 +58,9 @@ export function registerWebhookConsumer(config: WebhookConsumerConfig): () => vo
     } catch (err) {
       try {
         getLogger().debug('WEBHOOK', `Alert delivery failed: ${err}`);
-      } catch { /* never throw */ }
+      } catch {
+        /* never throw */
+      }
     }
   });
 }
@@ -75,7 +77,9 @@ export function autoRegisterWebhook(): (() => void) | null {
 
   try {
     getLogger().info('WEBHOOK', `Alert webhook registered: ${url.slice(0, 40)}...`);
-  } catch { /* never throw */ }
+  } catch {
+    /* never throw */
+  }
 
   return registerWebhookConsumer({ url, minSeverity });
 }

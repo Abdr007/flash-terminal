@@ -7,11 +7,7 @@
  * if the account already exists).
  */
 
-import {
-  Connection,
-  PublicKey,
-  TransactionInstruction,
-} from '@solana/web3.js';
+import { Connection, PublicKey, TransactionInstruction } from '@solana/web3.js';
 import {
   getAssociatedTokenAddressSync,
   createAssociatedTokenAccountIdempotentInstruction,
@@ -28,19 +24,16 @@ import {
  * @param mints  Token mints that need ATAs
  * @returns      createIdempotent instructions (one per mint)
  */
-export function buildATAIdempotentIxs(
-  owner: PublicKey,
-  mints: PublicKey[],
-): TransactionInstruction[] {
+export function buildATAIdempotentIxs(owner: PublicKey, mints: PublicKey[]): TransactionInstruction[] {
   if (mints.length === 0) return [];
 
-  return mints.map(mint => {
+  return mints.map((mint) => {
     const ataAddress = getAssociatedTokenAddressSync(mint, owner, true);
     return createAssociatedTokenAccountIdempotentInstruction(
-      owner,       // payer
-      ataAddress,  // ATA address
-      owner,       // owner
-      mint,        // mint
+      owner, // payer
+      ataAddress, // ATA address
+      owner, // owner
+      mint, // mint
       TOKEN_PROGRAM_ID,
     );
   });
@@ -64,9 +57,7 @@ export async function ensureATAs(
   if (mints.length === 0) return [];
 
   // Derive ATA addresses
-  const ataAddresses = mints.map(mint =>
-    getAssociatedTokenAddressSync(mint, owner, true),
-  );
+  const ataAddresses = mints.map((mint) => getAssociatedTokenAddressSync(mint, owner, true));
 
   // Batch check which accounts exist
   const accountInfos = await connection.getMultipleAccountsInfo(ataAddresses);
@@ -77,10 +68,10 @@ export async function ensureATAs(
       // ATA does not exist — create it (idempotent = no-op if it exists by the time tx lands)
       instructions.push(
         createAssociatedTokenAccountIdempotentInstruction(
-          owner,       // payer
+          owner, // payer
           ataAddresses[i], // ATA address
-          owner,       // owner
-          mints[i],    // mint
+          owner, // owner
+          mints[i], // mint
           TOKEN_PROGRAM_ID,
         ),
       );

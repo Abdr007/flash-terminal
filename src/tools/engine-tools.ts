@@ -45,12 +45,7 @@ export const engineBenchmarkTool: ToolDefinition = {
   execute: async (): Promise<ToolResult> => {
     const rpcMgr = getRpcManagerInstance();
 
-    const lines = [
-      '',
-      `  ${theme.accentBold('ENGINE BENCHMARK')}`,
-      `  ${theme.separator(40)}`,
-      '',
-    ];
+    const lines = ['', `  ${theme.accentBold('ENGINE BENCHMARK')}`, `  ${theme.separator(40)}`, ''];
 
     if (rpcMgr) {
       try {
@@ -68,7 +63,4 @@ export const engineBenchmarkTool: ToolDefinition = {
   },
 };
 
-export const allEngineTools: ToolDefinition[] = [
-  engineStatusTool,
-  engineBenchmarkTool,
-];
+export const allEngineTools: ToolDefinition[] = [engineStatusTool, engineBenchmarkTool];

@@ -129,7 +129,9 @@ export function validateAndLogConfig(): ConfigWarning[] {
         logger.info('CONFIG', `[${w.code}] ${w.message}`);
       }
     }
-  } catch { /* logging must never throw */ }
+  } catch {
+    /* logging must never throw */
+  }
 
   return warnings;
 }

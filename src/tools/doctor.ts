@@ -80,9 +80,10 @@ async function checkEnvironment(
   return { name: 'Environment', passed, details };
 }
 
-async function checkProtocolData(
-  fstats: { getOpenInterest(): Promise<unknown>; getOverviewStats(period?: string): Promise<unknown> },
-): Promise<CheckResult> {
+async function checkProtocolData(fstats: {
+  getOpenInterest(): Promise<unknown>;
+  getOverviewStats(period?: string): Promise<unknown>;
+}): Promise<CheckResult> {
   const details: string[] = [];
   let passed = true;
 
@@ -90,7 +91,10 @@ async function checkProtocolData(
     const { getProtocolStatsService } = await import('../data/protocol-stats.js');
     const pss = getProtocolStatsService(fstats as import('../types/index.js').IDataClient);
     const pStats = await pss.getStats();
-    details.push(theme.positive('  ✔') + ` Markets loaded (${pStats.activeMarkets} active, ${pStats.marketsComingSoon} coming soon)`);
+    details.push(
+      theme.positive('  ✔') +
+        ` Markets loaded (${pStats.activeMarkets} active, ${pStats.marketsComingSoon} coming soon)`,
+    );
   } catch {
     details.push(theme.negative('  ✘') + ' Markets failed to load');
     passed = false;
@@ -172,10 +176,7 @@ async function checkPositionEngine(client: IFlashClient): Promise<CheckResult> {
   return { name: 'Position Engine', passed, details };
 }
 
-function checkWalletSafety(
-  walletManager: WalletManager | undefined,
-  simulationMode: boolean,
-): CheckResult {
+function checkWalletSafety(walletManager: WalletManager | undefined, simulationMode: boolean): CheckResult {
   const details: string[] = [];
   let passed = true;
 
@@ -213,7 +214,13 @@ async function checkMonitorEngine(): Promise<CheckResult> {
 
   try {
     const { POOL_MARKETS } = await import('../config/index.js');
-    const allSymbols = [...new Set(Object.values(POOL_MARKETS).flat().map((s: string) => s.toUpperCase()))];
+    const allSymbols = [
+      ...new Set(
+        Object.values(POOL_MARKETS)
+          .flat()
+          .map((s: string) => s.toUpperCase()),
+      ),
+    ];
 
     if (allSymbols.length > 0) {
       details.push(theme.positive('  ✔') + ` Monitor initialization successful (${allSymbols.length} markets)`);
@@ -258,10 +265,12 @@ export async function runDoctor(
   checks.push(envCheck);
 
   // 2. Protocol Data
-  const protoCheck = await checkProtocolData(context.dataClient as {
-    getOpenInterest(): Promise<unknown>;
-    getOverviewStats(period?: string): Promise<unknown>;
-  });
+  const protoCheck = await checkProtocolData(
+    context.dataClient as {
+      getOpenInterest(): Promise<unknown>;
+      getOverviewStats(period?: string): Promise<unknown>;
+    },
+  );
   checks.push(protoCheck);
 
   // 3. Simulation Guard
@@ -308,19 +317,17 @@ export async function runDoctor(
   const padName = (name: string) => name.padEnd(22);
 
   for (const check of checks) {
-    const status = check.passed
-      ? theme.positive('✔ PASS')
-      : theme.negative('✘ FAIL');
+    const status = check.passed ? theme.positive('✔ PASS') : theme.negative('✘ FAIL');
     lines.push(`  ${padName(check.name)} ${status}`);
   }
 
   lines.push('');
 
-  const allPassed = checks.every(c => c.passed);
+  const allPassed = checks.every((c) => c.passed);
   if (allPassed) {
     lines.push(theme.positive('  All systems operational.'));
   } else {
-    const failCount = checks.filter(c => !c.passed).length;
+    const failCount = checks.filter((c) => !c.passed).length;
     lines.push(theme.warning(`  ${failCount} check(s) failed. Review details above.`));
   }
 

@@ -30,10 +30,10 @@ export interface SigningGuardConfig {
 }
 
 export const DEFAULT_SIGNING_GUARD_CONFIG: SigningGuardConfig = {
-  maxCollateralPerTrade: 0,     // unlimited by default — user sets via env
-  maxPositionSize: 0,           // unlimited by default
-  maxLeverage: 0,               // use market defaults
-  maxTradesPerMinute: 10,       // 10 trades/minute max
+  maxCollateralPerTrade: 0, // unlimited by default — user sets via env
+  maxPositionSize: 0, // unlimited by default
+  maxLeverage: 0, // use market defaults
+  maxTradesPerMinute: 10, // 10 trades/minute max
   minDelayBetweenTradesMs: 3000, // 3s minimum between trades
   auditLogPath: join(homedir(), '.flash', 'signing-audit.log'),
 };
@@ -81,20 +81,16 @@ export class SigningGuard {
    * Check if a trade's parameters are within configured limits.
    * Returns { allowed: true } if OK, { allowed: false, reason } if blocked.
    */
-  checkTradeLimits(params: {
-    collateral: number;
-    leverage: number;
-    sizeUsd: number;
-    market: string;
-  }): TradeLimitCheck {
+  checkTradeLimits(params: { collateral: number; leverage: number; sizeUsd: number; market: string }): TradeLimitCheck {
     const { collateral, leverage, sizeUsd, market: _market } = params;
 
     // Max collateral per trade
     if (this.config.maxCollateralPerTrade > 0 && collateral > this.config.maxCollateralPerTrade) {
       return {
         allowed: false,
-        reason: `Collateral $${collateral.toFixed(2)} exceeds maximum allowed $${this.config.maxCollateralPerTrade.toFixed(2)} per trade. ` +
-                `Adjust MAX_COLLATERAL_PER_TRADE in .env to change this limit.`,
+        reason:
+          `Collateral $${collateral.toFixed(2)} exceeds maximum allowed $${this.config.maxCollateralPerTrade.toFixed(2)} per trade. ` +
+          `Adjust MAX_COLLATERAL_PER_TRADE in .env to change this limit.`,
       };
     }
 
@@ -102,8 +98,9 @@ export class SigningGuard {
     if (this.config.maxPositionSize > 0 && sizeUsd > this.config.maxPositionSize) {
       return {
         allowed: false,
-        reason: `Position size $${sizeUsd.toFixed(2)} exceeds maximum allowed $${this.config.maxPositionSize.toFixed(2)}. ` +
-                `Adjust MAX_POSITION_SIZE in .env to change this limit.`,
+        reason:
+          `Position size $${sizeUsd.toFixed(2)} exceeds maximum allowed $${this.config.maxPositionSize.toFixed(2)}. ` +
+          `Adjust MAX_POSITION_SIZE in .env to change this limit.`,
       };
     }
 
@@ -111,8 +108,9 @@ export class SigningGuard {
     if (this.config.maxLeverage > 0 && leverage > this.config.maxLeverage) {
       return {
         allowed: false,
-        reason: `Leverage ${leverage}x exceeds maximum allowed ${this.config.maxLeverage}x. ` +
-                `Adjust MAX_LEVERAGE in .env to change this limit.`,
+        reason:
+          `Leverage ${leverage}x exceeds maximum allowed ${this.config.maxLeverage}x. ` +
+          `Adjust MAX_LEVERAGE in .env to change this limit.`,
       };
     }
 
@@ -137,8 +135,9 @@ export class SigningGuard {
         const waitSec = ((this.config.minDelayBetweenTradesMs - elapsed) / 1000).toFixed(1);
         return {
           allowed: false,
-          reason: `Rate limited: minimum ${(this.config.minDelayBetweenTradesMs / 1000).toFixed(0)}s between trades. ` +
-                  `Wait ${waitSec}s before submitting another transaction.`,
+          reason:
+            `Rate limited: minimum ${(this.config.minDelayBetweenTradesMs / 1000).toFixed(0)}s between trades. ` +
+            `Wait ${waitSec}s before submitting another transaction.`,
         };
       }
     }
@@ -146,12 +145,13 @@ export class SigningGuard {
     // Max trades per minute
     if (this.config.maxTradesPerMinute > 0) {
       const oneMinuteAgo = now - 60_000;
-      this.signingTimestamps = this.signingTimestamps.filter(t => t > oneMinuteAgo);
+      this.signingTimestamps = this.signingTimestamps.filter((t) => t > oneMinuteAgo);
       if (this.signingTimestamps.length >= this.config.maxTradesPerMinute) {
         return {
           allowed: false,
-          reason: `Rate limited: maximum ${this.config.maxTradesPerMinute} trades per minute reached. ` +
-                  `Wait before submitting another transaction.`,
+          reason:
+            `Rate limited: maximum ${this.config.maxTradesPerMinute} trades per minute reached. ` +
+            `Wait before submitting another transaction.`,
         };
       }
     }
@@ -177,7 +177,7 @@ export class SigningGuard {
     this.lastSigningTime = now;
     // Trim old timestamps (keep last 2 minutes) + enforce hard cap
     const twoMinutesAgo = now - 120_000;
-    this.signingTimestamps = this.signingTimestamps.filter(t => t > twoMinutesAgo);
+    this.signingTimestamps = this.signingTimestamps.filter((t) => t > twoMinutesAgo);
     if (this.signingTimestamps.length > MAX_SIGNING_HISTORY) {
       this.signingTimestamps = this.signingTimestamps.slice(-MAX_SIGNING_HISTORY);
     }
@@ -201,7 +201,11 @@ export class SigningGuard {
           for (let i = 9; i >= 1; i--) {
             const from = i === 1 ? this.config.auditLogPath + '.old' : this.config.auditLogPath + `.old.${i}`;
             const to = this.config.auditLogPath + `.old.${i + 1}`;
-            try { renameSync(from, to); } catch { /* ignore */ }
+            try {
+              renameSync(from, to);
+            } catch {
+              /* ignore */
+            }
           }
           renameSync(this.config.auditLogPath, this.config.auditLogPath + '.old');
           writeFileSync(this.config.auditLogPath, '', { mode: 0o600 });

@@ -16,12 +16,12 @@ export enum MarketRegime {
 
 export interface RegimeState {
   market: string;
-  trendStrength: number;   // 0-1
-  volatility: number;      // 0-1
-  liquidity: number;       // 0-1
-  whaleActivity: number;   // 0-1 (share of whale volume)
+  trendStrength: number; // 0-1
+  volatility: number; // 0-1
+  liquidity: number; // 0-1
+  whaleActivity: number; // 0-1 (share of whale volume)
   regime: MarketRegime;
-  confidence: number;      // 0-1
+  confidence: number; // 0-1
   timestamp: number;
 }
 
@@ -33,8 +33,8 @@ export interface RegimeWeights {
   momentum: number;
   meanReversion: number;
   whaleFollow: number;
-  leverageMultiplier: number;    // 1.0 = normal, <1 = reduce
-  collateralMultiplier: number;  // 1.0 = normal, <1 = reduce
+  leverageMultiplier: number; // 1.0 = normal, <1 = reduce
+  collateralMultiplier: number; // 1.0 = normal, <1 = reduce
 }
 
 /**

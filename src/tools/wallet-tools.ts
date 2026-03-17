@@ -1,11 +1,6 @@
 import { z } from 'zod';
-import {
-  ToolDefinition,
-  ToolResult,
-} from '../types/index.js';
-import {
-  formatUsd,
-} from '../utils/format.js';
+import { ToolDefinition, ToolResult } from '../types/index.js';
+import { formatUsd } from '../utils/format.js';
 import { getErrorMessage } from '../utils/retry.js';
 import { updateLastWallet, clearLastWallet } from '../wallet/session.js';
 import { WalletStore } from '../wallet/wallet-store.js';
@@ -111,11 +106,7 @@ export const walletList: ToolDefinition = {
       };
     }
 
-    const lines = [
-      '',
-      chalk.bold('  Registered Wallets'),
-      chalk.dim('  ─────────────────'),
-    ];
+    const lines = ['', chalk.bold('  Registered Wallets'), chalk.dim('  ─────────────────')];
 
     for (const name of wallets) {
       const isDefault = name === defaultName;
@@ -124,7 +115,9 @@ export const walletList: ToolDefinition = {
       try {
         const entry = walletStore.getWalletEntry(name);
         lines.push(chalk.dim(`    ${entry.path}`));
-      } catch { /* skip */ }
+      } catch {
+        /* skip */
+      }
     }
 
     lines.push('');
@@ -192,10 +185,9 @@ export const walletRemove: ToolDefinition = {
       walletStore.removeWallet(name);
       return {
         success: true,
-        message: [
-          chalk.green(`  Wallet "${name}" removed.`),
-          chalk.dim('  Your keypair file was not deleted.'),
-        ].join('\n'),
+        message: [chalk.green(`  Wallet "${name}" removed.`), chalk.dim('  Your keypair file was not deleted.')].join(
+          '\n',
+        ),
       };
     } catch (error: unknown) {
       return { success: false, message: chalk.red(`  Failed to remove wallet: ${getErrorMessage(error)}`) };
@@ -212,10 +204,7 @@ export const walletStatus: ToolDefinition = {
     const defaultName = walletStore.getDefault();
     const storedCount = walletStore.listWallets().length;
 
-    const lines = [
-      theme.titleBlock('WALLET STATUS'),
-      '',
-    ];
+    const lines = [theme.titleBlock('WALLET STATUS'), ''];
 
     if (wm && wm.isConnected) {
       lines.push(theme.pair('Connected', theme.positive('Yes')));
@@ -264,10 +253,7 @@ export const walletDisconnect: ToolDefinition = {
 
     const isLive = !context.simulationMode;
 
-    const lines = [
-      '',
-      chalk.green('  Wallet disconnected.'),
-    ];
+    const lines = ['', chalk.green('  Wallet disconnected.')];
 
     if (isLive) {
       lines.push('');
@@ -292,7 +278,10 @@ export const walletAddress: ToolDefinition = {
   execute: async (_params, context): Promise<ToolResult> => {
     const wm = context.walletManager;
     if (!wm || !wm.isConnected) {
-      return { success: true, message: chalk.dim('  No wallet connected. Use "wallet import <name> <path>" or "wallet connect <path>".') };
+      return {
+        success: true,
+        message: chalk.dim('  No wallet connected. Use "wallet import <name> <path>" or "wallet connect <path>".'),
+      };
     }
     return {
       success: true,
@@ -320,7 +309,10 @@ export const walletBalance: ToolDefinition = {
         ];
         return { success: true, message: lines.join('\n') };
       }
-      return { success: true, message: chalk.dim('  No wallet connected. Use "wallet import <name> <path>" or "wallet connect <path>".') };
+      return {
+        success: true,
+        message: chalk.dim('  No wallet connected. Use "wallet import <name> <path>" or "wallet connect <path>".'),
+      };
     }
     try {
       const { sol, tokens } = await wm.getTokenBalances();
@@ -363,15 +355,14 @@ export const walletTokens: ToolDefinition = {
         ];
         return { success: true, message: lines.join('\n') };
       }
-      return { success: true, message: chalk.dim('  No wallet connected. Use "wallet import <name> <path>" or "wallet connect <path>".') };
+      return {
+        success: true,
+        message: chalk.dim('  No wallet connected. Use "wallet import <name> <path>" or "wallet connect <path>".'),
+      };
     }
     try {
       const { sol, tokens } = await wm.getTokenBalances();
-      const lines = [
-        theme.titleBlock('TOKENS IN WALLET'),
-        '',
-        theme.pair('SOL', theme.positive(sol.toFixed(4))),
-      ];
+      const lines = [theme.titleBlock('TOKENS IN WALLET'), '', theme.pair('SOL', theme.positive(sol.toFixed(4)))];
       for (const t of tokens) {
         const decimals = t.symbol === 'USDC' || t.symbol === 'USDT' ? 2 : 4;
         lines.push(theme.pair(t.symbol, theme.positive(t.amount.toFixed(decimals))));
@@ -393,10 +384,7 @@ export const flashMarkets: ToolDefinition = {
   parameters: z.object({}),
   execute: async (_params, _context): Promise<ToolResult> => {
     const { POOL_MARKETS, isTradeablePool } = await import('../config/index.js');
-    const lines = [
-      theme.titleBlock('FLASH TRADE MARKETS'),
-      '',
-    ];
+    const lines = [theme.titleBlock('FLASH TRADE MARKETS'), ''];
     for (const [pool, markets] of Object.entries(POOL_MARKETS)) {
       const tradeable = isTradeablePool(pool);
       for (const market of markets) {
@@ -436,7 +424,7 @@ export const walletConnect: ToolDefinition = {
     if (looksLikeName) {
       const { WalletStore: WS } = await import('../wallet/wallet-store.js');
       const store = new WS();
-      const wallets = store.listWallets().map(n => n.toLowerCase());
+      const wallets = store.listWallets().map((n) => n.toLowerCase());
       if (wallets.includes(inputPath.toLowerCase())) {
         return {
           success: false,
@@ -462,12 +450,7 @@ export const walletConnect: ToolDefinition = {
       updateLastWallet('wallet');
 
       const canSign = wm.isConnected;
-      const lines = [
-        '',
-        chalk.green('  Wallet Connected'),
-        chalk.dim('  ─────────────────'),
-        '',
-      ];
+      const lines = ['', chalk.green('  Wallet Connected'), chalk.dim('  ─────────────────'), ''];
 
       if (canSign) {
         lines.push(chalk.bgRed.white.bold('  LIVE TRADING ENABLED '));
