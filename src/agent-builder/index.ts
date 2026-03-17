@@ -11,6 +11,11 @@ export { LiveTradingAgent } from './live-agent.js';
 
 // Strategies
 export { TrendContinuation, BreakoutStrategy, MeanReversionStrategy, OiSkewStrategy, selectBestStrategy } from './strategy.js';
+export { FundingHarvester } from './funding-harvester.js';
+export { MarketScanner } from './market-scanner.js';
+export type { MarketRanking } from './market-scanner.js';
+export { DynamicSizer } from './dynamic-sizer.js';
+export type { SizingResult } from './dynamic-sizer.js';
 
 // Supervisor
 export { AgentSupervisor } from './supervisor.js';

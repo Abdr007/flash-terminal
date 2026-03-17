@@ -20,7 +20,9 @@ import { PositionManager } from './position-manager.js';
 import { StrategyEnsemble } from './strategy-ensemble.js';
 import { DrawdownManager } from './drawdown-manager.js';
 import { RegimeAdapter } from './regime-adapter.js';
-// selectBestStrategy kept as fallback import for non-ensemble path
+import { MarketScanner } from './market-scanner.js';
+import { DynamicSizer } from './dynamic-sizer.js';
+import type { CompositeSignal } from './signal-fusion.js';
 
 import type {
   AgentConfig,
@@ -48,6 +50,10 @@ export class LiveTradingAgent {
   private readonly ensemble: StrategyEnsemble;
   private readonly drawdown: DrawdownManager;
   private readonly regimeAdapter: RegimeAdapter;
+  private readonly scanner: MarketScanner;
+  private readonly sizer: DynamicSizer;
+  /** Signal confirmation: track previous tick's direction per market */
+  private prevSignals: Map<string, string> = new Map();
 
   private state: AgentState;
   private running = false;
@@ -80,8 +86,10 @@ export class LiveTradingAgent {
       minAgreement: 1,
       minConfidence: this.config.risk.minConfidence,
     });
-    this.drawdown = new DrawdownManager(10_000); // Will be reset with actual capital
+    this.drawdown = new DrawdownManager(10_000);
     this.regimeAdapter = new RegimeAdapter();
+    this.scanner = new MarketScanner(3, 0.25); // Top 3 markets, min score 0.25
+    this.sizer = new DynamicSizer(0.02, 0.005, 0.03); // 2% base, 0.5% min, 3% max
     this.state = this.createInitialState();
   }
 
@@ -94,11 +102,11 @@ export class LiveTradingAgent {
     this.stopRequested = false;
     this.setStatus(AgentStatus.RUNNING);
 
-    this.log('info', `Agent "${this.config.name}" v3 starting (in-process)`);
-    this.log('info', `Markets: ${this.config.markets.join(', ')}`);
+    this.log('info', `Agent "${this.config.name}" v4 (quant-level) starting`);
+    this.log('info', `Scanning: ${this.config.markets.join(', ')} → trade top 3`);
     this.log('info', `Strategies: ${this.strategies.map((s) => s.name).join(', ')}`);
-    this.log('info', `Engines: Bayesian fusion, regime-adaptive, drawdown manager, ATR trailing, Kelly sizing, ensemble voting`);
-    this.log('info', `Risk: max ${this.config.risk.maxPositions} pos, max ${this.config.risk.maxLeverage}x, anti-martingale sizing`);
+    this.log('info', `Engines: Bayesian fusion, market scanner, dynamic sizing, regime-adaptive, funding harvester`);
+    this.log('info', `Risk: max ${this.config.risk.maxPositions} pos, max ${this.config.risk.maxLeverage}x, 2-tick confirmation`);
     if (this.config.dryRun) this.log('info', 'DRY RUN — decisions logged but not executed');
 
     // Initialize capital from live context
@@ -189,78 +197,112 @@ export class LiveTradingAgent {
       this.positionMgr.updatePerformance(stats.winRate, stats.avgWin, stats.avgLoss);
     }
 
-    // ANALYZE + DECIDE — for each market using regime + fusion + ensemble
-    // Track positions opened THIS tick to enforce max positions within a single iteration
+    // ─── PHASE 3: SCAN + RANK ALL MARKETS ───────────────────────────
+    // Compute fusion signals for all markets first, then rank
+    const compositeMap = new Map<string, CompositeSignal>();
+    for (const snapshot of snapshots) {
+      const composite = this.fusion.fuse(snapshot, snapshot.fundingRate);
+      compositeMap.set(snapshot.market, composite);
+    }
+
+    // Rank markets by opportunity — only trade the top N
+    const rankedMarkets = this.scanner.rank(snapshots, compositeMap);
+    const tradeableMarkets = new Set(rankedMarkets.map((r) => r.market));
+
+    if (rankedMarkets.length > 0) {
+      this.log('verbose', `Scanner: ${rankedMarkets.map((r) => `${r.market}(${(r.score * 100).toFixed(0)}%)`).join(', ')} | ${snapshots.length - rankedMarkets.length} filtered out`);
+    }
+
+    // ─── PHASE 4: ANALYZE + DECIDE (only ranked markets) ─────────
     let tickPositionCount = this.state.positions.length;
     let tickCapitalAllocated = this.state.positions.reduce((sum, p) => sum + (p.collateralUsd ?? 0), 0);
-    const maxCapitalPct = 0.20; // Never allocate more than 20% of capital total
+    const maxCapitalPct = 0.15; // Max 15% of capital allocated
     const maxCapital = this.state.currentCapital * maxCapitalPct;
 
     for (const snapshot of snapshots) {
-      // Guard: enforce max positions within this tick
-      if (tickPositionCount >= this.config.risk.maxPositions) {
-        this.log('verbose', `${snapshot.market}: skipped — max positions reached (${tickPositionCount}/${this.config.risk.maxPositions})`);
-        continue;
-      }
+      // Only trade scanner-approved markets
+      if (!tradeableMarkets.has(snapshot.market)) continue;
 
-      // Guard: enforce max capital allocation
-      if (tickCapitalAllocated >= maxCapital) {
-        this.log('verbose', `${snapshot.market}: skipped — capital limit reached ($${tickCapitalAllocated.toFixed(0)}/$${maxCapital.toFixed(0)})`);
-        continue;
-      }
+      // Guard: max positions
+      if (tickPositionCount >= this.config.risk.maxPositions) continue;
 
-      // Stage 0: Regime detection
+      // Guard: max capital
+      if (tickCapitalAllocated >= maxCapital) continue;
+
+      // Regime detection
       const regime = this.regimeAdapter.detectRegime(snapshot.market, snapshot.price, snapshot.priceChange24h);
       const regimeParams = this.regimeAdapter.getParams(regime.regime);
 
-      // CRITICAL: Skip trading in RANGING/COMPRESSION unless composite is very strong
-      // This prevents bleeding fees in flat markets where OI skew alone isn't enough
-      if ((regime.regime === 'RANGING' || regime.regime === 'COMPRESSION') && Math.abs(snapshot.priceChange24h) < 2) {
-        this.log('verbose', `${snapshot.market}: regime=${regime.regime} + flat market — waiting for directional move`);
-        continue;
-      }
-
-      // Stage 1: Basic signal detection
+      // Get pre-computed composite
+      const composite = compositeMap.get(snapshot.market)!;
       const marketSignals = this.signals.detect(snapshot);
 
-      // Stage 2: Signal fusion (Bayesian log-odds, OI divergence, correlation-adjusted)
-      const composite = this.fusion.fuse(snapshot, snapshot.fundingRate);
-
-      // CRITICAL: Require minimum composite strength — don't trade on weak signals
-      if (composite.confidence < 0.40 || composite.confirmedFactors < 2) {
-        this.log('verbose', `${snapshot.market}: composite too weak (conf=${(composite.confidence * 100).toFixed(0)}% factors=${composite.confirmedFactors}) — skipping`);
+      // SIGNAL CONFIRMATION: require same direction for 2 consecutive ticks
+      const prevDir = this.prevSignals.get(snapshot.market);
+      this.prevSignals.set(snapshot.market, composite.direction);
+      if (composite.direction !== 'neutral' && prevDir !== composite.direction) {
+        this.log('verbose', `${snapshot.market}: awaiting confirmation (${prevDir ?? 'none'} → ${composite.direction})`);
         continue;
       }
 
-      this.log('verbose', `${snapshot.market}: regime=${regime.regime}(${(regime.confidence * 100).toFixed(0)}%) composite=${composite.compositeScore.toFixed(3)} dir=${composite.direction} conf=${(composite.confidence * 100).toFixed(0)}% factors=${composite.confirmedFactors}/${composite.totalFactors} dd=${(ddState.sizeMultiplier * 100).toFixed(0)}%`);
+      // Minimum signal quality
+      if (composite.confidence < 0.35 || !composite.confirmed) {
+        continue;
+      }
 
-      // Stage 3: Strategy ensemble (performance-weighted voting, regime-filtered)
+      this.log('verbose', `${snapshot.market}: regime=${regime.regime} composite=${composite.compositeScore.toFixed(3)} dir=${composite.direction} conf=${(composite.confidence * 100).toFixed(0)}% factors=${composite.confirmedFactors}F`);
+
+      // Strategy ensemble
       const ensembleDecision = this.ensemble.evaluate(snapshot, marketSignals, composite);
+      if (!ensembleDecision.shouldTrade) continue;
 
-      if (!ensembleDecision.shouldTrade) {
-        if (ensembleDecision.votes.some((v) => v.result.shouldTrade)) {
-          this.log('verbose', `${snapshot.market}: ${ensembleDecision.reasoning}`);
-        }
-        continue;
-      }
+      // Dynamic position sizing
+      const sizing = this.sizer.calculate(
+        this.state.currentCapital,
+        ensembleDecision.confidence,
+        stats,
+        ddState,
+        regimeParams.sizeMultiplier,
+        this.state.consecutiveLosses,
+      );
 
-      // Stage 4: Build trade decision with regime-adaptive params + drawdown sizing
-      const decision = this.buildDecisionFromEnsemble(ensembleDecision, snapshot, composite, regimeParams, ddState.sizeMultiplier * ddState.leverageMultiplier);
+      // Cap to remaining budget
+      const collateral = Math.min(sizing.collateral, Math.max(1, maxCapital - tickCapitalAllocated));
 
-      // Guard: cap collateral to remaining budget
-      if (decision.collateral && tickCapitalAllocated + decision.collateral > maxCapital) {
-        decision.collateral = Math.max(1, Math.floor((maxCapital - tickCapitalAllocated) * 100) / 100);
-      }
+      // Build decision
+      const side = ensembleDecision.side ?? 'long';
+      const maxLev = regimeParams.maxLeverage ?? this.config.risk.maxLeverage;
+      const leverage = this.risk.clampLeverage(Math.min(3, maxLev));
+      const bestResult = ensembleDecision.bestResult;
+      const slDistance = snapshot.price * 0.015 * (regimeParams.stopAtrMultiplier ?? 2.0) / 2.0;
+      const tpDistance = slDistance * (regimeParams.takeProfitR ?? 2.0);
+      const tp = bestResult?.suggestedTp ?? (side === 'long' ? snapshot.price + tpDistance : snapshot.price - tpDistance);
+      const sl = bestResult?.suggestedSl ?? (side === 'long' ? snapshot.price - slDistance : snapshot.price + slDistance);
+
+      const strategyName = ensembleDecision.votes.filter((v) => v.result.shouldTrade && !v.shadow).map((v) => v.strategy).join('+') || 'ensemble';
+
+      const decision: TradeDecision = {
+        action: 'open' as DecisionAction,
+        market: snapshot.market, side, leverage, collateral, tp, sl,
+        strategy: strategyName,
+        confidence: ensembleDecision.confidence,
+        reasoning: `${ensembleDecision.reasoning} | size=$${collateral.toFixed(0)}(${(sizing.sizePct * 100).toFixed(1)}%) | ${regime.regime}`,
+        signals: bestResult?.signals ?? [],
+        riskLevel: 'safe',
+      };
+
+      const riskCheck = this.risk.assessRisk(decision, this.state);
+      decision.riskLevel = riskCheck.riskLevel;
+      decision.blockReason = riskCheck.blockReason;
 
       this.callbacks.onDecision?.(decision);
-      this.log('normal', `Decision: ${decision.action} ${decision.market} ${decision.side ?? ''} | conf=${(decision.confidence * 100).toFixed(0)}% | risk=${decision.riskLevel} | ${decision.reasoning}`);
+      this.log('normal', `Decision: ${decision.action} ${decision.market} ${decision.side} | conf=${(decision.confidence * 100).toFixed(0)}% | $${collateral.toFixed(0)} | ${decision.reasoning}`);
 
-      // Stage 5: Execute
-      if (decision.action === ('open' as DecisionAction) && decision.riskLevel !== 'blocked') {
+      if (decision.riskLevel !== 'blocked') {
         await this.executeTrade(decision, snapshot);
         tickPositionCount++;
-        tickCapitalAllocated += decision.collateral ?? 0;
-      } else if (decision.riskLevel === 'blocked') {
+        tickCapitalAllocated += collateral;
+      } else {
         this.log('normal', `Blocked: ${decision.blockReason}`);
         this.journal.record(decision);
       }
