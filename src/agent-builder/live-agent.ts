@@ -273,20 +273,92 @@ export class LiveTradingAgent {
   private async monitorPositions(positions: Position[]): Promise<void> {
     for (const pos of positions) {
       const pnlPct = pos.pnlPercent ?? 0;
+      const pnl = pos.pnl ?? 0;
+
+      // 1. Emergency stop loss at -15%
       if (pnlPct < -15) {
         this.log('normal', `Emergency close: ${pos.market} ${pos.side} at ${pnlPct.toFixed(1)}% loss`);
-        const decision: TradeDecision = {
-          action: 'close' as DecisionAction,
-          market: pos.market,
-          side: pos.side,
-          strategy: 'risk_monitor',
-          confidence: 1,
-          reasoning: `Emergency stop loss: ${pnlPct.toFixed(1)}% drawdown`,
-          signals: [],
-          riskLevel: 'safe',
-        };
-        await this.executeClose(decision, pos);
+        await this.closeWithReason(pos, 'risk_monitor', `Emergency stop loss: ${pnlPct.toFixed(1)}% drawdown`);
+        continue;
       }
+
+      // 2. Take profit at +5% or more
+      if (pnlPct > 5) {
+        this.log('normal', `Taking profit: ${pos.market} ${pos.side} at +${pnlPct.toFixed(1)}%`);
+        await this.closeWithReason(pos, 'take_profit', `Take profit at +${pnlPct.toFixed(1)}% ($${pnl.toFixed(2)})`);
+        continue;
+      }
+
+      // 3. Stop loss at -3%
+      if (pnlPct < -3) {
+        this.log('normal', `Stop loss: ${pos.market} ${pos.side} at ${pnlPct.toFixed(1)}%`);
+        await this.closeWithReason(pos, 'stop_loss', `Stop loss at ${pnlPct.toFixed(1)}% ($${pnl.toFixed(2)})`);
+        continue;
+      }
+
+      // 4. Signal invalidation — check if OI skew has reversed
+      const snapshot = await this.getMarketSnapshot(pos.market);
+      if (snapshot) {
+        const signals = this.signals.detect(snapshot);
+        const oiSignal = signals.find((s) => s.source === 'oi_imbalance');
+
+        // If we're short but OI is now balanced/bearish, close (signal gone)
+        if (pos.side === 'short' && (!oiSignal || oiSignal.direction !== 'bearish')) {
+          this.log('normal', `Signal invalidated: ${pos.market} ${pos.side} — OI rebalanced`);
+          await this.closeWithReason(pos, 'signal_invalidation', `OI skew reversed — closing ${pos.market} ${pos.side}`);
+          continue;
+        }
+        // If we're long but OI is now balanced/bullish, close
+        if (pos.side === 'long' && (!oiSignal || oiSignal.direction !== 'bullish')) {
+          this.log('normal', `Signal invalidated: ${pos.market} ${pos.side} — OI rebalanced`);
+          await this.closeWithReason(pos, 'signal_invalidation', `OI skew reversed — closing ${pos.market} ${pos.side}`);
+          continue;
+        }
+      }
+    }
+  }
+
+  private async closeWithReason(pos: Position, strategy: string, reasoning: string): Promise<void> {
+    const decision: TradeDecision = {
+      action: 'close' as DecisionAction,
+      market: pos.market,
+      side: pos.side,
+      strategy,
+      confidence: 1,
+      reasoning,
+      signals: [],
+      riskLevel: 'safe',
+    };
+    await this.executeClose(decision, pos);
+  }
+
+  private async getMarketSnapshot(market: string): Promise<MarketSnapshot | null> {
+    try {
+      const { SolanaInspector } = await import('../agent/solana-inspector.js');
+      const inspector = new SolanaInspector(this.context.flashClient, this.context.dataClient);
+      const [marketData] = await inspector.getMarkets(market);
+      if (!marketData) return null;
+
+      let oiData: { markets?: Array<{ market: string; longOi: number; shortOi: number }> } | null = null;
+      try { oiData = await inspector.getOpenInterest(); } catch { /* optional */ }
+
+      const md = marketData as MarketData & Record<string, unknown>;
+      const oiMarket = oiData?.markets?.find((m) => m.market.toUpperCase() === market.toUpperCase());
+      const longOi = oiMarket?.longOi ?? (md.openInterestLong as number) ?? 0;
+      const shortOi = oiMarket?.shortOi ?? (md.openInterestShort as number) ?? 0;
+      const totalOi = longOi + shortOi;
+
+      return {
+        market: market.toUpperCase(),
+        price: marketData.price ?? 0,
+        priceChange24h: marketData.priceChange24h ?? 0,
+        volume24h: 0,
+        longOi, shortOi,
+        oiRatio: totalOi > 0 ? longOi / totalOi : 0.5,
+        timestamp: Date.now(),
+      };
+    } catch {
+      return null;
     }
   }
 
