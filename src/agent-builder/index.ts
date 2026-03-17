@@ -25,6 +25,10 @@ export { PositionManager } from './position-manager.js';
 export type { ManagedPosition, PositionSizeResult, PositionManagerConfig } from './position-manager.js';
 export { StrategyEnsemble } from './strategy-ensemble.js';
 export type { StrategyVote, EnsembleDecision } from './strategy-ensemble.js';
+export { DrawdownManager } from './drawdown-manager.js';
+export type { DrawdownState, DrawdownConfig } from './drawdown-manager.js';
+export { RegimeAdapter } from './regime-adapter.js';
+export type { RegimeType, RegimeDetection, RegimeParams } from './regime-adapter.js';
 
 // Components
 export { RiskManager } from './risk-manager.js';

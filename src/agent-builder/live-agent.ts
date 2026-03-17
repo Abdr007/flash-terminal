@@ -18,6 +18,8 @@ import { TradeJournal } from './trade-journal.js';
 import { SignalFusionEngine } from './signal-fusion.js';
 import { PositionManager } from './position-manager.js';
 import { StrategyEnsemble } from './strategy-ensemble.js';
+import { DrawdownManager } from './drawdown-manager.js';
+import { RegimeAdapter } from './regime-adapter.js';
 // selectBestStrategy kept as fallback import for non-ensemble path
 
 import type {
@@ -44,6 +46,8 @@ export class LiveTradingAgent {
   private readonly fusion: SignalFusionEngine;
   private readonly positionMgr: PositionManager;
   private readonly ensemble: StrategyEnsemble;
+  private readonly drawdown: DrawdownManager;
+  private readonly regimeAdapter: RegimeAdapter;
 
   private state: AgentState;
   private running = false;
@@ -76,6 +80,8 @@ export class LiveTradingAgent {
       minAgreement: 1,
       minConfidence: this.config.risk.minConfidence,
     });
+    this.drawdown = new DrawdownManager(10_000); // Will be reset with actual capital
+    this.regimeAdapter = new RegimeAdapter();
     this.state = this.createInitialState();
   }
 
@@ -88,11 +94,11 @@ export class LiveTradingAgent {
     this.stopRequested = false;
     this.setStatus(AgentStatus.RUNNING);
 
-    this.log('info', `Agent "${this.config.name}" v2 starting (in-process)`);
+    this.log('info', `Agent "${this.config.name}" v3 starting (in-process)`);
     this.log('info', `Markets: ${this.config.markets.join(', ')}`);
     this.log('info', `Strategies: ${this.strategies.map((s) => s.name).join(', ')}`);
-    this.log('info', `Engines: signal-fusion, position-manager (ATR trailing/Kelly), strategy-ensemble`);
-    this.log('info', `Risk: max ${this.config.risk.maxPositions} positions, max ${this.config.risk.maxLeverage}x, Kelly sizing`);
+    this.log('info', `Engines: Bayesian fusion, regime-adaptive, drawdown manager, ATR trailing, Kelly sizing, ensemble voting`);
+    this.log('info', `Risk: max ${this.config.risk.maxPositions} pos, max ${this.config.risk.maxLeverage}x, anti-martingale sizing`);
     if (this.config.dryRun) this.log('info', 'DRY RUN — decisions logged but not executed');
 
     // Initialize capital from live context
@@ -164,6 +170,16 @@ export class LiveTradingAgent {
     this.state.positions = positions;
     this.state.currentCapital = await this.fetchCapitalLive();
 
+    // DRAWDOWN CHECK — anti-martingale circuit breaker
+    const ddState = this.drawdown.update(this.state.currentCapital);
+    if (ddState.halted) {
+      this.safetyStop(`Drawdown manager halt: ${ddState.haltReason}`);
+      return;
+    }
+    if (ddState.sizeMultiplier < 0.15) {
+      this.log('normal', `Drawdown ${(ddState.drawdownPct * 100).toFixed(1)}% — sizing reduced to ${(ddState.sizeMultiplier * 100).toFixed(0)}%`);
+    }
+
     // MONITOR — check existing positions with advanced position manager
     await this.monitorPositions(positions);
 
@@ -173,17 +189,21 @@ export class LiveTradingAgent {
       this.positionMgr.updatePerformance(stats.winRate, stats.avgWin, stats.avgLoss);
     }
 
-    // ANALYZE + DECIDE — for each market using signal fusion + ensemble
+    // ANALYZE + DECIDE — for each market using regime + fusion + ensemble
     for (const snapshot of snapshots) {
+      // Stage 0: Regime detection
+      const regime = this.regimeAdapter.detectRegime(snapshot.market, snapshot.price, snapshot.priceChange24h);
+      const regimeParams = this.regimeAdapter.getParams(regime.regime);
+
       // Stage 1: Basic signal detection
       const marketSignals = this.signals.detect(snapshot);
 
-      // Stage 2: Signal fusion (multi-factor weighted scoring)
+      // Stage 2: Signal fusion (Bayesian log-odds, OI divergence, correlation-adjusted)
       const composite = this.fusion.fuse(snapshot, snapshot.fundingRate);
 
-      this.log('verbose', `${snapshot.market}: composite=${composite.compositeScore.toFixed(3)} dir=${composite.direction} conf=${(composite.confidence * 100).toFixed(0)}% factors=${composite.confirmedFactors}/${composite.totalFactors} confirmed=${composite.confirmed}`);
+      this.log('verbose', `${snapshot.market}: regime=${regime.regime}(${(regime.confidence * 100).toFixed(0)}%) composite=${composite.compositeScore.toFixed(3)} dir=${composite.direction} conf=${(composite.confidence * 100).toFixed(0)}% factors=${composite.confirmedFactors}/${composite.totalFactors} dd=${(ddState.sizeMultiplier * 100).toFixed(0)}%`);
 
-      // Stage 3: Strategy ensemble (performance-weighted voting)
+      // Stage 3: Strategy ensemble (performance-weighted voting, regime-filtered)
       const ensembleDecision = this.ensemble.evaluate(snapshot, marketSignals, composite);
 
       if (!ensembleDecision.shouldTrade) {
@@ -193,8 +213,8 @@ export class LiveTradingAgent {
         continue;
       }
 
-      // Stage 4: Build trade decision with risk assessment
-      const decision = this.buildDecisionFromEnsemble(ensembleDecision, snapshot, composite);
+      // Stage 4: Build trade decision with regime-adaptive params + drawdown sizing
+      const decision = this.buildDecisionFromEnsemble(ensembleDecision, snapshot, composite, regimeParams, ddState.sizeMultiplier * ddState.leverageMultiplier);
 
       this.callbacks.onDecision?.(decision);
       this.log('normal', `Decision: ${decision.action} ${decision.market} ${decision.side ?? ''} | conf=${(decision.confidence * 100).toFixed(0)}% | risk=${decision.riskLevel} | ${decision.reasoning}`);
@@ -296,6 +316,7 @@ export class LiveTradingAgent {
     if (capital > 0) {
       this.state.startingCapital = capital;
       this.state.currentCapital = capital;
+      this.drawdown.reset(capital);
       this.log('info', `Starting capital: $${capital.toFixed(2)}${this.context.simulationMode ? ' (simulation)' : ''}`);
       return;
     }
@@ -408,12 +429,16 @@ export class LiveTradingAgent {
     ensembleDecision: import('./strategy-ensemble.js').EnsembleDecision,
     snapshot: MarketSnapshot,
     composite: import('./signal-fusion.js').CompositeSignal,
+    regimeParams?: import('./regime-adapter.js').RegimeParams,
+    drawdownMultiplier = 1.0,
   ): TradeDecision {
     const side = ensembleDecision.side ?? 'long';
-    const leverage = this.risk.clampLeverage(3);
+    const maxLev = regimeParams?.maxLeverage ?? this.config.risk.maxLeverage;
+    const leverage = this.risk.clampLeverage(Math.min(3, maxLev));
 
-    // Kelly-criterion position sizing using composite signal confidence
-    const slDistance = snapshot.price * 0.015; // 1.5% initial SL
+    // Kelly-criterion position sizing + regime + drawdown multipliers
+    const atrMult = regimeParams?.stopAtrMultiplier ?? 2.0;
+    const slDistance = snapshot.price * (0.015 * atrMult / 2.0); // Scale SL by regime
     const stopLoss = side === 'long' ? snapshot.price - slDistance : snapshot.price + slDistance;
     const sizing = this.positionMgr.calculatePositionSize(
       this.state.currentCapital,
@@ -423,8 +448,14 @@ export class LiveTradingAgent {
       leverage,
     );
 
+    // Apply regime size multiplier + drawdown anti-martingale multiplier
+    const regimeMult = regimeParams?.sizeMultiplier ?? 1.0;
+    const adjustedCollateral = Math.max(1, sizing.collateral * regimeMult * drawdownMultiplier);
+
     const bestResult = ensembleDecision.bestResult;
-    const tp = bestResult?.suggestedTp ?? (side === 'long' ? snapshot.price * 1.02 : snapshot.price * 0.98);
+    const tpR = regimeParams?.takeProfitR ?? 2.0;
+    const tpDistance = slDistance * tpR;
+    const tp = bestResult?.suggestedTp ?? (side === 'long' ? snapshot.price + tpDistance : snapshot.price - tpDistance);
     const sl = bestResult?.suggestedSl ?? stopLoss;
 
     const strategyName = ensembleDecision.votes
@@ -437,12 +468,12 @@ export class LiveTradingAgent {
       market: snapshot.market,
       side,
       leverage,
-      collateral: sizing.collateral,
+      collateral: adjustedCollateral,
       tp,
       sl,
       strategy: strategyName || 'ensemble',
       confidence: ensembleDecision.confidence,
-      reasoning: `${ensembleDecision.reasoning} | Fusion: ${composite.direction} ${(composite.confidence * 100).toFixed(0)}% (${composite.confirmedFactors}F) | Size: $${sizing.collateral.toFixed(0)} (${sizing.method})`,
+      reasoning: `${ensembleDecision.reasoning} | Fusion: ${composite.direction} ${(composite.confidence * 100).toFixed(0)}% (${composite.confirmedFactors}F) | Size: $${adjustedCollateral.toFixed(0)} (${sizing.method}, regime=${regimeMult.toFixed(1)}x, dd=${drawdownMultiplier.toFixed(2)}x)`,
       signals: bestResult?.signals ?? [],
       riskLevel: 'safe',
     };

@@ -60,12 +60,14 @@ interface FactorConfig {
 }
 
 const DEFAULT_FACTOR_CONFIGS: Record<string, FactorConfig> = {
-  oi_skew:        { baseWeight: 0.25, activationThreshold: 0.5 },
-  funding_rate:   { baseWeight: 0.20, activationThreshold: 0.3 },
-  price_momentum: { baseWeight: 0.20, activationThreshold: 0.5 },
-  volume_surge:   { baseWeight: 0.10, activationThreshold: 0.8 },
-  volatility:     { baseWeight: 0.10, activationThreshold: 0.5 },
-  liquidation:    { baseWeight: 0.15, activationThreshold: 0.3 },
+  oi_skew:        { baseWeight: 0.20, activationThreshold: 0.5 },
+  oi_divergence:  { baseWeight: 0.18, activationThreshold: 0.3 },
+  funding_rate:   { baseWeight: 0.15, activationThreshold: 0.3 },
+  price_momentum: { baseWeight: 0.15, activationThreshold: 0.5 },
+  volume_surge:   { baseWeight: 0.08, activationThreshold: 0.8 },
+  volatility:     { baseWeight: 0.08, activationThreshold: 0.5 },
+  liquidation:    { baseWeight: 0.10, activationThreshold: 0.3 },
+  smart_money:    { baseWeight: 0.06, activationThreshold: 0.5 },
 };
 
 // Minimum factors that must agree for a confirmed signal
@@ -125,8 +127,15 @@ export class SignalFusionEngine {
     const liqFactor = this.computeLiquidationFactor(snapshot, now);
     if (liqFactor) factors.push(liqFactor);
 
-    // Compute composite score
-    return this.computeComposite(snapshot.market, factors);
+    // Factor 7: OI Divergence (price vs OI direction — the killer signal)
+    const oiDivFactor = this.computeOiDivergenceFactor(snapshot, now);
+    if (oiDivFactor) factors.push(oiDivFactor);
+
+    // Apply correlation adjustment — prevent correlated factors from double-counting
+    this.adjustForCorrelation(factors);
+
+    // Compute composite score using Bayesian log-odds fusion
+    return this.computeCompositeBayesian(snapshot.market, factors);
   }
 
   /**
@@ -299,7 +308,162 @@ export class SignalFusionEngine {
     };
   }
 
-  // ─── Composite Computation ─────────────────────────────────────────
+  // ─── OI Divergence (the killer signal) ──────────────────────────────
+
+  /** OI history for divergence computation */
+  private oiHistory: Map<string, number[]> = new Map();
+
+  private computeOiDivergenceFactor(snapshot: MarketSnapshot, now: number): SignalFactor | null {
+    const totalOi = snapshot.longOi + snapshot.shortOi;
+    if (totalOi === 0) return null;
+
+    // Record OI for history
+    const oiKey = `oi_total_${snapshot.market}`;
+    const oiHist = this.oiHistory.get(oiKey) ?? [];
+    oiHist.push(totalOi);
+    if (oiHist.length > 10) oiHist.shift();
+    this.oiHistory.set(oiKey, oiHist);
+
+    if (oiHist.length < 3) return null;
+
+    // OI change direction
+    const oiChange = (totalOi - oiHist[0]) / oiHist[0];
+    const priceChange = snapshot.priceChange24h / 100;
+
+    // Divergence: price and OI moving in opposite directions
+    // Price up + OI down = longs closing, move weakening → BEARISH
+    // Price down + OI down = shorts closing, move weakening → BULLISH
+    // Price up + OI up = new longs entering, trend confirming → BULLISH
+    // Price down + OI up = new shorts entering, trend confirming → BEARISH
+    const diverging = Math.sign(priceChange) !== Math.sign(oiChange) && Math.abs(oiChange) > 0.01;
+    const confirming = Math.sign(priceChange) === Math.sign(oiChange) && Math.abs(oiChange) > 0.01;
+
+    if (!diverging && !confirming) return null;
+
+    let direction: SignalDirection;
+    let confidence: number;
+
+    if (diverging) {
+      // Divergence is contrarian — fade the price move
+      direction = priceChange > 0 ? 'bearish' : 'bullish';
+      confidence = Math.min(0.8, Math.abs(oiChange) * 5 + Math.abs(priceChange) * 3);
+    } else {
+      // Confirmation — follow the trend
+      direction = priceChange > 0 ? 'bullish' : 'bearish';
+      confidence = Math.min(0.7, Math.abs(oiChange) * 3 + Math.abs(priceChange) * 2);
+    }
+
+    const zScore = this.zScoreNormalize(`oi_div_${snapshot.market}`, oiChange * Math.sign(priceChange));
+
+    return {
+      name: 'oi_divergence',
+      direction,
+      rawValue: oiChange,
+      zScore,
+      confidence,
+      weight: this.getAdaptiveWeight('oi_divergence'),
+      timestamp: now,
+    };
+  }
+
+  // ─── Correlation Adjustment ────────────────────────────────────────
+
+  /**
+   * Reduce weights of correlated factors to prevent double-counting.
+   * OI skew and liquidation are highly correlated — adjust down.
+   */
+  private adjustForCorrelation(factors: SignalFactor[]): void {
+    const CORRELATED_PAIRS: Array<[string, string, number]> = [
+      ['oi_skew', 'liquidation', 0.8],     // Very correlated
+      ['oi_skew', 'oi_divergence', 0.5],    // Moderately correlated
+      ['price_momentum', 'volume_surge', 0.4], // Somewhat correlated
+      ['funding_rate', 'oi_skew', 0.6],     // Correlated
+    ];
+
+    for (const [a, b, corrStrength] of CORRELATED_PAIRS) {
+      const factorA = factors.find((f) => f.name === a);
+      const factorB = factors.find((f) => f.name === b);
+      if (!factorA || !factorB) continue;
+
+      // Both must be directional and agreeing to be "double-counting"
+      if (factorA.direction === factorB.direction && factorA.direction !== 'neutral') {
+        // Reduce the lower-weight factor
+        const reduction = corrStrength * 0.4; // Max 40% reduction at correlation=1
+        if (factorA.weight < factorB.weight) {
+          factorA.weight *= (1 - reduction);
+        } else {
+          factorB.weight *= (1 - reduction);
+        }
+      }
+    }
+  }
+
+  // ─── Bayesian Composite (Log-Odds Fusion) ──────────────────────────
+
+  /**
+   * Bayesian signal combination using log-odds.
+   * Each factor is treated as evidence updating a prior.
+   * This is mathematically optimal for combining independent signals.
+   */
+  private computeCompositeBayesian(market: string, factors: SignalFactor[]): CompositeSignal {
+    if (factors.length === 0) {
+      return {
+        market, compositeScore: 0, strength: 0, direction: 'neutral',
+        confidence: 0, confirmedFactors: 0, totalFactors: 0, factors: [], confirmed: false,
+      };
+    }
+
+    // Apply signal decay
+    const now = Date.now();
+    for (const f of factors) {
+      const age = now - f.timestamp;
+      if (age > SIGNAL_DECAY_MS) {
+        const periods = Math.floor(age / SIGNAL_DECAY_MS);
+        f.confidence *= Math.pow(SIGNAL_DECAY_RATE, periods);
+      }
+    }
+
+    // Bayesian log-odds fusion
+    let totalLogOdds = 0;
+    for (const f of factors) {
+      if (f.direction === 'neutral') continue;
+
+      const dirValue = f.direction === 'bullish' ? 1 : -1;
+      // Convert confidence to probability: 0.5 + direction * confidence * 0.5
+      const p = Math.max(0.02, Math.min(0.98, 0.5 + dirValue * f.confidence * 0.5));
+      const logOdds = f.weight * Math.log(p / (1 - p));
+      totalLogOdds += logOdds;
+    }
+
+    // Convert back to probability
+    const combinedProb = 1 / (1 + Math.exp(-totalLogOdds));
+    // Map probability to composite score: 0.5 = neutral, >0.5 = bullish, <0.5 = bearish
+    const compositeScore = (combinedProb - 0.5) * 2; // -1 to +1
+    const strength = Math.min(1, Math.abs(compositeScore));
+
+    const directionalFactors = factors.filter((f) => f.direction !== 'neutral');
+    const dominantDir: SignalDirection = compositeScore > 0.05 ? 'bullish' : compositeScore < -0.05 ? 'bearish' : 'neutral';
+    const confirmedFactors = directionalFactors.filter((f) => f.direction === dominantDir).length;
+
+    // Confidence from Bayesian posterior
+    const confidence = Math.min(0.95, Math.abs(combinedProb - 0.5) * 2);
+    const confirmationBoost = confirmedFactors >= 3 ? 0.1 : confirmedFactors >= 2 ? 0.05 : 0;
+    const finalConfidence = Math.min(0.95, confidence + confirmationBoost);
+
+    return {
+      market,
+      compositeScore,
+      strength,
+      direction: dominantDir,
+      confidence: finalConfidence,
+      confirmedFactors,
+      totalFactors: directionalFactors.length,
+      factors,
+      confirmed: confirmedFactors >= MIN_CONFIRMATION_FACTORS || (confirmedFactors >= 1 && finalConfidence > 0.7),
+    };
+  }
+
+  // ─── Legacy Composite (kept for reference) ─────────────────────────
 
   private computeComposite(market: string, factors: SignalFactor[]): CompositeSignal {
     if (factors.length === 0) {
