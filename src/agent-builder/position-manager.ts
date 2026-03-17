@@ -76,11 +76,11 @@ export interface PositionManagerConfig {
 }
 
 const DEFAULT_CONFIG: PositionManagerConfig = {
-  atrMultiplier: 2.0,
+  atrMultiplier: 4.0,    // Wide trail — don't get stopped by noise
   scaleOutLevels: [1, 2, 3],
   scaleOutPercents: [30, 30, 40],
-  maxFlatTicks: 20,
-  flatThresholdPct: 0.5,
+  maxFlatTicks: 40,      // 10 min at 15s — give trades time to work
+  flatThresholdPct: 0.3,
   maxRiskPct: 0.02,
   kellyFraction: 0.25,
 };
@@ -269,8 +269,8 @@ export class PositionManager {
       return managed;
     }
 
-    // Hard stop loss at -5%
-    if (pnlPct < -5) {
+    // Hard stop loss at -8%
+    if (pnlPct < -8) {
       managed.action = 'close';
       managed.reason = `Hard stop loss at ${pnlPct.toFixed(1)}%`;
       return managed;

@@ -213,11 +213,24 @@ export class LiveTradingAgent {
       const regime = this.regimeAdapter.detectRegime(snapshot.market, snapshot.price, snapshot.priceChange24h);
       const regimeParams = this.regimeAdapter.getParams(regime.regime);
 
+      // CRITICAL: Skip trading in RANGING/COMPRESSION unless composite is very strong
+      // This prevents bleeding fees in flat markets where OI skew alone isn't enough
+      if ((regime.regime === 'RANGING' || regime.regime === 'COMPRESSION') && Math.abs(snapshot.priceChange24h) < 2) {
+        this.log('verbose', `${snapshot.market}: regime=${regime.regime} + flat market — waiting for directional move`);
+        continue;
+      }
+
       // Stage 1: Basic signal detection
       const marketSignals = this.signals.detect(snapshot);
 
       // Stage 2: Signal fusion (Bayesian log-odds, OI divergence, correlation-adjusted)
       const composite = this.fusion.fuse(snapshot, snapshot.fundingRate);
+
+      // CRITICAL: Require minimum composite strength — don't trade on weak signals
+      if (composite.confidence < 0.40 || composite.confirmedFactors < 2) {
+        this.log('verbose', `${snapshot.market}: composite too weak (conf=${(composite.confidence * 100).toFixed(0)}% factors=${composite.confirmedFactors}) — skipping`);
+        continue;
+      }
 
       this.log('verbose', `${snapshot.market}: regime=${regime.regime}(${(regime.confidence * 100).toFixed(0)}%) composite=${composite.compositeScore.toFixed(3)} dir=${composite.direction} conf=${(composite.confidence * 100).toFixed(0)}% factors=${composite.confirmedFactors}/${composite.totalFactors} dd=${(ddState.sizeMultiplier * 100).toFixed(0)}%`);
 
