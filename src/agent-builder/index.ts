@@ -5,8 +5,9 @@
  *   import { TradingAgent, TrendContinuation, BreakoutStrategy } from 'flash-terminal/agent-builder';
  */
 
-// Core agent
+// Core agents
 export { TradingAgent } from './agent.js';
+export { LiveTradingAgent } from './live-agent.js';
 
 // Strategies
 export { TrendContinuation, BreakoutStrategy, MeanReversionStrategy, selectBestStrategy } from './strategy.js';

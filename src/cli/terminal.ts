@@ -1478,6 +1478,28 @@ export class FlashTerminal {
 
     const lower = input.toLowerCase();
 
+    // ─── Agent Commands (in-process) ───────────────────────────────
+    if (lower === 'agent start' || lower === 'agent start --dry-run' || lower === 'agent start dry-run' || lower === 'agent start dryrun') {
+      await this.handleAgentStart(true);
+      return;
+    }
+    if (lower === 'agent start --live' || lower === 'agent start live' || lower === 'agent live') {
+      await this.handleAgentStart(false);
+      return;
+    }
+    if (lower === 'agent stop') {
+      this.handleAgentStop();
+      return;
+    }
+    if (lower === 'agent status') {
+      this.handleAgentStatus();
+      return;
+    }
+    if (lower === 'agent report' || lower === 'agent evaluate') {
+      this.handleAgentReport();
+      return;
+    }
+
     // ─── Doctor Diagnostic Intercept ───────────────────────────────
     // ─── Session Metrics ──────────────────────────────────────
     if (lower === 'metrics' || lower === 'flash metrics' || lower === 'session metrics') {
@@ -2632,6 +2654,129 @@ export class FlashTerminal {
 
   private async handleSourceVerify(market: string): Promise<void> {
     return sourceVerifyView(this.getProtocolViewDeps(), market);
+  }
+
+  // ─── Agent Handlers ─────────────────────────────────────────────
+
+  private liveAgent: import('../agent-builder/live-agent.js').LiveTradingAgent | null = null;
+
+  private async handleAgentStart(dryRun: boolean): Promise<void> {
+    if (this.liveAgent?.isRunning) {
+      console.log(chalk.yellow('  Agent is already running. Use "agent stop" first.'));
+      return;
+    }
+
+    const { LiveTradingAgent } = await import('../agent-builder/live-agent.js');
+    const { TrendContinuation, BreakoutStrategy, MeanReversionStrategy } = await import('../agent-builder/strategy.js');
+
+    this.liveAgent = new LiveTradingAgent(
+      this.context,
+      [new TrendContinuation(), new BreakoutStrategy(), new MeanReversionStrategy()],
+      {
+        name: 'flash-agent',
+        markets: ['SOL', 'BTC', 'ETH'],
+        pollIntervalMs: 15_000,
+        maxIterations: 100,
+        dryRun,
+        logLevel: 'normal',
+        risk: {
+          maxPositions: 2,
+          maxLeverage: 3,
+          positionSizePct: 0.02,
+          maxDailyLossPct: 0.05,
+          cooldownAfterLossMs: 300_000,
+          minConfidence: 0.6,
+          allowedMarkets: [],
+        },
+      },
+      {
+        onDecision: (decision) => {
+          if (decision.action === 'open') {
+            console.log('');
+            console.log(chalk.cyan(`  SIGNAL: ${decision.side?.toUpperCase()} ${decision.market} | ${decision.strategy} | conf=${(decision.confidence * 100).toFixed(0)}% | risk=${decision.riskLevel}`));
+            console.log(chalk.dim(`  ${decision.reasoning}`));
+            if (decision.tp) console.log(chalk.dim(`  TP: $${decision.tp} | SL: $${decision.sl}`));
+          }
+        },
+        onTrade: (entry) => {
+          const icon = entry.outcome === 'win' ? chalk.green('W') : entry.outcome === 'loss' ? chalk.red('L') : chalk.dim('*');
+          console.log(`  [${icon}] ${entry.action} ${entry.market} ${entry.side ?? ''} | ${entry.strategy}`);
+        },
+        onSafetyStop: (reason) => {
+          console.log('');
+          console.log(chalk.red(`  SAFETY STOP: ${reason}`));
+          console.log('');
+        },
+      },
+    );
+
+    console.log('');
+    console.log(chalk.cyan(`  Agent starting (${dryRun ? 'DRY RUN' : 'LIVE'})...`));
+    console.log(chalk.dim('  Type "agent stop" to stop, "agent status" for state'));
+    console.log('');
+
+    // Run in background — don't block the REPL
+    this.liveAgent.start().then(() => {
+      console.log('');
+      console.log(chalk.dim('  Agent finished.'));
+      this.handleAgentReport();
+      console.log('');
+      this.rl.prompt();
+    }).catch((err: Error) => {
+      console.log(chalk.red(`  Agent error: ${err.message}`));
+      this.rl.prompt();
+    });
+  }
+
+  private handleAgentStop(): void {
+    if (!this.liveAgent?.isRunning) {
+      console.log(chalk.dim('  No agent running.'));
+      return;
+    }
+    this.liveAgent.stop();
+    console.log(chalk.yellow('  Agent stop requested.'));
+  }
+
+  private handleAgentStatus(): void {
+    if (!this.liveAgent) {
+      console.log(chalk.dim('  No agent session.'));
+      return;
+    }
+    const state = this.liveAgent.getState();
+    const stats = this.liveAgent.getJournal().getStats();
+    console.log('');
+    console.log(`  ${theme.accentBold('AGENT STATUS')}`);
+    console.log(`  ${theme.separator(40)}`);
+    console.log(theme.pair('Status', String(state.status)));
+    console.log(theme.pair('Iteration', String(state.iteration)));
+    console.log(theme.pair('Capital', `$${state.currentCapital.toFixed(2)}`));
+    console.log(theme.pair('Daily PnL', `$${state.dailyPnl.toFixed(2)}`));
+    console.log(theme.pair('Positions', String(state.positions.length)));
+    console.log(theme.pair('Trades', `${stats.totalTrades} (${stats.wins}W/${stats.losses}L)`));
+    console.log(theme.pair('Win Rate', `${(stats.winRate * 100).toFixed(1)}%`));
+    if (state.inCooldown) console.log(theme.pair('Cooldown', `${Math.ceil((state.cooldownUntil - Date.now()) / 1000)}s remaining`));
+    if (state.safetyStopReason) console.log(chalk.red(`  Safety Stop: ${state.safetyStopReason}`));
+    console.log('');
+  }
+
+  private async handleAgentReport(): Promise<void> {
+    if (!this.liveAgent) {
+      console.log(chalk.dim('  No agent session to evaluate.'));
+      return;
+    }
+    try {
+      const { SessionEvaluator } = await import('../agent-builder/session-evaluator.js');
+      const evaluator = new SessionEvaluator();
+      const report = evaluator.evaluate(this.liveAgent.getJournal(), this.liveAgent.getState());
+      console.log('');
+      console.log('  ' + evaluator.formatReport(report).split('\n').join('\n  '));
+      console.log('');
+    } catch {
+      // Fallback: just print journal stats
+      console.log('');
+      console.log('  ' + this.liveAgent.getJournal().formatStats().split('\n').join('\n  '));
+      console.log('');
+    }
   }
 
   private async handlePositionDebug(market: string): Promise<void> {
