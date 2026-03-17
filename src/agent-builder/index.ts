@@ -10,7 +10,7 @@ export { TradingAgent } from './agent.js';
 export { LiveTradingAgent } from './live-agent.js';
 
 // Strategies
-export { TrendContinuation, BreakoutStrategy, MeanReversionStrategy, selectBestStrategy } from './strategy.js';
+export { TrendContinuation, BreakoutStrategy, MeanReversionStrategy, OiSkewStrategy, selectBestStrategy } from './strategy.js';
 
 // Supervisor
 export { AgentSupervisor } from './supervisor.js';

@@ -225,6 +225,82 @@ export class MeanReversionStrategy implements Strategy {
   }
 }
 
+// ─── OI Skew Strategy ────────────────────────────────────────────────────────
+
+/**
+ * Trades against crowded OI positioning.
+ *
+ * Entry: Strong OI imbalance (>65% one side) — fade the crowd
+ * Invalidation: OI rebalances to <60%
+ * Exit: TP at 2% move in favor, SL at 1.5% against
+ */
+export class OiSkewStrategy implements Strategy {
+  readonly name = 'oi_skew';
+
+  evaluate(snapshot: MarketSnapshot, signals: Signal[]): StrategyResult {
+    const base: StrategyResult = {
+      strategy: this.name,
+      shouldTrade: false,
+      confidence: 0,
+      signals,
+      reasoning: '',
+    };
+
+    // Need an OI imbalance signal
+    const oiSignal = signals.find((s) => s.source === 'oi_imbalance');
+    if (!oiSignal || oiSignal.direction === 'neutral') {
+      return { ...base, reasoning: 'No OI imbalance detected' };
+    }
+
+    // Need minimum confidence from the OI signal
+    if (oiSignal.confidence < 0.5) {
+      return { ...base, reasoning: `OI signal confidence ${(oiSignal.confidence * 100).toFixed(0)}% too low` };
+    }
+
+    // If trend signal exists and AGREES with OI signal, boost confidence
+    // If trend CONFLICTS (e.g. price going up but OI says bearish), reduce
+    const trendSignal = signals.find((s) => s.source === 'trend');
+    let trendBoost = 0;
+    if (trendSignal && trendSignal.direction !== 'neutral') {
+      if (trendSignal.direction === oiSignal.direction) {
+        trendBoost = 0.1; // Trend confirms the skew thesis
+      } else {
+        trendBoost = -0.15; // Trend opposes — less confident
+      }
+    }
+
+    const confidence = Math.min(0.85, oiSignal.confidence + trendBoost);
+    if (confidence < 0.45) {
+      return { ...base, reasoning: 'OI skew confidence too low after trend adjustment', confidence };
+    }
+
+    // Trade direction comes from OI signal (already set to fade the crowd)
+    const side = oiSignal.direction === 'bullish' ? 'long' as const : 'short' as const;
+
+    // Conservative TP/SL for skew trades
+    const tp = side === 'long'
+      ? snapshot.price * 1.02
+      : snapshot.price * 0.98;
+    const sl = side === 'long'
+      ? snapshot.price * 0.985
+      : snapshot.price * 1.015;
+
+    const longPct = (snapshot.oiRatio * 100).toFixed(0);
+
+    return {
+      ...base,
+      shouldTrade: true,
+      side,
+      market: snapshot.market,
+      confidence,
+      reasoning: `${snapshot.market} OI skew: ${longPct}% long — fading crowded ${side === 'short' ? 'longs' : 'shorts'}`,
+      suggestedTp: Math.round(tp * 100) / 100,
+      suggestedSl: Math.round(sl * 100) / 100,
+      invalidation: `OI rebalances below 60% skew`,
+    };
+  }
+}
+
 // ─── Strategy Selector ───────────────────────────────────────────────────────
 
 /**
