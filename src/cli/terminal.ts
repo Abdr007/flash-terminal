@@ -2669,13 +2669,14 @@ export class FlashTerminal {
     const { LiveTradingAgent } = await import('../agent-builder/live-agent.js');
     const { TrendContinuation, BreakoutStrategy, MeanReversionStrategy, OiSkewStrategy } = await import('../agent-builder/strategy.js');
     const { FundingHarvester } = await import('../agent-builder/funding-harvester.js');
+    const { getAllMarkets } = await import('../config/index.js');
 
     this.liveAgent = new LiveTradingAgent(
       this.context,
       [new FundingHarvester(), new OiSkewStrategy(), new TrendContinuation(), new BreakoutStrategy(), new MeanReversionStrategy()],
       {
         name: 'flash-agent',
-        markets: ['SOL', 'BTC', 'ETH', 'HYPE', 'JUP', 'XAU', 'XAG', 'WIF', 'BONK', 'RAY', 'ZEC', 'ORE'],
+        markets: getAllMarkets(),
         pollIntervalMs: 10_000,
         maxIterations: 200,
         dryRun,
