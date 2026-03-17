@@ -18,6 +18,14 @@ export type { PreflightCheck, PreflightResult, SupervisorStatus } from './superv
 export { SessionEvaluator } from './session-evaluator.js';
 export type { SessionReport, SessionIssue } from './session-evaluator.js';
 
+// Advanced engines
+export { SignalFusionEngine } from './signal-fusion.js';
+export type { SignalFactor, CompositeSignal } from './signal-fusion.js';
+export { PositionManager } from './position-manager.js';
+export type { ManagedPosition, PositionSizeResult, PositionManagerConfig } from './position-manager.js';
+export { StrategyEnsemble } from './strategy-ensemble.js';
+export type { StrategyVote, EnsembleDecision } from './strategy-ensemble.js';
+
 // Components
 export { RiskManager } from './risk-manager.js';
 export { SignalDetector } from './signal-detector.js';

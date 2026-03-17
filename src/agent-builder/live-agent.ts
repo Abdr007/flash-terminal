@@ -15,7 +15,11 @@ import type { Position } from '../sdk/types.js';
 import { RiskManager } from './risk-manager.js';
 import { SignalDetector } from './signal-detector.js';
 import { TradeJournal } from './trade-journal.js';
-import { selectBestStrategy } from './strategy.js';
+import { SignalFusionEngine } from './signal-fusion.js';
+import { PositionManager } from './position-manager.js';
+import { StrategyEnsemble } from './strategy-ensemble.js';
+// selectBestStrategy kept as fallback import for non-ensemble path
+
 import type {
   AgentConfig,
   AgentState,
@@ -37,6 +41,9 @@ export class LiveTradingAgent {
   private readonly journal: TradeJournal;
   private readonly strategies: Strategy[];
   private readonly callbacks: AgentCallbacks;
+  private readonly fusion: SignalFusionEngine;
+  private readonly positionMgr: PositionManager;
+  private readonly ensemble: StrategyEnsemble;
 
   private state: AgentState;
   private running = false;
@@ -56,6 +63,19 @@ export class LiveTradingAgent {
     this.risk = new RiskManager(this.config.risk);
     this.signals = new SignalDetector();
     this.journal = new TradeJournal();
+    this.fusion = new SignalFusionEngine();
+    this.positionMgr = new PositionManager({
+      atrMultiplier: 2.0,
+      scaleOutLevels: [1, 2, 3],
+      scaleOutPercents: [30, 30, 40],
+      maxFlatTicks: 20,
+      maxRiskPct: this.config.risk.positionSizePct,
+      kellyFraction: 0.25,
+    });
+    this.ensemble = new StrategyEnsemble(strategies, {
+      minAgreement: 1,
+      minConfidence: this.config.risk.minConfidence,
+    });
     this.state = this.createInitialState();
   }
 
@@ -68,10 +88,11 @@ export class LiveTradingAgent {
     this.stopRequested = false;
     this.setStatus(AgentStatus.RUNNING);
 
-    this.log('info', `Agent "${this.config.name}" starting (in-process)`);
+    this.log('info', `Agent "${this.config.name}" v2 starting (in-process)`);
     this.log('info', `Markets: ${this.config.markets.join(', ')}`);
     this.log('info', `Strategies: ${this.strategies.map((s) => s.name).join(', ')}`);
-    this.log('info', `Risk: max ${this.config.risk.maxPositions} positions, max ${this.config.risk.maxLeverage}x, ${(this.config.risk.positionSizePct * 100).toFixed(0)}% sizing`);
+    this.log('info', `Engines: signal-fusion, position-manager (ATR trailing/Kelly), strategy-ensemble`);
+    this.log('info', `Risk: max ${this.config.risk.maxPositions} positions, max ${this.config.risk.maxLeverage}x, Kelly sizing`);
     if (this.config.dryRun) this.log('info', 'DRY RUN — decisions logged but not executed');
 
     // Initialize capital from live context
@@ -143,31 +164,44 @@ export class LiveTradingAgent {
     this.state.positions = positions;
     this.state.currentCapital = await this.fetchCapitalLive();
 
-    // MONITOR — check existing positions
+    // MONITOR — check existing positions with advanced position manager
     await this.monitorPositions(positions);
 
-    // ANALYZE + DECIDE — for each market
+    // Update position manager performance from journal stats
+    const stats = this.journal.getStats();
+    if (stats.totalTrades > 0) {
+      this.positionMgr.updatePerformance(stats.winRate, stats.avgWin, stats.avgLoss);
+    }
+
+    // ANALYZE + DECIDE — for each market using signal fusion + ensemble
     for (const snapshot of snapshots) {
+      // Stage 1: Basic signal detection
       const marketSignals = this.signals.detect(snapshot);
-      const alignment = this.signals.areSignalsAligned(marketSignals);
 
-      this.log('verbose', `${snapshot.market}: ${marketSignals.length} signals, aligned=${alignment.aligned}, dir=${alignment.direction}, strength=${alignment.strength.toFixed(2)}`);
+      // Stage 2: Signal fusion (multi-factor weighted scoring)
+      const composite = this.fusion.fuse(snapshot, snapshot.fundingRate);
 
-      if (!alignment.aligned) {
-        this.log('verbose', `${snapshot.market}: signals conflict — skipping`);
+      this.log('verbose', `${snapshot.market}: composite=${composite.compositeScore.toFixed(3)} dir=${composite.direction} conf=${(composite.confidence * 100).toFixed(0)}% factors=${composite.confirmedFactors}/${composite.totalFactors} confirmed=${composite.confirmed}`);
+
+      // Stage 3: Strategy ensemble (performance-weighted voting)
+      const ensembleDecision = this.ensemble.evaluate(snapshot, marketSignals, composite);
+
+      if (!ensembleDecision.shouldTrade) {
+        if (ensembleDecision.votes.some((v) => v.result.shouldTrade)) {
+          this.log('verbose', `${snapshot.market}: ${ensembleDecision.reasoning}`);
+        }
         continue;
       }
 
-      const bestStrategy = selectBestStrategy(this.strategies, snapshot, marketSignals);
-      if (!bestStrategy || !bestStrategy.shouldTrade) continue;
-
-      const decision = this.buildDecision(bestStrategy, snapshot);
+      // Stage 4: Build trade decision with risk assessment
+      const decision = this.buildDecisionFromEnsemble(ensembleDecision, snapshot, composite);
 
       this.callbacks.onDecision?.(decision);
       this.log('normal', `Decision: ${decision.action} ${decision.market} ${decision.side ?? ''} | conf=${(decision.confidence * 100).toFixed(0)}% | risk=${decision.riskLevel} | ${decision.reasoning}`);
 
+      // Stage 5: Execute
       if (decision.action === ('open' as DecisionAction) && decision.riskLevel !== 'blocked') {
-        await this.executeTrade(decision);
+        await this.executeTrade(decision, snapshot);
       } else if (decision.riskLevel === 'blocked') {
         this.log('normal', `Blocked: ${decision.blockReason}`);
         this.journal.record(decision);
@@ -272,57 +306,63 @@ export class LiveTradingAgent {
 
   private async monitorPositions(positions: Position[]): Promise<void> {
     for (const pos of positions) {
+      // Use PositionManager for advanced tracking
+      const managed = this.positionMgr.update(pos);
+
+      if (managed) {
+        switch (managed.action) {
+          case 'trailing_stop_hit':
+            this.log('normal', `Trailing stop: ${pos.market} ${pos.side} — ${managed.reason}`);
+            await this.closeWithReason(pos, 'trailing_stop', managed.reason);
+            this.positionMgr.untrack(pos.market, pos.side);
+            break;
+
+          case 'partial_close':
+            this.log('normal', `Scale-out: ${pos.market} ${pos.side} ${managed.closePercent}% — ${managed.reason}`);
+            await this.closeWithReason(pos, 'scale_out', managed.reason, managed.closePercent);
+            break;
+
+          case 'time_decay_exit':
+            this.log('normal', `Time decay: ${pos.market} ${pos.side} — ${managed.reason}`);
+            await this.closeWithReason(pos, 'time_decay', managed.reason);
+            this.positionMgr.untrack(pos.market, pos.side);
+            break;
+
+          case 'close':
+            this.log('normal', `Close: ${pos.market} ${pos.side} — ${managed.reason}`);
+            await this.closeWithReason(pos, 'risk_monitor', managed.reason);
+            this.positionMgr.untrack(pos.market, pos.side);
+            break;
+
+          case 'hold':
+            this.log('verbose', `Hold: ${pos.market} ${pos.side} — ${managed.reason}`);
+            break;
+        }
+        continue;
+      }
+
+      // Fallback for untracked positions — use simple rules
       const pnlPct = pos.pnlPercent ?? 0;
-      const pnl = pos.pnl ?? 0;
 
-      // 1. Emergency stop loss at -15%
       if (pnlPct < -15) {
-        this.log('normal', `Emergency close: ${pos.market} ${pos.side} at ${pnlPct.toFixed(1)}% loss`);
-        await this.closeWithReason(pos, 'risk_monitor', `Emergency stop loss: ${pnlPct.toFixed(1)}% drawdown`);
-        continue;
-      }
-
-      // 2. Take profit at +5% or more
-      if (pnlPct > 5) {
+        this.log('normal', `Emergency close: ${pos.market} ${pos.side} at ${pnlPct.toFixed(1)}%`);
+        await this.closeWithReason(pos, 'emergency', `Emergency stop: ${pnlPct.toFixed(1)}% drawdown`);
+      } else if (pnlPct > 5) {
         this.log('normal', `Taking profit: ${pos.market} ${pos.side} at +${pnlPct.toFixed(1)}%`);
-        await this.closeWithReason(pos, 'take_profit', `Take profit at +${pnlPct.toFixed(1)}% ($${pnl.toFixed(2)})`);
-        continue;
-      }
-
-      // 3. Stop loss at -3%
-      if (pnlPct < -3) {
+        await this.closeWithReason(pos, 'take_profit', `Take profit at +${pnlPct.toFixed(1)}%`);
+      } else if (pnlPct < -3) {
         this.log('normal', `Stop loss: ${pos.market} ${pos.side} at ${pnlPct.toFixed(1)}%`);
-        await this.closeWithReason(pos, 'stop_loss', `Stop loss at ${pnlPct.toFixed(1)}% ($${pnl.toFixed(2)})`);
-        continue;
-      }
-
-      // 4. Signal invalidation — check if OI skew has reversed
-      const snapshot = await this.getMarketSnapshot(pos.market);
-      if (snapshot) {
-        const signals = this.signals.detect(snapshot);
-        const oiSignal = signals.find((s) => s.source === 'oi_imbalance');
-
-        // If we're short but OI is now balanced/bearish, close (signal gone)
-        if (pos.side === 'short' && (!oiSignal || oiSignal.direction !== 'bearish')) {
-          this.log('normal', `Signal invalidated: ${pos.market} ${pos.side} — OI rebalanced`);
-          await this.closeWithReason(pos, 'signal_invalidation', `OI skew reversed — closing ${pos.market} ${pos.side}`);
-          continue;
-        }
-        // If we're long but OI is now balanced/bullish, close
-        if (pos.side === 'long' && (!oiSignal || oiSignal.direction !== 'bullish')) {
-          this.log('normal', `Signal invalidated: ${pos.market} ${pos.side} — OI rebalanced`);
-          await this.closeWithReason(pos, 'signal_invalidation', `OI skew reversed — closing ${pos.market} ${pos.side}`);
-          continue;
-        }
+        await this.closeWithReason(pos, 'stop_loss', `Stop loss at ${pnlPct.toFixed(1)}%`);
       }
     }
   }
 
-  private async closeWithReason(pos: Position, strategy: string, reasoning: string): Promise<void> {
+  private async closeWithReason(pos: Position, strategy: string, reasoning: string, closePercent?: number): Promise<void> {
     const decision: TradeDecision = {
       action: 'close' as DecisionAction,
       market: pos.market,
       side: pos.side,
+      closePercent,
       strategy,
       confidence: 1,
       reasoning,
@@ -364,25 +404,47 @@ export class LiveTradingAgent {
 
   // ─── Decide ────────────────────────────────────────────────────────
 
-  private buildDecision(strategyResult: NonNullable<ReturnType<typeof selectBestStrategy>>, snapshot: MarketSnapshot): TradeDecision {
-    const side = strategyResult.side ?? 'long';
+  private buildDecisionFromEnsemble(
+    ensembleDecision: import('./strategy-ensemble.js').EnsembleDecision,
+    snapshot: MarketSnapshot,
+    composite: import('./signal-fusion.js').CompositeSignal,
+  ): TradeDecision {
+    const side = ensembleDecision.side ?? 'long';
     const leverage = this.risk.clampLeverage(3);
-    const collateral = this.risk.calculatePositionSize(this.state.currentCapital);
 
-    if (strategyResult.confidence < this.config.risk.minConfidence) {
-      return {
-        action: 'skip' as DecisionAction, market: snapshot.market, side, leverage, collateral,
-        strategy: strategyResult.strategy, confidence: strategyResult.confidence,
-        reasoning: `Confidence ${(strategyResult.confidence * 100).toFixed(0)}% below ${(this.config.risk.minConfidence * 100).toFixed(0)}%`,
-        signals: strategyResult.signals, riskLevel: 'safe',
-      };
-    }
+    // Kelly-criterion position sizing using composite signal confidence
+    const slDistance = snapshot.price * 0.015; // 1.5% initial SL
+    const stopLoss = side === 'long' ? snapshot.price - slDistance : snapshot.price + slDistance;
+    const sizing = this.positionMgr.calculatePositionSize(
+      this.state.currentCapital,
+      snapshot.price,
+      stopLoss,
+      ensembleDecision.confidence,
+      leverage,
+    );
+
+    const bestResult = ensembleDecision.bestResult;
+    const tp = bestResult?.suggestedTp ?? (side === 'long' ? snapshot.price * 1.02 : snapshot.price * 0.98);
+    const sl = bestResult?.suggestedSl ?? stopLoss;
+
+    const strategyName = ensembleDecision.votes
+      .filter((v) => v.result.shouldTrade && !v.shadow)
+      .map((v) => v.strategy)
+      .join('+');
 
     const decision: TradeDecision = {
-      action: 'open' as DecisionAction, market: snapshot.market, side, leverage, collateral,
-      tp: strategyResult.suggestedTp, sl: strategyResult.suggestedSl,
-      strategy: strategyResult.strategy, confidence: strategyResult.confidence,
-      reasoning: strategyResult.reasoning, signals: strategyResult.signals, riskLevel: 'safe',
+      action: 'open' as DecisionAction,
+      market: snapshot.market,
+      side,
+      leverage,
+      collateral: sizing.collateral,
+      tp,
+      sl,
+      strategy: strategyName || 'ensemble',
+      confidence: ensembleDecision.confidence,
+      reasoning: `${ensembleDecision.reasoning} | Fusion: ${composite.direction} ${(composite.confidence * 100).toFixed(0)}% (${composite.confirmedFactors}F) | Size: $${sizing.collateral.toFixed(0)} (${sizing.method})`,
+      signals: bestResult?.signals ?? [],
+      riskLevel: 'safe',
     };
 
     const riskCheck = this.risk.assessRisk(decision, this.state);
@@ -393,7 +455,7 @@ export class LiveTradingAgent {
 
   // ─── Execute (via live flashClient) ────────────────────────────────
 
-  private async executeTrade(decision: TradeDecision): Promise<void> {
+  private async executeTrade(decision: TradeDecision, snapshot?: MarketSnapshot): Promise<void> {
     if (this.config.dryRun) {
       this.log('normal', `[DRY RUN] Would ${decision.side} ${decision.market} ${decision.leverage}x $${decision.collateral}`);
       this.journal.record(decision);
@@ -415,6 +477,22 @@ export class LiveTradingAgent {
       const entry = this.journal.record(decision, {
         entryPrice: result.entryPrice,
       });
+
+      // Register with position manager for trailing stop tracking
+      if (decision.sl && result.entryPrice) {
+        this.positionMgr.track(
+          {
+            market: decision.market,
+            side: decision.side!,
+            leverage: decision.leverage!,
+            sizeUsd: decision.collateral! * decision.leverage!,
+            collateralUsd: decision.collateral!,
+            entryPrice: result.entryPrice,
+            markPrice: snapshot?.price,
+          },
+          decision.sl,
+        );
+      }
 
       this.state.lastTradeTimestamp = Date.now();
       this.callbacks.onTrade?.(entry);

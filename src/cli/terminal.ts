@@ -2674,7 +2674,7 @@ export class FlashTerminal {
       [new TrendContinuation(), new BreakoutStrategy(), new MeanReversionStrategy(), new OiSkewStrategy()],
       {
         name: 'flash-agent',
-        markets: ['SOL', 'BTC', 'ETH'],
+        markets: ['SOL', 'BTC', 'ETH', 'HYPE', 'JUP', 'XAU', 'XAG'],
         pollIntervalMs: 15_000,
         maxIterations: 100,
         dryRun,
