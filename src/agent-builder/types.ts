@@ -145,7 +145,7 @@ export const DEFAULT_RISK_LIMITS: RiskLimits = {
   maxLeverage: 5,
   positionSizePct: 0.02,
   maxDailyLossPct: 0.05,
-  cooldownAfterLossMs: 300_000,
+  cooldownAfterLossMs: 60_000,
   minConfidence: 0.6,
   allowedMarkets: [],
 };

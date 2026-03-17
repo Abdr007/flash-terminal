@@ -2685,7 +2685,7 @@ export class FlashTerminal {
           maxLeverage: 3,
           positionSizePct: 0.02,
           maxDailyLossPct: 0.05,
-          cooldownAfterLossMs: 300_000,
+          cooldownAfterLossMs: 60_000,
           minConfidence: 0.45,
           allowedMarkets: [],
         },
