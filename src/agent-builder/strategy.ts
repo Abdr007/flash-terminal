@@ -23,8 +23,8 @@ import type { Strategy, StrategyResult, Signal, MarketSnapshot } from './types.j
 export class TrendContinuation implements Strategy {
   readonly name = 'trend_continuation';
 
-  private readonly minTrendChange = 3; // % minimum 24h change
-  private readonly minConfidence = 0.5;
+  private readonly minTrendChange = 1.5; // % minimum 24h change
+  private readonly minConfidence = 0.4;
 
   evaluate(snapshot: MarketSnapshot, signals: Signal[]): StrategyResult {
     const base: StrategyResult = {
@@ -165,7 +165,7 @@ export class BreakoutStrategy implements Strategy {
 export class MeanReversionStrategy implements Strategy {
   readonly name = 'mean_reversion';
 
-  private readonly extremeMoveThreshold = 5; // % 24h change
+  private readonly extremeMoveThreshold = 3; // % 24h change
 
   evaluate(snapshot: MarketSnapshot, signals: Signal[]): StrategyResult {
     const base: StrategyResult = {

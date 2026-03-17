@@ -213,7 +213,7 @@ describe('SignalDetector', () => {
     });
 
     it('no trend signal on small moves', () => {
-      const signals = detector.detect(makeSnapshot({ priceChange24h: 1.5 }));
+      const signals = detector.detect(makeSnapshot({ priceChange24h: 0.5 }));
       const trend = signals.find((s) => s.source === 'trend');
       expect(trend).toBeUndefined();
     });

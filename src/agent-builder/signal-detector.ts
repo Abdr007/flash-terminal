@@ -14,12 +14,12 @@ import type { Signal, SignalDirection, MarketSnapshot } from './types.js';
 
 // ─── Thresholds ──────────────────────────────────────────────────────────────
 
-const TREND_THRESHOLD = 3; // % price change to consider trending
-const STRONG_TREND_THRESHOLD = 7; // % for high-confidence trend
-const VOLUME_SPIKE_THRESHOLD = 1.5; // volume change ratio for spike
+const TREND_THRESHOLD = 1.5; // % price change to consider trending
+const STRONG_TREND_THRESHOLD = 5; // % for high-confidence trend
+const VOLUME_SPIKE_THRESHOLD = 1.3; // volume change ratio for spike
 const OI_IMBALANCE_THRESHOLD = 0.6; // ratio threshold (0.5 = balanced)
-const STRONG_OI_THRESHOLD = 0.7; // high-confidence OI signal
-const VOLATILITY_HIGH_THRESHOLD = 5; // % change considered high vol
+const STRONG_OI_THRESHOLD = 0.65; // high-confidence OI signal
+const VOLATILITY_HIGH_THRESHOLD = 3; // % change considered high vol
 
 // ─── Signal Detector ─────────────────────────────────────────────────────────
 
