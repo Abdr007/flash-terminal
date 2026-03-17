@@ -119,7 +119,7 @@ describe('JSON Output Mode', () => {
   it('JSON output branch exists in terminal.ts', () => {
     const src = readFileSync(resolve(ROOT, 'src/cli/terminal.ts'), 'utf8');
     assert.ok(src.includes('flags.jsonOutput'));
-    assert.ok(src.includes('JSON.stringify(jsonPayload'));
+    assert.ok(src.includes('jsonStringify('));
     assert.ok(src.includes('action_required'));
   });
 
@@ -128,9 +128,9 @@ describe('JSON Output Mode', () => {
     assert.ok(src.includes('!flags.jsonOutput'));
   });
 
-  it('JSON mode parses tool message as JSON', () => {
+  it('JSON mode uses jsonFromToolResult for parsing', () => {
     const src = readFileSync(resolve(ROOT, 'src/cli/terminal.ts'), 'utf8');
-    assert.ok(src.includes('JSON.parse(result.message)'));
+    assert.ok(src.includes('jsonFromToolResult('));
   });
 
   it('enableStructuredOutput called before dispatch for JSON mode', () => {
@@ -145,10 +145,10 @@ describe('JSON Output Mode', () => {
   it('restoreOutputMode called after dispatch', () => {
     const src = readFileSync(resolve(ROOT, 'src/cli/terminal.ts'), 'utf8');
     const dispatchIdx = src.indexOf('this.engine.dispatch(intent)');
-    const restoreIdx = src.indexOf('restoreOutputMode()');
+    // restoreOutputMode is called in the try/catch around dispatch
+    const restoreIdx = src.indexOf('restoreOutputMode()', dispatchIdx);
     assert.ok(dispatchIdx > 0);
-    assert.ok(restoreIdx > 0);
-    assert.ok(restoreIdx > dispatchIdx, 'restoreOutputMode after dispatch');
+    assert.ok(restoreIdx > 0, 'restoreOutputMode after dispatch');
   });
 });
 

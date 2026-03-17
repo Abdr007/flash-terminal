@@ -7,6 +7,13 @@
   "bin": {
     "flash": "dist/index.js"
   },
+  "exports": {
+    ".": "./dist/index.js",
+    "./sdk": "./dist/sdk/index.js",
+    "./sdk/*": "./dist/sdk/*.js",
+    "./agent-builder": "./dist/agent-builder/index.js",
+    "./agent-builder/*": "./dist/agent-builder/*.js"
+  },
   "scripts": {
     "build": "sh scripts/generate-build-info.sh && tsc && chmod +x dist/index.js",
     "dev": "tsx src/index.ts",

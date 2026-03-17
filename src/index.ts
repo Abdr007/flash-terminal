@@ -574,6 +574,177 @@ program
     }
   });
 
+// Single-command execution for pipelines and automation
+// Usage: flash exec "positions --format json" | jq '.data'
+//        flash exec "portfolio" --format json > output.json
+program
+  .command('exec <command>')
+  .description('Execute a single command and exit (for pipelines/automation)')
+  .option('--format <type>', 'Output format (json)', '')
+  .action(async (command: string, opts: { format?: string }) => {
+    const config = loadConfig();
+    // Force JSON output if --format json is passed to exec
+    const isJson = opts.format === 'json' || command.includes('--format json') || command.includes('--format=json');
+    if (isJson) {
+      // Ensure no stray output — suppress console.error for non-critical messages
+      const origErr = console.error;
+      console.error = (...args: unknown[]) => {
+        const msg = typeof args[0] === 'string' ? args[0] : '';
+        // Only allow critical errors through to stderr
+        if (msg.includes('fatal') || msg.includes('FATAL') || msg.includes('uncaught')) {
+          origErr(...args);
+        }
+      };
+    }
+
+    const terminal = new FlashTerminal(config);
+    try {
+      await terminal.startExec(command, isJson);
+    } catch (error: unknown) {
+      if (isJson) {
+        const { jsonStringify, jsonError, ErrorCode } = await import('./cli/json-response.js');
+        console.log(jsonStringify(jsonError('exec', ErrorCode.UNKNOWN_ERROR, getErrorMessage(error))));
+      } else {
+        console.error(chalk.red(`  Error: ${getErrorMessage(error)}`));
+      }
+      process.exitCode = 1;
+    }
+  });
+
+// ─── Agent Supervisor Commands ────────────────────────────────────────────────
+
+const agentCmd = program
+  .command('agent')
+  .description('Autonomous trading agent operations');
+
+agentCmd
+  .command('start')
+  .description('Start the trading agent (dry-run by default)')
+  .option('--live', 'Start in live mode (requires prior dry-run)')
+  .option('--markets <list>', 'Comma-separated markets (default: SOL,BTC,ETH)', 'SOL,BTC,ETH')
+  .option('--iterations <n>', 'Max iterations (default: 50)', '50')
+  .option('--interval <ms>', 'Poll interval in ms (default: 15000)', '15000')
+  .option('--max-leverage <n>', 'Max leverage (default: 3)', '3')
+  .option('--size-pct <pct>', 'Position size % of capital (default: 2)', '2')
+  .option('--max-loss-pct <pct>', 'Max daily loss % (default: 5)', '5')
+  .action(async (opts: {
+    live?: boolean;
+    markets?: string;
+    iterations?: string;
+    interval?: string;
+    maxLeverage?: string;
+    sizePct?: string;
+    maxLossPct?: string;
+  }) => {
+    const { AgentSupervisor } = await import('./agent-builder/supervisor.js');
+    const { TrendContinuation, BreakoutStrategy, MeanReversionStrategy } = await import('./agent-builder/strategy.js');
+    const { SessionEvaluator } = await import('./agent-builder/session-evaluator.js');
+
+    const markets = (opts.markets ?? 'SOL,BTC,ETH').split(',').map((m) => m.trim().toUpperCase());
+
+    const supervisor = new AgentSupervisor(
+      [new TrendContinuation(), new BreakoutStrategy(), new MeanReversionStrategy()],
+      {
+        name: 'flash-agent',
+        markets,
+        pollIntervalMs: parseInt(opts.interval ?? '15000'),
+        maxIterations: parseInt(opts.iterations ?? '50'),
+        logLevel: 'normal',
+        risk: {
+          maxPositions: 2,
+          maxLeverage: parseInt(opts.maxLeverage ?? '3'),
+          positionSizePct: parseFloat(opts.sizePct ?? '2') / 100,
+          maxDailyLossPct: parseFloat(opts.maxLossPct ?? '5') / 100,
+          cooldownAfterLossMs: 300_000,
+          minConfidence: 0.6,
+          allowedMarkets: markets,
+        },
+      },
+      { timeout: 20_000, env: { SIMULATION_MODE: 'true' } },
+      {
+        onTrade: (entry) => {
+          const icon = entry.outcome === 'win' ? '+' : entry.outcome === 'loss' ? '-' : '*';
+          console.log(`  [${icon}] ${entry.action} ${entry.market} ${entry.side ?? ''} | ${entry.strategy}`);
+        },
+        onSafetyStop: (reason) => {
+          console.log(chalk.red(`\n  SAFETY STOP: ${reason}\n`));
+        },
+      },
+    );
+
+    // Preflight
+    console.log(chalk.bold('\n  Preflight checks...\n'));
+    const preflight = await supervisor.runPreflight();
+    for (const check of preflight.checks) {
+      const icon = check.passed ? chalk.green('PASS') : chalk.red('FAIL');
+      console.log(`  [${icon}] ${check.name}: ${check.message}`);
+    }
+    if (!preflight.passed) {
+      console.log(chalk.red('\n  Preflight failed. Fix issues before starting.\n'));
+      process.exitCode = 1;
+      return;
+    }
+    console.log(chalk.green('\n  Preflight passed.\n'));
+
+    // Graceful shutdown
+    process.on('SIGINT', () => {
+      console.log('\n  Stopping agent...');
+      supervisor.stop();
+    });
+
+    if (opts.live) {
+      // Live mode requires prior dry-run
+      console.log(chalk.yellow('  Starting LIVE mode...\n'));
+      try {
+        await supervisor.startLive();
+      } catch (error: unknown) {
+        console.error(chalk.red(`  ${error instanceof Error ? error.message : error}`));
+        // Run dry-run first
+        console.log(chalk.dim('  Running dry-run first...\n'));
+        await supervisor.startDryRun();
+        console.log(chalk.yellow('\n  Dry-run complete. Re-run with --live to go live.\n'));
+      }
+    } else {
+      console.log(chalk.dim('  Starting DRY-RUN mode...\n'));
+      await supervisor.startDryRun(parseInt(opts.iterations ?? '50'));
+    }
+
+    // Post-session evaluation
+    try {
+      const report = supervisor.evaluateSession();
+      const evaluator = new SessionEvaluator();
+      console.log('');
+      console.log(chalk.bold('  ' + evaluator.formatReport(report).split('\n').join('\n  ')));
+      console.log('');
+    } catch {
+      console.log(chalk.dim('\n  No session data to evaluate.\n'));
+    }
+  });
+
+agentCmd
+  .command('preflight')
+  .description('Run preflight checks without starting agent')
+  .action(async () => {
+    const { AgentSupervisor } = await import('./agent-builder/supervisor.js');
+    const { TrendContinuation, BreakoutStrategy, MeanReversionStrategy } = await import('./agent-builder/strategy.js');
+
+    const supervisor = new AgentSupervisor(
+      [new TrendContinuation(), new BreakoutStrategy(), new MeanReversionStrategy()],
+      { markets: ['SOL', 'BTC', 'ETH'] },
+      { timeout: 20_000, env: { SIMULATION_MODE: 'true' } },
+    );
+
+    console.log(chalk.bold('\n  Running preflight checks...\n'));
+    const result = await supervisor.runPreflight();
+    for (const check of result.checks) {
+      const icon = check.passed ? chalk.green('PASS') : chalk.red('FAIL');
+      const crit = check.critical ? '' : chalk.dim(' (non-critical)');
+      console.log(`  [${icon}] ${check.name}: ${check.message}${crit}`);
+    }
+    console.log(result.passed ? chalk.green('\n  All checks passed.\n') : chalk.red('\n  Preflight FAILED.\n'));
+    process.exitCode = result.passed ? 0 : 1;
+  });
+
 program
   .command('help-cmd [command]')
   .description('Show detailed help for a command')

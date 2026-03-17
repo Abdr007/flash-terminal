@@ -59,6 +59,7 @@ import {
 import { getCommandGuidance } from '../utils/command-guidance.js';
 import { resolveMarket } from '../utils/market-resolver.js';
 import { IS_AGENT, agentError, agentOutput, enableStructuredOutput, restoreOutputMode } from '../no-dna.js';
+import { jsonSuccess, jsonError, jsonFromToolResult, jsonStringify, ErrorCode } from './json-response.js';
 import {
   setupLiveMode as setupLiveModeFlow,
   showSavedWalletsMenu as showSavedWalletsMenuFlow,
@@ -712,6 +713,102 @@ export class FlashTerminal {
     });
 
     this.rl.prompt();
+  }
+
+  // ─── Single-Command Execution (Pipeline Mode) ──────────────────────
+
+  /**
+   * Execute a single command and exit. Used by `flash exec` for pipelines.
+   * Initializes in simulation mode (or live if SIMULATION_MODE=false),
+   * runs the command, outputs result, and exits.
+   */
+  async startExec(command: string, jsonMode: boolean): Promise<void> {
+    // Minimal readline (not used for prompting, but needed by init path)
+    this.rl = createInterface({ input: process.stdin, output: process.stdout });
+    this.rl.pause();
+
+    // Determine mode from environment
+    const explicitLive = process.env.SIMULATION_MODE?.toLowerCase() === 'false';
+    this.config.simulationMode = !explicitLive;
+    this.modeLocked = true;
+
+    // Re-init signing guard for simulation
+    if (this.config.simulationMode) {
+      initSigningGuard({
+        maxCollateralPerTrade: this.config.maxCollateralPerTrade,
+        maxPositionSize: this.config.maxPositionSize,
+        maxLeverage: this.config.maxLeverage,
+        maxTradesPerMinute: 60,
+        minDelayBetweenTradesMs: 500,
+      });
+    }
+
+    // Initialize RPC
+    const rpcEndpoints = buildRpcEndpoints(this.config.rpcUrl, this.config.backupRpcUrls);
+    this.rpcManager = initRpcManager(rpcEndpoints);
+    const connection = this.rpcManager.connection;
+
+    // Initialize client
+    if (this.config.simulationMode) {
+      this.flashClient = new SimulatedFlashClient();
+    } else {
+      // Live mode: try to connect wallet
+      const walletStore = new WalletStore();
+      this.walletManager = new WalletManager(connection);
+      const defaultWallet = walletStore.getDefault();
+      if (defaultWallet) {
+        try {
+          this.walletManager.loadFromFile(walletStore.getWalletPath(defaultWallet));
+        } catch {
+          // Fall through — wallet-dependent commands will fail gracefully
+        }
+      }
+
+      try {
+        const { FlashClient } = await import('../client/flash-client.js');
+        this.flashClient = new FlashClient(connection, this.walletManager, this.config);
+      } catch {
+        // Fallback to simulation
+        this.flashClient = new SimulatedFlashClient();
+        this.config.simulationMode = true;
+      }
+    }
+
+    // Build context
+    this.context = {
+      flashClient: this.flashClient,
+      dataClient: this.fstats,
+      simulationMode: this.config.simulationMode,
+      degenMode: false,
+      walletAddress: this.flashClient.walletAddress ?? 'unknown',
+      walletName: '',
+      walletManager: this.walletManager,
+      config: this.config,
+      sessionTrades: [],
+    };
+
+    setAiApiKey(this.config.anthropicApiKey, this.config.groqApiKey);
+    this.engine = new ToolEngine(this.context);
+
+    // Inject --format json if jsonMode is requested but not already in command
+    const execCommand = jsonMode && !command.includes('--format json') && !command.includes('--format=json')
+      ? `${command} --format json`
+      : command;
+
+    // Execute the command
+    try {
+      await this.handleInput(execCommand);
+    } catch (error: unknown) {
+      if (jsonMode) {
+        console.log(jsonStringify(jsonError('exec', ErrorCode.UNKNOWN_ERROR, getErrorMessage(error))));
+      } else {
+        console.error(chalk.red(`  Error: ${getErrorMessage(error)}`));
+      }
+      process.exitCode = 1;
+    }
+
+    // Cleanup
+    this.rl.close();
   }
 
   // ─── Welcome Screen ────────────────────────────────────────────────
@@ -1415,8 +1512,18 @@ export class FlashTerminal {
     }
 
     if (lower === 'doctor' || lower === 'flash doctor' || lower === 'health' || lower === 'flash health') {
-      const output = await runDoctor(this.flashClient, this.rpcManager, this.walletManager, this.context);
-      console.log(output);
+      if (flags.jsonOutput) {
+        enableStructuredOutput();
+        const output = await runDoctor(this.flashClient, this.rpcManager, this.walletManager, this.context);
+        restoreOutputMode();
+        // Doctor returns formatted text — wrap as data
+        // eslint-disable-next-line no-control-regex
+        const cleanOutput = output.replace(/\x1b\[[0-9;]*m/g, '').trim();
+        console.log(jsonStringify(jsonSuccess('doctor', { report: cleanOutput })));
+      } else {
+        const output = await runDoctor(this.flashClient, this.rpcManager, this.walletManager, this.context);
+        console.log(output);
+      }
       return;
     }
 
@@ -1425,36 +1532,54 @@ export class FlashTerminal {
       const match = input.match(/^template\s+(\S+)\s*=\s*(.+)$/i);
       if (match) {
         const { setTemplate } = await import('./trade-templates.js');
-        if (setTemplate(match[1], match[2].trim())) {
+        const ok = setTemplate(match[1], match[2].trim());
+        if (flags.jsonOutput) {
+          console.log(jsonStringify(ok
+            ? jsonSuccess('template_set', { name: match[1], command: match[2].trim() })
+            : jsonError('template_set', ErrorCode.INVALID_PARAMETERS, 'Too many templates (max 100)', { name: match[1] })));
+        } else if (ok) {
           console.log(chalk.green(`  Template set: ${match[1]} → ${match[2].trim()}`));
         } else {
           console.log(chalk.red('  Too many templates (max 100).'));
         }
       } else {
-        console.log(chalk.dim('  Usage: template <name> = <command>'));
-        console.log(chalk.dim('  Example: template scalp = long sol 3x 50 tp 2% sl 1%'));
+        if (flags.jsonOutput) {
+          console.log(jsonStringify(jsonError('template_set', ErrorCode.INVALID_PARAMETERS, 'Usage: template <name> = <command>')));
+        } else {
+          console.log(chalk.dim('  Usage: template <name> = <command>'));
+          console.log(chalk.dim('  Example: template scalp = long sol 3x 50 tp 2% sl 1%'));
+        }
       }
       return;
     }
     if (lower === 'templates') {
       const { getAllTemplates } = await import('./trade-templates.js');
       const templates = getAllTemplates();
-      const entries = Object.entries(templates);
-      if (entries.length === 0) {
-        console.log(chalk.dim('  No templates. Use "template <name> = <command>" to create one.'));
+      if (flags.jsonOutput) {
+        console.log(jsonStringify(jsonSuccess('templates', { templates })));
       } else {
-        console.log('');
-        for (const [k, v] of entries.sort()) {
-          console.log(`  ${chalk.cyan(k.padEnd(16))} → ${v}`);
+        const entries = Object.entries(templates);
+        if (entries.length === 0) {
+          console.log(chalk.dim('  No templates. Use "template <name> = <command>" to create one.'));
+        } else {
+          console.log('');
+          for (const [k, v] of entries.sort()) {
+            console.log(`  ${chalk.cyan(k.padEnd(16))} → ${v}`);
+          }
+          console.log('');
         }
-        console.log('');
       }
       return;
     }
     if (lower.startsWith('untemplate ')) {
       const name = input.slice(11).trim();
       const { removeTemplate } = await import('./trade-templates.js');
-      if (removeTemplate(name)) {
+      const ok = removeTemplate(name);
+      if (flags.jsonOutput) {
+        console.log(jsonStringify(ok
+          ? jsonSuccess('template_remove', { name })
+          : jsonError('template_remove', ErrorCode.COMMAND_NOT_FOUND, `Template not found: ${name}`, { name })));
+      } else if (ok) {
         console.log(chalk.green(`  Template removed: ${name}`));
       } else {
         console.log(chalk.yellow(`  Template not found: ${name}`));
@@ -1467,36 +1592,54 @@ export class FlashTerminal {
       const match = input.match(/^alias\s+(\S+)\s*=\s*(.+)$/i);
       if (match) {
         const { setAlias } = await import('./learned-aliases.js');
-        if (setAlias(match[1], match[2].trim())) {
+        const ok = setAlias(match[1], match[2].trim());
+        if (flags.jsonOutput) {
+          console.log(jsonStringify(ok
+            ? jsonSuccess('alias_set', { name: match[1], expansion: match[2].trim() })
+            : jsonError('alias_set', ErrorCode.INVALID_PARAMETERS, 'Too many aliases (max 200)', { name: match[1] })));
+        } else if (ok) {
           console.log(chalk.green(`  Alias set: ${match[1]} → ${match[2].trim()}`));
         } else {
           console.log(chalk.red('  Too many aliases (max 200).'));
         }
       } else {
-        console.log(chalk.dim('  Usage: alias <shortcut> = <expansion>'));
-        console.log(chalk.dim('  Example: alias lsol = long sol'));
+        if (flags.jsonOutput) {
+          console.log(jsonStringify(jsonError('alias_set', ErrorCode.INVALID_PARAMETERS, 'Usage: alias <shortcut> = <expansion>')));
+        } else {
+          console.log(chalk.dim('  Usage: alias <shortcut> = <expansion>'));
+          console.log(chalk.dim('  Example: alias lsol = long sol'));
+        }
       }
       return;
     }
     if (lower === 'aliases') {
       const { getAllAliases } = await import('./learned-aliases.js');
       const aliases = getAllAliases();
-      const entries = Object.entries(aliases);
-      if (entries.length === 0) {
-        console.log(chalk.dim('  No custom aliases. Use "alias <shortcut> = <expansion>" to add one.'));
+      if (flags.jsonOutput) {
+        console.log(jsonStringify(jsonSuccess('aliases', { aliases })));
       } else {
-        console.log('');
-        for (const [k, v] of entries.sort()) {
-          console.log(`  ${chalk.cyan(k.padEnd(16))} → ${v}`);
+        const entries = Object.entries(aliases);
+        if (entries.length === 0) {
+          console.log(chalk.dim('  No custom aliases. Use "alias <shortcut> = <expansion>" to add one.'));
+        } else {
+          console.log('');
+          for (const [k, v] of entries.sort()) {
+            console.log(`  ${chalk.cyan(k.padEnd(16))} → ${v}`);
+          }
+          console.log('');
         }
-        console.log('');
       }
       return;
     }
     if (lower.startsWith('unalias ')) {
       const name = input.slice(8).trim();
       const { removeAlias } = await import('./learned-aliases.js');
-      if (removeAlias(name)) {
+      const ok = removeAlias(name);
+      if (flags.jsonOutput) {
+        console.log(jsonStringify(ok
+          ? jsonSuccess('alias_remove', { name })
+          : jsonError('alias_remove', ErrorCode.COMMAND_NOT_FOUND, `Alias not found: ${name}`, { name })));
+      } else if (ok) {
         console.log(chalk.green(`  Alias removed: ${name}`));
       } else {
         console.log(chalk.yellow(`  Alias not found: ${name}`));
@@ -1519,6 +1662,20 @@ export class FlashTerminal {
       } else {
         this.context.degenMode = !this.context.degenMode;
       }
+
+      if (flags.jsonOutput) {
+        const degenData: Record<string, unknown> = { enabled: this.context.degenMode };
+        if (this.context.degenMode) {
+          const { hasDegenMode: hasDegen, getMaxLeverage: getMaxLev, getAllMarkets: getAll } = await import('../config/index.js');
+          const degenMarkets = getAll().filter((m) => hasDegen(m));
+          degenData.degen_markets = degenMarkets.map((m) => ({ market: m, max_leverage: getMaxLev(m, true) }));
+          const highLevMarkets = getAll().filter((m) => !hasDegen(m) && getMaxLev(m, false) >= 200);
+          degenData.high_leverage_markets = highLevMarkets.map((m) => ({ market: m, max_leverage: getMaxLev(m, false) }));
+        }
+        console.log(jsonStringify(jsonSuccess('degen', degenData)));
+        return;
+      }
+
       if (this.context.degenMode) {
         // Show per-market leverage from protocol config
         const { hasDegenMode: hasDegen, getMaxLeverage: getMaxLev } = await import('../config/index.js');
@@ -1556,6 +1713,16 @@ export class FlashTerminal {
       const { resolveCategory, getCommandsByCategory } = await import('./command-registry.js');
       const category = resolveCategory(arg);
       if (category) {
+        if (flags.jsonOutput) {
+          const categories = getCommandsByCategory();
+          const entries = (categories.get(category) || []).map((e) => ({
+            name: e.name,
+            description: e.description,
+            format: e.helpFormat || e.name,
+          }));
+          console.log(jsonStringify(jsonSuccess('help', { category, commands: entries })));
+          return;
+        }
         const categories = getCommandsByCategory();
         const entries = categories.get(category) || [];
         const COL_WIDTH = 32;
@@ -1593,7 +1760,13 @@ export class FlashTerminal {
         const { getCommandHelp } = await import('./command-help.js');
         const helpText = getCommandHelp(cmdName);
         if (helpText) {
-          console.log(helpText);
+          if (flags.jsonOutput) {
+            // eslint-disable-next-line no-control-regex
+            const cleanHelp = helpText.replace(/\x1b\[[0-9;]*m/g, '').trim();
+            console.log(jsonStringify(jsonSuccess('help', { command: cmdName, help: cleanHelp })));
+          } else {
+            console.log(helpText);
+          }
           return;
         }
       } catch {
@@ -1613,14 +1786,18 @@ export class FlashTerminal {
       if (parsed && parsed.action === ActionType.SetTpSl) {
         intent = parsed;
       } else {
-        console.log('');
-        console.log(chalk.yellow('  Invalid TP/SL syntax.'));
-        console.log('');
-        console.log(chalk.dim('  Usage:'));
-        console.log(`    ${chalk.bold('set tp SOL long $95')}`);
-        console.log(`    ${chalk.bold('set sl SOL long $80')}`);
-        console.log(`    ${chalk.bold('set tp btc long to 75000')}`);
-        console.log('');
+        if (flags.jsonOutput) {
+          console.log(jsonStringify(jsonError('set_tp_sl', ErrorCode.PARSE_ERROR, 'Invalid TP/SL syntax', { input, usage: 'set tp SOL long $95' })));
+        } else {
+          console.log('');
+          console.log(chalk.yellow('  Invalid TP/SL syntax.'));
+          console.log('');
+          console.log(chalk.dim('  Usage:'));
+          console.log(`    ${chalk.bold('set tp SOL long $95')}`);
+          console.log(`    ${chalk.bold('set sl SOL long $80')}`);
+          console.log(`    ${chalk.bold('set tp btc long to 75000')}`);
+          console.log('');
+        }
         return;
       }
     } else if (lower.startsWith('edit limit')) {
@@ -1629,11 +1806,15 @@ export class FlashTerminal {
       if (parsed && parsed.action === ActionType.EditLimitOrder) {
         intent = parsed;
       } else {
-        console.log('');
-        console.log(chalk.yellow('  Invalid edit limit syntax.'));
-        console.log(chalk.dim('  Usage: edit limit <id> $<price>'));
-        console.log(chalk.dim('  Example: edit limit 0 $85'));
-        console.log('');
+        if (flags.jsonOutput) {
+          console.log(jsonStringify(jsonError('edit_limit_order', ErrorCode.PARSE_ERROR, 'Invalid edit limit syntax', { input, usage: 'edit limit <id> $<price>' })));
+        } else {
+          console.log('');
+          console.log(chalk.yellow('  Invalid edit limit syntax.'));
+          console.log(chalk.dim('  Usage: edit limit <id> $<price>'));
+          console.log(chalk.dim('  Example: edit limit 0 $85'));
+          console.log('');
+        }
         return;
       }
     } else if (lower.startsWith('limit')) {
@@ -1642,24 +1823,32 @@ export class FlashTerminal {
       if (parsed && parsed.action === ActionType.LimitOrder) {
         intent = parsed;
       } else {
-        console.log('');
-        console.log(chalk.yellow('  Invalid limit order syntax.'));
-        console.log('');
-        console.log(chalk.dim('  Usage:'));
-        console.log(`    ${chalk.bold('limit long SOL 2x $100 @ $82')}`);
-        console.log(`    ${chalk.bold('limit short BTC 3x $200 at $72000')}`);
-        console.log(`    ${chalk.bold('limit order sol 2x for 10 dollars long at 82')}`);
-        console.log('');
-        console.log(chalk.dim('  Required: side (long/short), market, leverage (Nx), collateral ($), price (@ or at)'));
-        console.log('');
+        if (flags.jsonOutput) {
+          console.log(jsonStringify(jsonError('limit_order', ErrorCode.PARSE_ERROR, 'Invalid limit order syntax', { input, usage: 'limit long SOL 2x $100 @ $82' })));
+        } else {
+          console.log('');
+          console.log(chalk.yellow('  Invalid limit order syntax.'));
+          console.log('');
+          console.log(chalk.dim('  Usage:'));
+          console.log(`    ${chalk.bold('limit long SOL 2x $100 @ $82')}`);
+          console.log(`    ${chalk.bold('limit short BTC 3x $200 at $72000')}`);
+          console.log(`    ${chalk.bold('limit order sol 2x for 10 dollars long at 82')}`);
+          console.log('');
+          console.log(chalk.dim('  Required: side (long/short), market, leverage (Nx), collateral ($), price (@ or at)'));
+          console.log('');
+        }
         return;
       }
     } else if (lower.startsWith('position debug ') || lower.startsWith('pos debug ')) {
       const prefix = lower.startsWith('position debug ') ? 'position debug ' : 'pos debug ';
       const rawMarket = input.slice(prefix.length).trim();
       if (!rawMarket) {
-        console.log(chalk.yellow(`  Usage: position debug <market>`));
-        console.log(chalk.dim(`  Example: position debug sol`));
+        if (flags.jsonOutput) {
+          console.log(jsonStringify(jsonError('position_debug', ErrorCode.INVALID_PARAMETERS, 'Usage: position debug <market>')));
+        } else {
+          console.log(chalk.yellow(`  Usage: position debug <market>`));
+          console.log(chalk.dim(`  Example: position debug sol`));
+        }
         return;
       }
       const market = resolveMarketAlias(rawMarket);
@@ -1689,24 +1878,34 @@ export class FlashTerminal {
       intent = { action: ActionType.LiquidityDepth, market } as ParsedIntent;
     } else if (lower.startsWith('monitor ') || lower.startsWith('market monitor ')) {
       // Any monitor subcommand is no longer supported — only bare "monitor" works
-      console.log(theme.dim('\n  Unknown command.\n'));
+      if (flags.jsonOutput) {
+        console.log(jsonStringify(jsonError('monitor', ErrorCode.COMMAND_NOT_FOUND, 'Unknown monitor subcommand. Use bare "monitor" command.')));
+      } else {
+        console.log(theme.dim('\n  Unknown command.\n'));
+      }
       return;
     } else if (lower === 'inspect pool' || lower.startsWith('inspect pool ')) {
       const poolInput = lower === 'inspect pool' ? '' : input.slice('inspect pool '.length).trim();
       const { POOL_NAMES } = await import('../config/index.js');
       if (!poolInput) {
-        // Deduplicate pool names for display
         const uniqueNames = [...new Set(POOL_NAMES)];
-        console.log(chalk.yellow(`  Usage: inspect pool <name>`));
-        console.log(chalk.dim(`  Available pools: ${uniqueNames.join(', ')}`));
+        if (flags.jsonOutput) {
+          console.log(jsonStringify(jsonError('inspect_pool', ErrorCode.INVALID_PARAMETERS, 'Usage: inspect pool <name>', { available_pools: uniqueNames })));
+        } else {
+          console.log(chalk.yellow(`  Usage: inspect pool <name>`));
+          console.log(chalk.dim(`  Available pools: ${uniqueNames.join(', ')}`));
+        }
         return;
       }
-      // Case-insensitive pool name matching
       const pool = POOL_NAMES.find((p: string) => p.toLowerCase() === poolInput.toLowerCase());
       if (!pool) {
         const uniqueNames = [...new Set(POOL_NAMES)];
-        console.log(chalk.red(`  Unknown pool: ${poolInput}`));
-        console.log(chalk.dim(`  Valid pools: ${uniqueNames.join(', ')}`));
+        if (flags.jsonOutput) {
+          console.log(jsonStringify(jsonError('inspect_pool', ErrorCode.POOL_NOT_FOUND, `Unknown pool: ${poolInput}`, { input: poolInput, valid_pools: uniqueNames })));
+        } else {
+          console.log(chalk.red(`  Unknown pool: ${poolInput}`));
+          console.log(chalk.dim(`  Valid pools: ${uniqueNames.join(', ')}`));
+        }
         return;
       }
       intent = { action: ActionType.InspectPool, pool } as ParsedIntent;
@@ -1714,13 +1913,21 @@ export class FlashTerminal {
       const prefix = lower.startsWith('protocol fees ') ? 'protocol fees ' : 'protocol fee ';
       const rawMarket = input.slice(prefix.length).trim();
       if (!rawMarket) {
-        console.log(chalk.yellow('  Usage: protocol fees <market>  (e.g. protocol fees sol)'));
+        if (flags.jsonOutput) {
+          console.log(jsonStringify(jsonError('protocol_fees', ErrorCode.INVALID_PARAMETERS, 'Usage: protocol fees <market>')));
+        } else {
+          console.log(chalk.yellow('  Usage: protocol fees <market>  (e.g. protocol fees sol)'));
+        }
         return;
       }
       const market = resolveMarketAlias(rawMarket);
       const { getPoolForMarket } = await import('../config/index.js');
       if (!getPoolForMarket(market)) {
-        console.log(chalk.red(`  Unknown market: ${rawMarket}`));
+        if (flags.jsonOutput) {
+          console.log(jsonStringify(jsonError('protocol_fees', ErrorCode.MARKET_NOT_FOUND, `Unknown market: ${rawMarket}`, { input: rawMarket })));
+        } else {
+          console.log(chalk.red(`  Unknown market: ${rawMarket}`));
+        }
         return;
       }
       await this.handleProtocolFees(market);
@@ -1740,19 +1947,27 @@ export class FlashTerminal {
           : 'verify source';
       const rawMarket = input.slice(prefix.length).trim();
       if (!rawMarket) {
-        console.log('');
-        console.log(chalk.yellow('  Usage: source verify <asset>'));
-        console.log('');
-        console.log(chalk.dim('  Example:'));
-        console.log(chalk.dim('    source verify SOL'));
-        console.log(chalk.dim('    source verify BTC'));
-        console.log('');
+        if (flags.jsonOutput) {
+          console.log(jsonStringify(jsonError('source_verify', ErrorCode.INVALID_PARAMETERS, 'Usage: source verify <asset>')));
+        } else {
+          console.log('');
+          console.log(chalk.yellow('  Usage: source verify <asset>'));
+          console.log('');
+          console.log(chalk.dim('  Example:'));
+          console.log(chalk.dim('    source verify SOL'));
+          console.log(chalk.dim('    source verify BTC'));
+          console.log('');
+        }
         return;
       }
       const market = resolveMarketAlias(rawMarket);
       const { getPoolForMarket } = await import('../config/index.js');
       if (!getPoolForMarket(market)) {
-        console.log(chalk.red(`  Unknown market: ${rawMarket}`));
+        if (flags.jsonOutput) {
+          console.log(jsonStringify(jsonError('source_verify', ErrorCode.MARKET_NOT_FOUND, `Unknown market: ${rawMarket}`, { input: rawMarket })));
+        } else {
+          console.log(chalk.red(`  Unknown market: ${rawMarket}`));
+        }
         return;
       }
       await this.handleSourceVerify(market);
@@ -1767,13 +1982,16 @@ export class FlashTerminal {
         !lower.startsWith('inspect protocol') &&
         lower !== 'inspect')
     ) {
-      // Handle both "inspect market crude oil" and "inspect crude oil"
       const prefix = lower.startsWith('inspect market ') ? 'inspect market ' : 'inspect ';
       const rawMarket = input.slice(prefix.length).trim();
       const market = resolveMarketAlias(rawMarket);
       const { getPoolForMarket } = await import('../config/index.js');
       if (!getPoolForMarket(market)) {
-        console.log(chalk.red(`  Unknown market: ${market}`));
+        if (flags.jsonOutput) {
+          console.log(jsonStringify(jsonError('inspect_market', ErrorCode.MARKET_NOT_FOUND, `Unknown market: ${market}`, { input: market })));
+        } else {
+          console.log(chalk.red(`  Unknown market: ${market}`));
+        }
         return;
       }
       intent = { action: ActionType.InspectMarket, market } as ParsedIntent;
@@ -1787,26 +2005,34 @@ export class FlashTerminal {
       intent = { action: ActionType.TxDebug, signature, showState } as ParsedIntent;
     } else {
       // Full interpreter path (regex + AI)
-      if (!IS_AGENT) process.stdout.write(chalk.dim('  Parsing...\r'));
+      if (!IS_AGENT && !flags.jsonOutput) process.stdout.write(chalk.dim('  Parsing...\r'));
       try {
         intent = await withTimeout(this.interpreter.parseIntent(input), COMMAND_TIMEOUT_MS, 'parsing');
-        if (!IS_AGENT) process.stdout.write('              \r');
+        if (!IS_AGENT && !flags.jsonOutput) process.stdout.write('              \r');
 
         // Safety guard: block AI-inferred destructive actions
         const { shouldBlockAiIntent } = await import('../core/command-safety.js');
         if (shouldBlockAiIntent(input, intent.action)) {
           const { getSafeCommandSuggestion } = await import('../core/command-safety.js');
           const suggestion = getSafeCommandSuggestion(input);
-          console.log('');
-          console.log(chalk.yellow(`  Unknown command: ${input}`));
-          if (suggestion) {
-            console.log(chalk.dim(`  Did you mean: ${chalk.cyan(suggestion)}?`));
+          if (flags.jsonOutput) {
+            console.log(jsonStringify(jsonError('unknown', ErrorCode.COMMAND_NOT_FOUND, `Unknown command: ${input}`, suggestion ? { suggestion } : {})));
+          } else {
+            console.log('');
+            console.log(chalk.yellow(`  Unknown command: ${input}`));
+            if (suggestion) {
+              console.log(chalk.dim(`  Did you mean: ${chalk.cyan(suggestion)}?`));
+            }
+            console.log('');
           }
-          console.log('');
           return;
         }
       } catch (error: unknown) {
-        console.log(chalk.red(`  ✖ Parse error: ${getErrorMessage(error)}`));
+        if (flags.jsonOutput) {
+          console.log(jsonStringify(jsonError('parse', ErrorCode.PARSE_ERROR, getErrorMessage(error), { input })));
+        } else {
+          console.log(chalk.red(`  ✖ Parse error: ${getErrorMessage(error)}`));
+        }
         return;
       }
     }
@@ -2077,7 +2303,7 @@ export class FlashTerminal {
       } catch (err: unknown) {
         if (flags.jsonOutput) {
           console.log(
-            JSON.stringify({ success: false, error: `Wallet override failed: ${getErrorMessage(err)}` }, null, 2),
+            jsonStringify(jsonError('wallet_override', ErrorCode.WALLET_OVERRIDE_FAILED, `Wallet override failed: ${getErrorMessage(err)}`, { key: flags.keyOverride })),
           );
         } else {
           console.log(chalk.red(`  Invalid --key: ${getErrorMessage(err)}`));
@@ -2088,11 +2314,15 @@ export class FlashTerminal {
 
     // Degraded mode gate — block trade commands when all RPCs are down
     if (this.degradedMode && TRADE_ACTIONS.has(intent.action)) {
-      console.log('');
-      console.log(chalk.red('  All RPC endpoints unavailable. Terminal running in read-only mode.'));
-      console.log(chalk.dim('  Trading commands are disabled until RPC connectivity is restored.'));
-      console.log(chalk.dim('  Read-only commands (prices, markets, portfolio, help) still work.'));
-      console.log('');
+      if (flags.jsonOutput) {
+        console.log(jsonStringify(jsonError(intent.action, ErrorCode.DEGRADED_MODE, 'All RPC endpoints unavailable. Terminal running in read-only mode.', { blocked_action: intent.action })));
+      } else {
+        console.log('');
+        console.log(chalk.red('  All RPC endpoints unavailable. Terminal running in read-only mode.'));
+        console.log(chalk.dim('  Trading commands are disabled until RPC connectivity is restored.'));
+        console.log(chalk.dim('  Read-only commands (prices, markets, portfolio, help) still work.'));
+        console.log('');
+      }
       this.restoreWallet(walletRestoreData);
       return;
     }
@@ -2110,7 +2340,9 @@ export class FlashTerminal {
     } catch (error: unknown) {
       if (flags.jsonOutput) restoreOutputMode();
       if (flags.jsonOutput) {
-        console.log(JSON.stringify({ success: false, error: getErrorMessage(error) }, null, 2));
+        const errMsg = getErrorMessage(error);
+        const code = errMsg.toLowerCase().includes('timeout') ? ErrorCode.COMMAND_TIMEOUT : ErrorCode.UNKNOWN_ERROR;
+        console.log(jsonStringify(jsonError(intent.action || 'unknown', code, errMsg)));
       } else if (IS_AGENT) {
         agentError('execution_error', { detail: getErrorMessage(error) });
       } else {
@@ -2175,36 +2407,18 @@ export class FlashTerminal {
     }
 
     // ── JSON output mode (--format json) ───────────────────────────
-    // Tools returned structured JSON in result.message (via IS_AGENT path during dispatch).
-    // Parse it and output clean JSON.
+    // Standardized JSON response via json-response.ts (v1 contract).
     if (flags.jsonOutput) {
-      let jsonPayload: Record<string, unknown> = {
-        success: result.success,
-        action: intent.action,
-      };
+      const commandName = intent.action || 'unknown';
+      const response = jsonFromToolResult(commandName, result);
 
-      // Try to parse structured data from message (tools return JSON strings in IS_AGENT mode)
-      try {
-        const parsed = JSON.parse(result.message);
-        if (typeof parsed === 'object' && parsed !== null) {
-          jsonPayload = { success: result.success, ...parsed };
-        }
-      } catch {
-        // Not JSON — include raw data if available
-        if (result.data) {
-          const { executeAction: _ea, ...safeData } = result.data;
-          Object.assign(jsonPayload, safeData);
-        }
-      }
-      if (result.txSignature) jsonPayload.tx_signature = result.txSignature;
-
-      // For confirmation-required commands, don't auto-execute — return details
+      // For confirmation-required commands, include confirmation details in data
       if (result.requiresConfirmation) {
-        jsonPayload.action_required = 'confirmation';
-        jsonPayload.prompt = result.confirmationPrompt ?? 'Confirm?';
+        response.data.action_required = 'confirmation';
+        response.data.prompt = result.confirmationPrompt ?? 'Confirm?';
       }
 
-      console.log(JSON.stringify(jsonPayload, null, 2));
+      console.log(jsonStringify(response));
 
       // Handle wallet state changes (non-trade commands like wallet use)
       if (result.data?.disconnected) this.handleWalletDisconnected();
