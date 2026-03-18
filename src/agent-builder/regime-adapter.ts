@@ -51,6 +51,8 @@ export interface RegimeParams {
   minConfidence: number;
   /** Maximum leverage in this regime */
   maxLeverage: number;
+  /** Exact strategy names allowed in this regime */
+  allowedStrategies: string[];
 }
 
 // ─── Regime Parameter Maps ───────────────────────────────────────────────────
@@ -66,6 +68,7 @@ const REGIME_PARAMS: Record<RegimeType, RegimeParams> = {
     momentumAllowed: true,
     minConfidence: 0.4,
     maxLeverage: 5,
+    allowedStrategies: ['trend_continuation', 'breakout'],
   },
   TRENDING_DOWN: {
     stopAtrMultiplier: 3.0,
@@ -77,6 +80,7 @@ const REGIME_PARAMS: Record<RegimeType, RegimeParams> = {
     momentumAllowed: true,
     minConfidence: 0.4,
     maxLeverage: 5,
+    allowedStrategies: ['trend_continuation', 'breakout'],
   },
   RANGING: {
     stopAtrMultiplier: 1.5,
@@ -85,9 +89,10 @@ const REGIME_PARAMS: Record<RegimeType, RegimeParams> = {
     maxPositions: 2,
     trailStops: false,
     meanReversionAllowed: true,
-    momentumAllowed: false, // Momentum fails in ranges
+    momentumAllowed: false,
     minConfidence: 0.5,
     maxLeverage: 3,
+    allowedStrategies: ['mean_reversion', 'funding_harvester', 'oi_skew'],
   },
   HIGH_VOLATILITY: {
     stopAtrMultiplier: 4.0,
@@ -97,12 +102,13 @@ const REGIME_PARAMS: Record<RegimeType, RegimeParams> = {
     trailStops: true,
     meanReversionAllowed: false,
     momentumAllowed: true,
-    minConfidence: 0.7, // Only trade high-conviction in high vol
+    minConfidence: 0.7,
     maxLeverage: 2,
+    allowedStrategies: ['breakout'],
   },
   COMPRESSION: {
     stopAtrMultiplier: 2.0,
-    takeProfitR: 5.0, // Breakouts from compression tend to be large
+    takeProfitR: 5.0,
     sizeMultiplier: 0.5,
     maxPositions: 1,
     trailStops: true,
@@ -110,6 +116,7 @@ const REGIME_PARAMS: Record<RegimeType, RegimeParams> = {
     momentumAllowed: true,
     minConfidence: 0.6,
     maxLeverage: 3,
+    allowedStrategies: ['breakout'],
   },
 };
 
@@ -183,19 +190,39 @@ export class RegimeAdapter {
   }
 
   /**
-   * Check if a specific strategy type is allowed in the current regime.
+   * Check if a specific strategy name is allowed in the current regime.
+   * Strict alignment: only strategies in the allowedStrategies list pass.
    */
-  isStrategyAllowed(regime: RegimeType, strategyType: 'momentum' | 'mean_reversion' | 'breakout' | 'oi_skew'): boolean {
+  isStrategyAllowed(regime: RegimeType, strategyName: string): boolean {
     const params = REGIME_PARAMS[regime];
-    switch (strategyType) {
-      case 'momentum':
-      case 'breakout':
-        return params.momentumAllowed;
-      case 'mean_reversion':
-        return params.meanReversionAllowed;
-      case 'oi_skew':
-        return true; // OI skew works in all regimes
-    }
+    return params.allowedStrategies.includes(strategyName);
+  }
+
+  /**
+   * Filter a list of strategy names to only those allowed in the regime.
+   */
+  filterStrategies(regime: RegimeType, strategyNames: string[]): string[] {
+    const allowed = REGIME_PARAMS[regime].allowedStrategies;
+    return strategyNames.filter((s) => allowed.includes(s));
+  }
+
+  /**
+   * Check if price is near range extremes (for RANGING regime).
+   * Returns true if price is in top/bottom 20% of recent range.
+   * In ranging markets, only enter near extremes for mean-reversion.
+   */
+  isNearRangeExtreme(market: string, price: number): boolean {
+    const prices = this.priceHistory.get(market);
+    if (!prices || prices.length < 10) return true; // Not enough data, allow
+
+    const high = Math.max(...prices);
+    const low = Math.min(...prices);
+    const range = high - low;
+    if (range <= 0) return false; // Flat
+
+    const positionInRange = (price - low) / range; // 0 = bottom, 1 = top
+    // Near extreme = bottom 20% or top 20%
+    return positionInRange <= 0.20 || positionInRange >= 0.80;
   }
 
   // ─── Internal Computations ─────────────────────────────────────────

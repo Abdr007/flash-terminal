@@ -280,12 +280,25 @@ export class LiveTradingAgent {
 
       this.log('verbose', `${snapshot.market}: regime=${regime.regime} score=${composite.compositeScore.toFixed(3)} conf=${(composite.confidence * 100).toFixed(0)}% clarity=${(clarity * 100).toFixed(0)}% ${composite.confirmedFactors}F`);
 
+      // FILTER: RANGING regime — only enter near range extremes
+      if (regime.regime === 'RANGING' && !this.regimeAdapter.isNearRangeExtreme(snapshot.market, snapshot.price)) {
+        this.log('verbose', `${snapshot.market}: RANGING but price not near extreme — skip`);
+        continue;
+      }
+
       // Strategy ensemble
       const ed = this.ensemble.evaluate(snapshot, marketSignals, composite);
       if (!ed.shouldTrade) continue;
 
-      // FILTER: ensemble strength (Section 1)
-      // Require ≥2 strategies agreeing OR single strategy with confidence ≥0.85
+      // FILTER: regime-strategy alignment — reject strategies that don't match regime
+      const votingStrategies = ed.votes.filter((v) => v.result.shouldTrade && !v.shadow).map((v) => v.strategy);
+      const allowedInRegime = this.regimeAdapter.filterStrategies(regime.regime, votingStrategies);
+      if (allowedInRegime.length === 0) {
+        this.log('verbose', `${snapshot.market}: strategies [${votingStrategies.join(',')}] not allowed in ${regime.regime} (allowed: ${regimeParams.allowedStrategies.join(',')})`);
+        continue;
+      }
+
+      // FILTER: ensemble strength — require ≥2 strategies OR single with ≥85%
       if (ed.agreeing < 2 && ed.confidence < 0.85) {
         this.log('verbose', `${snapshot.market}: weak consensus (${ed.agreeing}/${ed.totalVoters} agree, conf=${(ed.confidence * 100).toFixed(0)}%) — need ≥2 or ≥85%`);
         continue;
@@ -312,7 +325,7 @@ export class LiveTradingAgent {
       const sizing = this.sizer.calculate(this.state.currentCapital, ed.confidence, stats, ddState, regimeParams.sizeMultiplier, this.state.consecutiveLosses);
       const collateral = Math.min(sizing.collateral, Math.max(1, maxCapital - tickCapitalAllocated));
 
-      const strategyName = ed.votes.filter((v) => v.result.shouldTrade && !v.shadow).map((v) => v.strategy).join('+') || 'ensemble';
+      const strategyName = allowedInRegime.join('+') || 'ensemble';
 
       const decision: TradeDecision = {
         action: 'open' as DecisionAction,
