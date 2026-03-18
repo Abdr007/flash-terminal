@@ -77,6 +77,17 @@ export class MetaAgent {
   /**
    * Evaluate global conditions and decide aggression level.
    */
+  /** Track volatility trend for forward-looking */
+  private volatilityTrend: number[] = [];
+
+  /**
+   * Record current market volatility for forward-looking signals.
+   */
+  recordVolatility(avgVolatility: number): void {
+    this.volatilityTrend.push(avgVolatility);
+    if (this.volatilityTrend.length > 10) this.volatilityTrend.shift();
+  }
+
   evaluate(
     systemEV: number,
     strategyStats: StrategyStats[],
@@ -84,7 +95,7 @@ export class MetaAgent {
     recentWinRate: number,
     recentTradeCount: number,
   ): MetaDecision {
-    let score = 50; // Start neutral
+    let score = 50;
     const reasons: string[] = [];
 
     // 1. System EV (most important)
@@ -92,6 +103,15 @@ export class MetaAgent {
     else if (systemEV > 0) { score += 10; reasons.push(`EV=${systemEV.toFixed(1)}`); }
     else if (systemEV < -1) { score -= 25; reasons.push(`EV=${systemEV.toFixed(1)}↓`); }
     else if (systemEV < 0) { score -= 10; reasons.push(`EV=${systemEV.toFixed(1)}`); }
+
+    // FORWARD-LOOKING: volatility expansion = opportunity coming
+    if (this.volatilityTrend.length >= 3) {
+      const recent = this.volatilityTrend.slice(-3);
+      const expanding = recent[2] > recent[1] && recent[1] > recent[0];
+      const compressing = recent[2] < recent[1] && recent[1] < recent[0];
+      if (expanding) { score += 8; reasons.push('vol↑'); } // Opportunity emerging
+      if (compressing) { score -= 5; reasons.push('vol↓'); } // Market dying down
+    }
 
     // 2. Recent win rate
     if (recentTradeCount >= 5) {

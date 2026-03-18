@@ -26,6 +26,10 @@ export { OpportunityScorer } from './opportunity-scorer.js';
 export type { OpportunityScore } from './opportunity-scorer.js';
 export { PortfolioIntel } from './portfolio-intel.js';
 export type { PortfolioCheck } from './portfolio-intel.js';
+export { AdaptiveWeights } from './adaptive-weights.js';
+export type { WeightState } from './adaptive-weights.js';
+export { ExecutionModel } from './execution-model.js';
+export type { ExecutionCost } from './execution-model.js';
 
 // Supervisor
 export { AgentSupervisor } from './supervisor.js';

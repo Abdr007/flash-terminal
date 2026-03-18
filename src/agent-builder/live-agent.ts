@@ -27,6 +27,7 @@ import { ExpectancyEngine } from './expectancy-engine.js';
 import { MetaAgent } from './meta-agent.js';
 import { OpportunityScorer } from './opportunity-scorer.js';
 import { PortfolioIntel } from './portfolio-intel.js';
+import { ExecutionModel } from './execution-model.js';
 import type { CompositeSignal } from './signal-fusion.js';
 
 import type {
@@ -125,7 +126,7 @@ export class LiveTradingAgent {
     this.stopRequested = false;
     this.setStatus(AgentStatus.RUNNING);
 
-    this.log('info', `Agent "${this.config.name}" v6 (meta-controlled) starting`);
+    this.log('info', `Agent "${this.config.name}" v7 (adaptive intelligence) starting`);
     this.log('info', `Scanning: ${this.config.markets.length} markets → score + rank → top trades only`);
     this.log('info', `Strategies: ${this.strategies.map((s) => s.name).join(', ')}`);
     this.log('info', `Engines: meta-agent, opportunity scorer, portfolio intel, EV, Bayesian fusion, technicals`);
@@ -187,7 +188,8 @@ export class LiveTradingAgent {
     this.regimeAdapter.reset();
     this.technicals.reset();
     this.meta.reset();
-    // Note: expectancy NOT reset — it persists learning across sessions
+    // Note: expectancy + scorer adaptive weights NOT reset — persist learning
+    // this.scorer.reset() — intentionally NOT called
     this.log('info', 'Stop requested — state cleaned (EV stats preserved)');
   }
 
@@ -261,6 +263,12 @@ export class LiveTradingAgent {
     // ─── PHASE 4: META-CONTROLLED SCORING + DECIDE ─────────────────
     const now = Date.now();
     this.hourlyTrades = this.hourlyTrades.filter((t) => now - t < 3_600_000);
+
+    // Forward-looking: feed volatility trend to meta-agent
+    const avgVol = snapshots.length > 0
+      ? snapshots.reduce((sum, s) => sum + Math.abs(s.priceChange24h), 0) / snapshots.length
+      : 0;
+    this.meta.recordVolatility(avgVol);
 
     // META-AGENT: evaluate global conditions → set aggression mode
     const systemEV = this.expectancy.getSystemEV();
@@ -339,11 +347,17 @@ export class LiveTradingAgent {
       const rewardDist = Math.abs(tp - snapshot.price);
       const rrRatio = riskDist > 0 ? rewardDist / riskDist : 0;
 
-      // ─── OPPORTUNITY SCORING (soft gating) ─────────────────────
+      // Dynamic sizing (meta-adjusted) — compute before scoring for execution cost model
+      const sizing = this.sizer.calculate(this.state.currentCapital, ed.confidence, stats, ddState, regimeParams.sizeMultiplier * metaDecision.sizeMultiplier, this.state.consecutiveLosses);
+
+      // ─── OPPORTUNITY SCORING (adaptive weights + execution costs) ──
+      const totalOi = snapshot.longOi + snapshot.shortOi;
+      const posSize = sizing.collateral * leverage;
       const oppScore = this.scorer.score(
         composite, ed.confidence, ed.agreeing, ed.totalVoters,
         evCheck, techSignal, techDataAvailable,
         regimeAllowed, rrRatio, metaDecision.scoreThreshold,
+        posSize, totalOi, snapshot.price, sl,
       );
 
       if (!oppScore.passes) {
@@ -351,8 +365,6 @@ export class LiveTradingAgent {
         continue;
       }
 
-      // Dynamic sizing (meta-adjusted)
-      const sizing = this.sizer.calculate(this.state.currentCapital, ed.confidence, stats, ddState, regimeParams.sizeMultiplier * metaDecision.sizeMultiplier, this.state.consecutiveLosses);
       const collateral = Math.min(sizing.collateral, Math.max(1, maxCapital - tickCapitalAllocated));
       const strategyName = (allowedInRegime.length > 0 ? allowedInRegime : votingStrategies).join('+') || 'ensemble';
 
@@ -736,17 +748,30 @@ export class LiveTradingAgent {
 
       this.state = this.risk.processTradeResult(this.state, pnl);
 
-      // POST-TRADE LEARNING: update expectancy engine + strategy ensemble
+      // POST-TRADE LEARNING: update ALL adaptive systems
+      const won = pnl > 0;
       this.expectancy.recordTrade(decision.strategy, pnl);
-      this.ensemble.recordOutcome(decision.strategy, pnl > 0);
+      this.ensemble.recordOutcome(decision.strategy, won);
+
       // Update fusion engine factor accuracy
       for (const signal of decision.signals) {
-        const wasCorrect = (signal.direction === 'bullish' && pnl > 0) || (signal.direction === 'bearish' && pnl > 0 && decision.side === 'short');
+        const wasCorrect = (signal.direction === 'bullish' && won && decision.side === 'long') ||
+                           (signal.direction === 'bearish' && won && decision.side === 'short');
         this.fusion.recordOutcome(signal.source, wasCorrect);
       }
 
+      // Update ADAPTIVE SCORING WEIGHTS — which components predicted correctly?
+      this.scorer.recordOutcome({
+        signal: won,           // Did the fusion signal predict correctly?
+        strategy: won,         // Did the ensemble pick a winner?
+        ev: won,               // Was EV model accurate?
+        technicals: won,       // Did technicals align with outcome?
+        regime: won,           // Was regime classification correct?
+        riskReward: pnl > 0,   // Did the R:R target hold?
+      });
+
       this.callbacks.onTrade?.(entry);
-      this.log('normal', `Closed: ${position.market} ${position.side} PnL=$${pnl.toFixed(2)} | EV updated`);
+      this.log('normal', `Closed: ${position.market} ${position.side} PnL=$${pnl.toFixed(2)} | weights updated`);
     } catch (error: unknown) {
       const msg = error instanceof Error ? error.message : String(error);
       this.log('error', `Close failed: ${msg}`);
