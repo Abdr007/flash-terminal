@@ -1,60 +1,58 @@
 /**
- * Adaptive Weight System — Weights that learn from outcomes.
+ * Adaptive Weight System v2 — Dual-memory with anti-overfitting.
  *
- * Each scoring factor tracks its predictive accuracy. Factors that
- * predicted correctly get more weight. Factors that failed get less.
- * Weights are normalized to sum to 1.0 after every adjustment.
+ * Two memory windows:
+ * - Short-term (last 20 trades): responsive to recent conditions
+ * - Long-term (last 100+ trades): stable, prevents overfitting
+ * - Final weight = blend of both (60% long-term, 40% short-term)
  *
- * Uses exponential decay — recent trades weighted 2x vs older ones.
+ * This prevents the system from overreacting to a few lucky/unlucky trades.
  */
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
 export interface WeightState {
   name: string;
-  /** Current adaptive weight */
   weight: number;
-  /** Base weight (starting point) */
   baseWeight: number;
-  /** Rolling accuracy (0-1) */
+  /** Short-term accuracy (last ~20 trades) */
+  shortTermAccuracy: number;
+  /** Long-term accuracy (last ~100 trades) */
+  longTermAccuracy: number;
+  /** Blended accuracy */
   accuracy: number;
-  /** Total predictions tracked */
-  predictions: number;
-  /** Correct predictions */
-  correct: number;
+  shortTermPredictions: number;
+  shortTermCorrect: number;
+  longTermPredictions: number;
+  longTermCorrect: number;
 }
 
 // ─── Adaptive Weights ────────────────────────────────────────────────────────
 
 export class AdaptiveWeights {
   private weights: Map<string, WeightState> = new Map();
-  private readonly decayFactor = 0.95; // Recent data weighted higher
+  private readonly shortDecay = 0.92;  // Fast decay — responsive
+  private readonly longDecay = 0.98;   // Slow decay — stable
+  private readonly shortBlend = 0.40;  // 40% short-term influence
+  private readonly longBlend = 0.60;   // 60% long-term influence
   private readonly minWeight = 0.05;
   private readonly maxWeight = 0.45;
 
   constructor(initialWeights: Record<string, number>) {
     for (const [name, weight] of Object.entries(initialWeights)) {
       this.weights.set(name, {
-        name,
-        weight,
-        baseWeight: weight,
-        accuracy: 0.5, // Start neutral
-        predictions: 0,
-        correct: 0,
+        name, weight, baseWeight: weight,
+        shortTermAccuracy: 0.5, longTermAccuracy: 0.5, accuracy: 0.5,
+        shortTermPredictions: 0, shortTermCorrect: 0,
+        longTermPredictions: 0, longTermCorrect: 0,
       });
     }
   }
 
-  /**
-   * Get current weight for a factor.
-   */
   get(name: string): number {
     return this.weights.get(name)?.weight ?? 0;
   }
 
-  /**
-   * Get all weights as a record.
-   */
   getAll(): Record<string, number> {
     const result: Record<string, number> = {};
     for (const [name, state] of this.weights) {
@@ -64,48 +62,42 @@ export class AdaptiveWeights {
   }
 
   /**
-   * Record whether a factor's prediction was correct after a trade.
-   * Adjusts weight based on rolling accuracy.
+   * Record outcome — updates both short and long term memory.
    */
   recordOutcome(factorName: string, wasCorrect: boolean): void {
     const state = this.weights.get(factorName);
     if (!state) return;
 
-    // Exponential decay: reduce old data influence
-    state.correct = state.correct * this.decayFactor + (wasCorrect ? 1 : 0);
-    state.predictions = state.predictions * this.decayFactor + 1;
+    // Short-term memory (fast decay)
+    state.shortTermCorrect = state.shortTermCorrect * this.shortDecay + (wasCorrect ? 1 : 0);
+    state.shortTermPredictions = state.shortTermPredictions * this.shortDecay + 1;
+    state.shortTermAccuracy = state.shortTermPredictions > 0
+      ? state.shortTermCorrect / state.shortTermPredictions : 0.5;
 
-    // Update accuracy
-    state.accuracy = state.predictions > 0 ? state.correct / state.predictions : 0.5;
+    // Long-term memory (slow decay)
+    state.longTermCorrect = state.longTermCorrect * this.longDecay + (wasCorrect ? 1 : 0);
+    state.longTermPredictions = state.longTermPredictions * this.longDecay + 1;
+    state.longTermAccuracy = state.longTermPredictions > 0
+      ? state.longTermCorrect / state.longTermPredictions : 0.5;
 
-    // Adjust weight: accuracy 0.5 = base weight, 0.7 = 1.4x, 0.3 = 0.6x
-    const accuracyMultiplier = 0.4 + state.accuracy * 1.2; // Range: 0.4 to 1.6
-    state.weight = state.baseWeight * accuracyMultiplier;
+    // Blend: 60% long-term + 40% short-term
+    state.accuracy = state.longTermAccuracy * this.longBlend + state.shortTermAccuracy * this.shortBlend;
 
-    // Clamp
+    // Weight adjustment: accuracy 0.5 = base, higher = more weight
+    const multiplier = 0.4 + state.accuracy * 1.2; // 0.4 to 1.6
+    state.weight = state.baseWeight * multiplier;
     state.weight = Math.max(this.minWeight, Math.min(this.maxWeight, state.weight));
 
-    // Normalize all weights to sum to 1.0
     this.normalize();
   }
 
-  /**
-   * Normalize weights so they sum to 1.0.
-   */
   private normalize(): void {
     let total = 0;
-    for (const state of this.weights.values()) {
-      total += state.weight;
-    }
+    for (const state of this.weights.values()) total += state.weight;
     if (total <= 0) return;
-    for (const state of this.weights.values()) {
-      state.weight = state.weight / total;
-    }
+    for (const state of this.weights.values()) state.weight /= total;
   }
 
-  /**
-   * Get factor states for reporting.
-   */
   getStates(): WeightState[] {
     return Array.from(this.weights.values());
   }
@@ -113,9 +105,13 @@ export class AdaptiveWeights {
   reset(): void {
     for (const state of this.weights.values()) {
       state.weight = state.baseWeight;
+      state.shortTermAccuracy = 0.5;
+      state.longTermAccuracy = 0.5;
       state.accuracy = 0.5;
-      state.predictions = 0;
-      state.correct = 0;
+      state.shortTermPredictions = 0;
+      state.shortTermCorrect = 0;
+      state.longTermPredictions = 0;
+      state.longTermCorrect = 0;
     }
     this.normalize();
   }

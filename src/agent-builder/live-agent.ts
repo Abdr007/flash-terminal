@@ -126,7 +126,7 @@ export class LiveTradingAgent {
     this.stopRequested = false;
     this.setStatus(AgentStatus.RUNNING);
 
-    this.log('info', `Agent "${this.config.name}" v7 (adaptive intelligence) starting`);
+    this.log('info', `Agent "${this.config.name}" v8 (uncertainty-aware) starting`);
     this.log('info', `Scanning: ${this.config.markets.length} markets → score + rank → top trades only`);
     this.log('info', `Strategies: ${this.strategies.map((s) => s.name).join(', ')}`);
     this.log('info', `Engines: meta-agent, opportunity scorer, portfolio intel, EV, Bayesian fusion, technicals`);
@@ -348,7 +348,14 @@ export class LiveTradingAgent {
       const rrRatio = riskDist > 0 ? rewardDist / riskDist : 0;
 
       // Dynamic sizing (meta-adjusted) — compute before scoring for execution cost model
-      const sizing = this.sizer.calculate(this.state.currentCapital, ed.confidence, stats, ddState, regimeParams.sizeMultiplier * metaDecision.sizeMultiplier, this.state.consecutiveLosses);
+      // UNCERTAINTY: reduce size when signals are unstable (many factors, low confidence)
+      let uncertaintyMultiplier = 1.0;
+      if (composite.totalFactors >= 3 && composite.confidence < 0.4) {
+        uncertaintyMultiplier = 0.5; // High uncertainty → half size
+      } else if (composite.totalFactors >= 2 && composite.confidence < 0.5) {
+        uncertaintyMultiplier = 0.75; // Moderate uncertainty → 75% size
+      }
+      const sizing = this.sizer.calculate(this.state.currentCapital, ed.confidence, stats, ddState, regimeParams.sizeMultiplier * metaDecision.sizeMultiplier * uncertaintyMultiplier, this.state.consecutiveLosses);
 
       // ─── OPPORTUNITY SCORING (adaptive weights + execution costs) ──
       const totalOi = snapshot.longOi + snapshot.shortOi;
@@ -396,6 +403,13 @@ export class LiveTradingAgent {
 
     // Execute ONLY the best opportunities (sorted by score, up to max positions)
     opportunities.sort((a, b) => b.score - a.score);
+
+    // GLOBAL TRADE FILTER: if best opportunity is weak, do nothing
+    const ABSOLUTE_FLOOR = 50; // Never trade below this score regardless of meta threshold
+    if (opportunities.length > 0 && opportunities[0].score < ABSOLUTE_FLOOR) {
+      this.log('verbose', `Best opportunity ${opportunities[0].decision.market} scored ${opportunities[0].score} < floor ${ABSOLUTE_FLOOR} — no trades this tick`);
+      opportunities.length = 0; // Clear all
+    }
 
     for (const opp of opportunities) {
       if (tickPositionCount >= metaDecision.maxPositions) break;

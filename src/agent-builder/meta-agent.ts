@@ -104,13 +104,23 @@ export class MetaAgent {
     else if (systemEV < -1) { score -= 25; reasons.push(`EV=${systemEV.toFixed(1)}↓`); }
     else if (systemEV < 0) { score -= 10; reasons.push(`EV=${systemEV.toFixed(1)}`); }
 
-    // FORWARD-LOOKING: volatility expansion = opportunity coming
+    // FORWARD-LOOKING: volatility trend + structural break detection
     if (this.volatilityTrend.length >= 3) {
       const recent = this.volatilityTrend.slice(-3);
       const expanding = recent[2] > recent[1] && recent[1] > recent[0];
       const compressing = recent[2] < recent[1] && recent[1] < recent[0];
-      if (expanding) { score += 8; reasons.push('vol↑'); } // Opportunity emerging
-      if (compressing) { score -= 5; reasons.push('vol↓'); } // Market dying down
+      if (expanding) { score += 8; reasons.push('vol↑'); }
+      if (compressing) { score -= 5; reasons.push('vol↓'); }
+
+      // STRUCTURAL BREAK: sudden volatility spike (>2x average)
+      if (this.volatilityTrend.length >= 5) {
+        const avg = this.volatilityTrend.slice(0, -1).reduce((a, b) => a + b, 0) / (this.volatilityTrend.length - 1);
+        const latest = this.volatilityTrend[this.volatilityTrend.length - 1];
+        if (avg > 0 && latest / avg > 2.0) {
+          score -= 15; reasons.push('BREAK:vol_spike');
+          // Structural break detected — go conservative until it settles
+        }
+      }
     }
 
     // 2. Recent win rate
