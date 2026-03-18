@@ -268,7 +268,7 @@ export class LiveTradingAgent {
       }
 
       // FILTER: signal quality (Section 4) — composite score, confidence, clarity
-      if (composite.confidence < 0.50) continue; // Raised from 0.35
+      if (composite.confidence < 0.40) continue;
       if (!composite.confirmed) continue;
       const totalDir = composite.factors.filter((f) => f.direction !== 'neutral').length;
       const aligned = composite.confirmedFactors;
@@ -280,10 +280,18 @@ export class LiveTradingAgent {
 
       this.log('verbose', `${snapshot.market}: regime=${regime.regime} score=${composite.compositeScore.toFixed(3)} conf=${(composite.confidence * 100).toFixed(0)}% clarity=${(clarity * 100).toFixed(0)}% ${composite.confirmedFactors}F`);
 
-      // FILTER: RANGING regime — only enter near range extremes
+      // FILTER: RANGING regime — mean_reversion only near range extremes
+      // OI skew and funding harvester work anywhere in range (crowd-fading, not price-based)
       if (regime.regime === 'RANGING' && !this.regimeAdapter.isNearRangeExtreme(snapshot.market, snapshot.price)) {
-        this.log('verbose', `${snapshot.market}: RANGING but price not near extreme — skip`);
-        continue;
+        // Check if any non-price-based strategy would fire — if so, allow
+        const hasNonPriceBased = this.strategies.some((s) =>
+          (s.name === 'oi_skew' || s.name === 'funding_harvester') &&
+          regimeParams.allowedStrategies.includes(s.name),
+        );
+        if (!hasNonPriceBased) {
+          this.log('verbose', `${snapshot.market}: RANGING mid-range — only oi_skew/funding allowed here`);
+          continue;
+        }
       }
 
       // Strategy ensemble
@@ -298,9 +306,12 @@ export class LiveTradingAgent {
         continue;
       }
 
-      // FILTER: ensemble strength — require ≥2 strategies OR single with ≥85%
-      if (ed.agreeing < 2 && ed.confidence < 0.85) {
-        this.log('verbose', `${snapshot.market}: weak consensus (${ed.agreeing}/${ed.totalVoters} agree, conf=${(ed.confidence * 100).toFixed(0)}%) — need ≥2 or ≥85%`);
+      // FILTER: ensemble strength
+      // If strategy is regime-aligned, lower the single-strategy threshold to 0.70
+      // Otherwise require ≥2 strategies or single with ≥85%
+      const singleStratThreshold = allowedInRegime.length >= 1 ? 0.70 : 0.85;
+      if (ed.agreeing < 2 && ed.confidence < singleStratThreshold) {
+        this.log('verbose', `${snapshot.market}: weak consensus (${ed.agreeing}/${ed.totalVoters}, conf=${(ed.confidence * 100).toFixed(0)}% < ${(singleStratThreshold * 100).toFixed(0)}%)`);
         continue;
       }
 
