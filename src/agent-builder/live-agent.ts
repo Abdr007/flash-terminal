@@ -321,7 +321,16 @@ export class LiveTradingAgent {
       return;
     }
 
-    this.log('verbose', `META: ${metaDecision.reason} | threshold=${metaDecision.scoreThreshold}`);
+    // DEGRADATION DETECTION: if policy performance is dropping, go conservative
+    const policyMetrics = this.policyLearner.getMetrics();
+    if (policyMetrics.degrading && metaDecision.mode === 'AGGRESSIVE') {
+      metaDecision.mode = 'NORMAL' as typeof metaDecision.mode;
+      metaDecision.scoreThreshold = 65;
+      metaDecision.sizeMultiplier = 1.0;
+      this.log('normal', `DEGRADATION detected (shortSharpe=${policyMetrics.shortSharpe.toFixed(2)} vs ${policyMetrics.sharpe.toFixed(2)}) — downgraded to NORMAL`);
+    }
+
+    this.log('verbose', `META: ${metaDecision.reason} | threshold=${metaDecision.scoreThreshold} | LR=${policyMetrics.learningRate.toFixed(3)} explore=${(policyMetrics.explorationRate * 100).toFixed(1)}%`);
 
     // Hard guards (kept as safety net)
     if (this.hourlyTrades.length >= 6) return;
@@ -645,9 +654,20 @@ export class LiveTradingAgent {
             this.positionMgr.untrack(pos.market, pos.side);
             break;
 
-          case 'hold':
+          case 'hold': {
             this.log('verbose', `Hold: ${pos.market} ${pos.side} — ${managed.reason}`);
+            // INTERMEDIATE REWARD: shape policy with partial progress signals
+            const tradeKey = `${pos.market}:${pos.side}`;
+            const ts = this.activeTradeStates.get(tradeKey);
+            if (ts) {
+              const holdTicks = this.state.iteration - ts.entryTick;
+              const intReward = this.policyLearner.computeIntermediateReward(pos.pnlPercent ?? 0, managed.rMultiple, holdTicks);
+              if (Math.abs(intReward) > 0.01) {
+                this.policyLearner.update(ts.state, ts.action, intReward);
+              }
+            }
             break;
+          }
         }
         continue;
       }

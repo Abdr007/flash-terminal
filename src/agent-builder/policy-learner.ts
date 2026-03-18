@@ -13,13 +13,14 @@
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
-/** Discretized market state for policy lookup */
+/** Compressed market state — fewer dimensions = denser learning */
 export interface MarketState {
-  regime: string;           // RANGING, TRENDING_UP, etc.
-  signalDirection: string;  // bullish, bearish, neutral
-  signalStrength: string;   // weak, moderate, strong
-  volatility: string;       // low, medium, high
-  recentPerformance: string;// winning, neutral, losing
+  /** Grouped regime: trend, range, volatile (3 values, not 5) */
+  regime: string;
+  /** Signal direction (3 values) */
+  signalDirection: string;
+  /** Combined condition: signal strength + volatility (4 values) */
+  condition: string;
 }
 
 /** Available actions the policy can recommend */
@@ -50,9 +51,9 @@ const ACTIONS: PolicyAction[] = ['trade_aggressive', 'trade_normal', 'trade_cons
 const INITIAL_LEARNING_RATE = 0.15; // Starting learning rate
 const MIN_LEARNING_RATE = 0.03;     // Floor — never stop learning entirely
 const LR_DECAY = 0.998;            // Learning rate decays over time (prevents overfitting)
-const EXPLORATION_RATE = 0.15;
-const MIN_EXPLORATION = 0.05;
-const EXPLORATION_DECAY = 0.995;
+const EXPLORATION_RATE = 0.12;       // Start lower — 12% not 15%
+const MIN_EXPLORATION = 0.025;       // Floor at 2.5% (prevents stagnation)
+const EXPLORATION_DECAY = 0.997;     // Slower decay — reach floor in ~200 updates
 const MIN_VISITS_FOR_UPDATE = 2;    // Minimum visits before Q-value updates take effect
 const MIN_VISITS_FOR_TRUST = 5;     // Minimum visits before trusting a policy decision
 
@@ -63,11 +64,12 @@ export class PolicyLearner {
   private currentExploration: number;
   private currentLearningRate: number;
   private totalUpdates = 0;
-  /** Track recent rewards for Sharpe computation */
-  private recentRewards: number[] = [];
+  /** Rolling reward windows for metrics */
+  private recentRewards: number[] = [];      // Last 50
+  private shortWindow: number[] = [];        // Last 10 (fast degradation detect)
   /** Track if system is in drawdown (disable exploration) */
   private inDrawdown = false;
-  /** Evaluation metrics */
+  /** Rolling evaluation metrics */
   private metrics = { totalReward: 0, maxDrawdown: 0, peakReward: 0, winCount: 0, lossCount: 0 };
 
   constructor() {
@@ -83,15 +85,26 @@ export class PolicyLearner {
     compositeDirection: string,
     compositeConfidence: number,
     volatilityPct: number,
-    recentWinRate: number,
+    _recentWinRate: number,
   ): MarketState {
+    // Compress regime: 5 types → 3 groups
+    const regimeGroup = (regime === 'TRENDING_UP' || regime === 'TRENDING_DOWN') ? 'trend'
+      : (regime === 'HIGH_VOLATILITY') ? 'volatile'
+      : 'range'; // RANGING + COMPRESSION
+
+    // Compress signal strength + volatility into one "condition" dimension
+    const isStrong = compositeConfidence >= 0.5;
+    const isHighVol = volatilityPct > 4;
+    const condition = isStrong
+      ? (isHighVol ? 'strong_volatile' : 'strong_calm')
+      : (isHighVol ? 'weak_volatile' : 'weak_calm');
+
     return {
-      regime,
+      regime: regimeGroup,
       signalDirection: compositeDirection,
-      signalStrength: compositeConfidence >= 0.6 ? 'strong' : compositeConfidence >= 0.35 ? 'moderate' : 'weak',
-      volatility: volatilityPct > 5 ? 'high' : volatilityPct > 2 ? 'medium' : 'low',
-      recentPerformance: recentWinRate >= 0.55 ? 'winning' : recentWinRate >= 0.40 ? 'neutral' : 'losing',
+      condition,
     };
+    // Total states: 3 regimes × 3 directions × 4 conditions = 36
   }
 
   /**
@@ -158,10 +171,12 @@ export class PolicyLearner {
       entry.qValues[action] = oldQ + this.currentLearningRate * (reward - oldQ);
     }
 
-    // Track metrics
+    // Track metrics in dual rolling windows
     this.totalUpdates++;
     this.recentRewards.push(reward);
     if (this.recentRewards.length > 50) this.recentRewards.shift();
+    this.shortWindow.push(reward);
+    if (this.shortWindow.length > 10) this.shortWindow.shift();
 
     this.metrics.totalReward += reward;
     if (reward > 0) this.metrics.winCount++;
@@ -237,16 +252,37 @@ export class PolicyLearner {
   /**
    * Get all evaluation metrics.
    */
-  getMetrics(): { sharpe: number; maxDrawdown: number; winRate: number; totalUpdates: number; learningRate: number; explorationRate: number; policySize: number } {
+  getMetrics(): {
+    sharpe: number; shortSharpe: number; maxDrawdown: number; winRate: number;
+    totalUpdates: number; learningRate: number; explorationRate: number;
+    policySize: number; degrading: boolean;
+  } {
     const total = this.metrics.winCount + this.metrics.lossCount;
+    const longSharpe = this.getSharpeRatio();
+
+    // Short-window Sharpe (fast degradation detection)
+    let shortSharpe = 0;
+    if (this.shortWindow.length >= 5) {
+      const mean = this.shortWindow.reduce((a, b) => a + b, 0) / this.shortWindow.length;
+      const variance = this.shortWindow.reduce((s, r) => s + (r - mean) ** 2, 0) / this.shortWindow.length;
+      const std = Math.sqrt(variance);
+      shortSharpe = std > 0 ? mean / std : 0;
+    }
+
+    // Degradation: short-window Sharpe significantly worse than long-window
+    const degrading = this.shortWindow.length >= 5 && this.recentRewards.length >= 20
+      && shortSharpe < longSharpe - 0.5;
+
     return {
-      sharpe: this.getSharpeRatio(),
+      sharpe: longSharpe,
+      shortSharpe,
       maxDrawdown: this.metrics.maxDrawdown,
       winRate: total > 0 ? this.metrics.winCount / total : 0,
       totalUpdates: this.totalUpdates,
       learningRate: this.currentLearningRate,
       explorationRate: this.currentExploration,
       policySize: this.policy.size,
+      degrading,
     };
   }
 
@@ -262,6 +298,28 @@ export class PolicyLearner {
     const mean = this.recentRewards.reduce((a, b) => a + b, 0) / this.recentRewards.length;
     const variance = this.recentRewards.reduce((s, r) => s + (r - mean) ** 2, 0) / this.recentRewards.length;
     return Math.sqrt(variance);
+  }
+
+  /**
+   * Compute intermediate reward for open positions (shaping signal).
+   * Called every tick for active trades — rewards partial progress.
+   */
+  computeIntermediateReward(currentPnlPct: number, rMultiple: number, holdingTicks: number): number {
+    let reward = 0;
+
+    // Reward reaching 1R milestone
+    if (rMultiple >= 1.0) reward += 0.15;
+
+    // Reward positive PnL (scaled down — it's partial)
+    if (currentPnlPct > 0) reward += currentPnlPct * 0.01;
+
+    // Penalize holding losses too long
+    if (currentPnlPct < -1 && holdingTicks > 10) reward -= 0.1;
+
+    // Penalize deep drawdown
+    if (currentPnlPct < -3) reward -= 0.2;
+
+    return reward * 0.3; // Scale down — intermediate rewards are small shaping signals
   }
 
   /**
@@ -311,7 +369,7 @@ export class PolicyLearner {
   // ─── Internal ──────────────────────────────────────────────────────
 
   private stateKey(state: MarketState): string {
-    return `${state.regime}|${state.signalDirection}|${state.signalStrength}|${state.volatility}|${state.recentPerformance}`;
+    return `${state.regime}|${state.signalDirection}|${state.condition}`;
   }
 
   private getBestAction(entry: PolicyEntry): PolicyAction {
