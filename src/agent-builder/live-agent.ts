@@ -249,6 +249,8 @@ export class LiveTradingAgent {
       this.safetyStop(`Drawdown manager halt: ${ddState.haltReason}`);
       return;
     }
+    // Sync drawdown state to policy learner (disables exploration during DD)
+    this.policyLearner.setDrawdownState(ddState.drawdownPct > 0.05);
     if (ddState.sizeMultiplier < 0.15) {
       this.log('normal', `Drawdown ${(ddState.drawdownPct * 100).toFixed(1)}% — sizing reduced to ${(ddState.sizeMultiplier * 100).toFixed(0)}%`);
     }
@@ -884,7 +886,8 @@ export class LiveTradingAgent {
         const reward = this.policyLearner.computeReward(pnl, decision.collateral ?? 100, decision.leverage ?? 3, holdingTicks);
         this.policyLearner.update(tradeState.state, tradeState.action, reward);
         this.activeTradeStates.delete(tradeKey);
-        this.log('verbose', `Policy: reward=${reward.toFixed(3)} for ${tradeState.action} in ${tradeState.state.regime}|${tradeState.state.signalDirection} (explore=${(this.policyLearner.getExplorationRate() * 100).toFixed(0)}%)`);
+        const pm = this.policyLearner.getMetrics();
+        this.log('verbose', `Policy: reward=${reward.toFixed(3)} ${tradeState.action} | LR=${pm.learningRate.toFixed(3)} explore=${(pm.explorationRate * 100).toFixed(0)}% sharpe=${pm.sharpe.toFixed(2)} states=${pm.policySize}`);
       }
 
       // Log simulation + counterfactual insights periodically
