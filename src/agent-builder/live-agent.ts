@@ -28,6 +28,9 @@ import { MetaAgent } from './meta-agent.js';
 import { OpportunityScorer } from './opportunity-scorer.js';
 import { PortfolioIntel } from './portfolio-intel.js';
 import { ExecutionModel } from './execution-model.js';
+import { CounterfactualTracker } from './counterfactual-tracker.js';
+import { MicroEntryAnalyzer } from './micro-entry.js';
+import { TimeIntelligence } from './time-intelligence.js';
 import type { CompositeSignal } from './signal-fusion.js';
 
 import type {
@@ -63,6 +66,9 @@ export class LiveTradingAgent {
   private readonly meta: MetaAgent;
   private readonly scorer: OpportunityScorer;
   private readonly portfolioIntel: PortfolioIntel;
+  private readonly counterfactual: CounterfactualTracker;
+  private readonly microEntry: MicroEntryAnalyzer;
+  private readonly timeIntel: TimeIntelligence;
   /** Signal confirmation: track previous tick's direction per market */
   private prevSignals: Map<string, string> = new Map();
   /** Per-market cooldown after trade close */
@@ -114,6 +120,9 @@ export class LiveTradingAgent {
     this.meta = new MetaAgent();
     this.scorer = new OpportunityScorer();
     this.portfolioIntel = new PortfolioIntel(1, 0.20);
+    this.counterfactual = new CounterfactualTracker();
+    this.microEntry = new MicroEntryAnalyzer();
+    this.timeIntel = new TimeIntelligence();
     this.state = this.createInitialState();
   }
 
@@ -126,7 +135,7 @@ export class LiveTradingAgent {
     this.stopRequested = false;
     this.setStatus(AgentStatus.RUNNING);
 
-    this.log('info', `Agent "${this.config.name}" v8 (uncertainty-aware) starting`);
+    this.log('info', `Agent "${this.config.name}" v9 (self-improving) starting`);
     this.log('info', `Scanning: ${this.config.markets.length} markets → score + rank → top trades only`);
     this.log('info', `Strategies: ${this.strategies.map((s) => s.name).join(', ')}`);
     this.log('info', `Engines: meta-agent, opportunity scorer, portfolio intel, EV, Bayesian fusion, technicals`);
@@ -188,8 +197,9 @@ export class LiveTradingAgent {
     this.regimeAdapter.reset();
     this.technicals.reset();
     this.meta.reset();
-    // Note: expectancy + scorer adaptive weights NOT reset — persist learning
-    // this.scorer.reset() — intentionally NOT called
+    this.microEntry.reset();
+    this.counterfactual.reset();
+    // Note: expectancy, scorer weights, timeIntel NOT reset — persist learning
     this.log('info', 'Stop requested — state cleaned (EV stats preserved)');
   }
 
@@ -263,6 +273,19 @@ export class LiveTradingAgent {
     // ─── PHASE 4: META-CONTROLLED SCORING + DECIDE ─────────────────
     const now = Date.now();
     this.hourlyTrades = this.hourlyTrades.filter((t) => now - t < 3_600_000);
+
+    // Evaluate counterfactual outcomes from previous skips
+    this.counterfactual.evaluate(snapshots);
+
+    // Record micro-entry prices
+    for (const s of snapshots) this.microEntry.record(s.market, s.price);
+
+    // TIME INTELLIGENCE: check if current hour is historically profitable
+    const timeCheck = this.timeIntel.check();
+    if (!timeCheck.allowed) {
+      this.log('verbose', `Time filter: ${timeCheck.reason}`);
+      return;
+    }
 
     // Forward-looking: feed volatility trend to meta-agent
     const avgVol = snapshots.length > 0
@@ -369,6 +392,8 @@ export class LiveTradingAgent {
 
       if (!oppScore.passes) {
         this.log('verbose', `${snapshot.market}: score ${oppScore.summary} < threshold ${metaDecision.scoreThreshold}`);
+        // COUNTERFACTUAL: record this skip to learn from later
+        this.counterfactual.recordSkip(snapshot.market, side, snapshot.price, oppScore.total, `score<${metaDecision.scoreThreshold}`, primaryStrategy);
         continue;
       }
 
@@ -393,11 +418,29 @@ export class LiveTradingAgent {
       const portfolioCheck = this.portfolioIntel.check(this.state.positions, snapshot.market, side, collateral * leverage, this.state.currentCapital);
       if (!portfolioCheck.allowed) {
         this.log('verbose', `${snapshot.market}: portfolio blocked — ${portfolioCheck.reason}`);
+        this.counterfactual.recordSkip(snapshot.market, side, snapshot.price, oppScore.total, 'portfolio', primaryStrategy);
         continue;
       }
 
+      // MICRO-ENTRY: check if current price is good for entry
+      const microCheck = this.microEntry.check(snapshot.market, side, snapshot.price);
+      if (!microCheck.enterNow) {
+        this.log('verbose', `${snapshot.market}: micro-entry poor — ${microCheck.reason}`);
+        this.counterfactual.recordSkip(snapshot.market, side, snapshot.price, oppScore.total, 'micro_entry', primaryStrategy);
+        continue;
+      }
+
+      // Apply time-based size adjustment
+      if (timeCheck.sizeMultiplier !== 1.0 && decision.collateral) {
+        decision.collateral = Math.max(1, decision.collateral * timeCheck.sizeMultiplier);
+      }
+
+      // Apply micro-entry quality to score (excellent = bonus, poor already filtered)
+      const microBonus = microCheck.quality === 'excellent' ? 5 : microCheck.quality === 'good' ? 2 : 0;
+      const finalScore = oppScore.total + microBonus;
+
       if (decision.riskLevel !== 'blocked') {
-        opportunities.push({ snapshot, score: oppScore.total, decision });
+        opportunities.push({ snapshot, score: finalScore, decision });
       }
     }
 
@@ -783,6 +826,15 @@ export class LiveTradingAgent {
         regime: won,           // Was regime classification correct?
         riskReward: pnl > 0,   // Did the R:R target hold?
       });
+
+      // Time intelligence: record when this trade happened
+      this.timeIntel.record(pnl);
+
+      // Log counterfactual insights periodically
+      const cf = this.counterfactual.getInsights();
+      if (cf.missedWins + cf.correctSkips >= 5) {
+        this.log('verbose', `Counterfactual: ${cf.correctSkips} correct skips, ${cf.missedWins} missed wins (skip accuracy ${(cf.skipAccuracy * 100).toFixed(0)}%)`);
+      }
 
       this.callbacks.onTrade?.(entry);
       this.log('normal', `Closed: ${position.market} ${position.side} PnL=$${pnl.toFixed(2)} | weights updated`);

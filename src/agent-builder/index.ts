@@ -30,6 +30,10 @@ export { AdaptiveWeights } from './adaptive-weights.js';
 export type { WeightState } from './adaptive-weights.js';
 export { ExecutionModel } from './execution-model.js';
 export type { ExecutionCost } from './execution-model.js';
+export { CounterfactualTracker } from './counterfactual-tracker.js';
+export type { CounterfactualInsight } from './counterfactual-tracker.js';
+export { MicroEntryAnalyzer } from './micro-entry.js';
+export { TimeIntelligence } from './time-intelligence.js';
 
 // Supervisor
 export { AgentSupervisor } from './supervisor.js';
