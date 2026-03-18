@@ -24,6 +24,9 @@ import { MarketScanner } from './market-scanner.js';
 import { DynamicSizer } from './dynamic-sizer.js';
 import { TechnicalAnalyzer } from './technical-indicators.js';
 import { ExpectancyEngine } from './expectancy-engine.js';
+import { MetaAgent } from './meta-agent.js';
+import { OpportunityScorer } from './opportunity-scorer.js';
+import { PortfolioIntel } from './portfolio-intel.js';
 import type { CompositeSignal } from './signal-fusion.js';
 
 import type {
@@ -56,6 +59,9 @@ export class LiveTradingAgent {
   private readonly sizer: DynamicSizer;
   private readonly technicals: TechnicalAnalyzer;
   private readonly expectancy: ExpectancyEngine;
+  private readonly meta: MetaAgent;
+  private readonly scorer: OpportunityScorer;
+  private readonly portfolioIntel: PortfolioIntel;
   /** Signal confirmation: track previous tick's direction per market */
   private prevSignals: Map<string, string> = new Map();
   /** Per-market cooldown after trade close */
@@ -104,6 +110,9 @@ export class LiveTradingAgent {
     this.sizer = new DynamicSizer(0.02, 0.005, 0.03);
     this.technicals = new TechnicalAnalyzer();
     this.expectancy = new ExpectancyEngine();
+    this.meta = new MetaAgent();
+    this.scorer = new OpportunityScorer();
+    this.portfolioIntel = new PortfolioIntel(1, 0.20);
     this.state = this.createInitialState();
   }
 
@@ -116,11 +125,11 @@ export class LiveTradingAgent {
     this.stopRequested = false;
     this.setStatus(AgentStatus.RUNNING);
 
-    this.log('info', `Agent "${this.config.name}" v5 (alpha engine) starting`);
-    this.log('info', `Scanning: ${this.config.markets.length} markets → trade top 3`);
+    this.log('info', `Agent "${this.config.name}" v6 (meta-controlled) starting`);
+    this.log('info', `Scanning: ${this.config.markets.length} markets → score + rank → top trades only`);
     this.log('info', `Strategies: ${this.strategies.map((s) => s.name).join(', ')}`);
-    this.log('info', `Engines: EV filter, Bayesian fusion, technicals (RSI+MACD+EMA+BB), regime-adaptive, market scanner`);
-    this.log('info', `Risk: max ${this.config.risk.maxPositions} pos, max ${this.config.risk.maxLeverage}x, post-trade learning`);
+    this.log('info', `Engines: meta-agent, opportunity scorer, portfolio intel, EV, Bayesian fusion, technicals`);
+    this.log('info', `Mode: adaptive aggression | correlated-trade prevention | self-learning`);
     if (this.config.dryRun) this.log('info', 'DRY RUN — decisions logged but not executed');
 
     // Initialize capital from live context
@@ -177,6 +186,7 @@ export class LiveTradingAgent {
     this.positionMgr.reset();
     this.regimeAdapter.reset();
     this.technicals.reset();
+    this.meta.reset();
     // Note: expectancy NOT reset — it persists learning across sessions
     this.log('info', 'Stop requested — state cleaned (EV stats preserved)');
   }
@@ -248,40 +258,44 @@ export class LiveTradingAgent {
       this.log('verbose', `Scanner: ${rankedMarkets.map((r) => `${r.market}(${(r.score * 100).toFixed(0)}%)`).join(', ')} | ${snapshots.length - rankedMarkets.length} filtered out`);
     }
 
-    // ─── PHASE 4: PRECISION-FILTERED ANALYSIS + DECIDE ───────────
-    // Clean up hourly counters
+    // ─── PHASE 4: META-CONTROLLED SCORING + DECIDE ─────────────────
     const now = Date.now();
     this.hourlyTrades = this.hourlyTrades.filter((t) => now - t < 3_600_000);
 
-    // FILTER: global trade frequency (max 6/hour)
-    if (this.hourlyTrades.length >= 6) {
-      this.log('verbose', 'Global trade limit: 6/hour reached');
+    // META-AGENT: evaluate global conditions → set aggression mode
+    const systemEV = this.expectancy.getSystemEV();
+    const metaDecision = this.meta.evaluate(
+      systemEV,
+      this.expectancy.getAllStats(),
+      ddState,
+      stats.winRate,
+      stats.totalTrades,
+    );
+
+    if (metaDecision.mode === 'HALT') {
+      this.log('normal', `META: HALT — ${metaDecision.reason}`);
       return;
     }
 
-    // FILTER: loss streak adaptation (Section 9)
-    if (this.state.consecutiveLosses >= 4) {
-      this.log('normal', `Loss streak ${this.state.consecutiveLosses} — pausing 10 min`);
-      return;
-    }
+    this.log('verbose', `META: ${metaDecision.reason} | threshold=${metaDecision.scoreThreshold}`);
+
+    // Hard guards (kept as safety net)
+    if (this.hourlyTrades.length >= 6) return;
+    if (this.state.consecutiveLosses >= 4) { this.log('normal', 'Loss streak 4+ — paused'); return; }
 
     let tickPositionCount = this.state.positions.length;
     let tickCapitalAllocated = this.state.positions.reduce((sum, p) => sum + (p.collateralUsd ?? 0), 0);
     const maxCapital = this.state.currentCapital * 0.15;
 
+    // Score ALL opportunities, then execute only the best
+    const opportunities: Array<{ snapshot: typeof snapshots[0]; score: number; decision: TradeDecision }> = [];
+
     for (const snapshot of snapshots) {
       if (!tradeableMarkets.has(snapshot.market)) continue;
-      if (tickPositionCount >= this.config.risk.maxPositions) continue;
-      if (tickCapitalAllocated >= maxCapital) continue;
 
-      // FILTER: per-market cooldown (Section 3)
+      // Hard guards (can't soft-gate these)
       const marketCooldown = this.marketCooldowns.get(snapshot.market) ?? 0;
-      if (now < marketCooldown) {
-        this.log('verbose', `${snapshot.market}: market cooldown (${Math.ceil((marketCooldown - now) / 1000)}s)`);
-        continue;
-      }
-
-      // FILTER: per-market frequency (max 2/hour per market)
+      if (now < marketCooldown) continue;
       const mktTrades = (this.marketHourlyTrades.get(snapshot.market) ?? []).filter((t) => now - t < 3_600_000);
       this.marketHourlyTrades.set(snapshot.market, mktTrades);
       if (mktTrades.length >= 2) continue;
@@ -291,122 +305,63 @@ export class LiveTradingAgent {
       const composite = compositeMap.get(snapshot.market)!;
       const marketSignals = this.signals.detect(snapshot);
 
-      // FILTER: 2-tick direction confirmation (Section 7)
+      // 2-tick confirmation (hard — prevents noise entries)
       const prevDir = this.prevSignals.get(snapshot.market);
       this.prevSignals.set(snapshot.market, composite.direction);
-      if (composite.direction !== 'neutral' && prevDir !== composite.direction) {
-        this.log('verbose', `${snapshot.market}: awaiting confirmation (${prevDir ?? 'none'} → ${composite.direction})`);
-        continue;
-      }
-
-      // FILTER: signal quality (Section 4) — composite score, confidence, clarity
-      if (composite.confidence < 0.40) continue;
-      if (!composite.confirmed) continue;
-      const totalDir = composite.factors.filter((f) => f.direction !== 'neutral').length;
-      const aligned = composite.confirmedFactors;
-      const clarity = totalDir > 0 ? aligned / totalDir : 0;
-      if (clarity < 0.6) {
-        this.log('verbose', `${snapshot.market}: low clarity ${(clarity * 100).toFixed(0)}% (${aligned}/${totalDir})`);
-        continue;
-      }
-
-      this.log('verbose', `${snapshot.market}: regime=${regime.regime} score=${composite.compositeScore.toFixed(3)} conf=${(composite.confidence * 100).toFixed(0)}% clarity=${(clarity * 100).toFixed(0)}% ${composite.confirmedFactors}F`);
-
-      // FILTER: RANGING regime — mean_reversion only near range extremes
-      // OI skew and funding harvester work anywhere in range (crowd-fading, not price-based)
-      if (regime.regime === 'RANGING' && !this.regimeAdapter.isNearRangeExtreme(snapshot.market, snapshot.price)) {
-        // Check if any non-price-based strategy would fire — if so, allow
-        const hasNonPriceBased = this.strategies.some((s) =>
-          (s.name === 'oi_skew' || s.name === 'funding_harvester') &&
-          regimeParams.allowedStrategies.includes(s.name),
-        );
-        if (!hasNonPriceBased) {
-          this.log('verbose', `${snapshot.market}: RANGING mid-range — only oi_skew/funding allowed here`);
-          continue;
-        }
-      }
+      if (composite.direction !== 'neutral' && prevDir !== composite.direction) continue;
+      if (composite.confidence < 0.30 || !composite.confirmed) continue;
 
       // Strategy ensemble
       const ed = this.ensemble.evaluate(snapshot, marketSignals, composite);
       if (!ed.shouldTrade) continue;
 
-      // FILTER: regime-strategy alignment — reject strategies that don't match regime
+      // Regime-strategy check (soft — feeds into score)
       const votingStrategies = ed.votes.filter((v) => v.result.shouldTrade && !v.shadow).map((v) => v.strategy);
       const allowedInRegime = this.regimeAdapter.filterStrategies(regime.regime, votingStrategies);
-      if (allowedInRegime.length === 0) {
-        this.log('verbose', `${snapshot.market}: strategies [${votingStrategies.join(',')}] not allowed in ${regime.regime} (allowed: ${regimeParams.allowedStrategies.join(',')})`);
-        continue;
-      }
+      const regimeAllowed = allowedInRegime.length > 0;
 
-      // FILTER: ensemble strength
-      // If strategy is regime-aligned, lower the single-strategy threshold to 0.70
-      // Otherwise require ≥2 strategies or single with ≥85%
-      const singleStratThreshold = allowedInRegime.length >= 1 ? 0.70 : 0.85;
-      if (ed.agreeing < 2 && ed.confidence < singleStratThreshold) {
-        this.log('verbose', `${snapshot.market}: weak consensus (${ed.agreeing}/${ed.totalVoters}, conf=${(ed.confidence * 100).toFixed(0)}% < ${(singleStratThreshold * 100).toFixed(0)}%)`);
-        continue;
-      }
-
-      // FILTER: Expected Value (EV) — reject negative-EV strategies
-      const primaryStrategy = allowedInRegime[0] || 'ensemble';
+      // EV check (soft — feeds into score)
+      const primaryStrategy = allowedInRegime[0] || votingStrategies[0] || 'ensemble';
       const evCheck = this.expectancy.checkEV(primaryStrategy, ed.confidence);
-      if (!evCheck.allowed) {
-        this.log('verbose', `${snapshot.market}: EV rejected — ${evCheck.reason}`);
-        continue;
-      }
 
-      // FILTER: System-wide EV failsafe
-      const systemEV = this.expectancy.getSystemEV();
-      if (systemEV < -2 && this.expectancy.getAllStats().some((s) => s.trades >= 10)) {
-        this.log('normal', `System EV negative (${systemEV.toFixed(2)}) — pausing new trades`);
-        continue;
-      }
-
-      // FILTER: Technical indicator confirmation (RSI + MACD + EMA = 73% win rate)
+      // Technical signal (soft — feeds into score with reduced weight)
       const techSignal = this.technicals.signal(snapshot.market, snapshot.price);
+      const techDataAvailable = this.technicals.dataPoints(snapshot.market) >= 30;
       const side = ed.side ?? 'long';
-
-      if (this.technicals.dataPoints(snapshot.market) >= 30) {
-        // Enough data for technicals — require alignment
-        const techAgrees = (side === 'long' && techSignal.score > 0) || (side === 'short' && techSignal.score < 0);
-        if (!techAgrees && techSignal.agreement >= 2) {
-          this.log('verbose', `${snapshot.market}: technicals disagree (${techSignal.breakdown}) score=${techSignal.score.toFixed(2)} vs ${side}`);
-          continue;
-        }
-        // Boost confidence if technicals strongly agree
-        if (techAgrees && techSignal.agreement >= 3) {
-          this.log('verbose', `${snapshot.market}: technicals CONFIRM ${side} (${techSignal.breakdown})`);
-        }
-      }
 
       // Build trade parameters
       const leverage = this.risk.clampLeverage(Math.min(3, regimeParams.maxLeverage ?? 3));
       const slDistance = snapshot.price * 0.02 * (regimeParams.stopAtrMultiplier ?? 2.0) / 2.0;
-      const tpDistance = slDistance * Math.max(2.0, regimeParams.takeProfitR ?? 2.0); // Min 2:1 R:R
+      const tpDistance = slDistance * Math.max(metaDecision.minRR, regimeParams.takeProfitR ?? 2.0);
       const tp = ed.bestResult?.suggestedTp ?? (side === 'long' ? snapshot.price + tpDistance : snapshot.price - tpDistance);
       const sl = ed.bestResult?.suggestedSl ?? (side === 'long' ? snapshot.price - slDistance : snapshot.price + slDistance);
-
-      // FILTER: R:R enforcement (Section 2) — minimum 1.5:1
       const riskDist = Math.abs(snapshot.price - sl);
       const rewardDist = Math.abs(tp - snapshot.price);
       const rrRatio = riskDist > 0 ? rewardDist / riskDist : 0;
-      if (rrRatio < 1.5) {
-        this.log('verbose', `${snapshot.market}: R:R ${rrRatio.toFixed(1)} < 1.5 — rejected`);
+
+      // ─── OPPORTUNITY SCORING (soft gating) ─────────────────────
+      const oppScore = this.scorer.score(
+        composite, ed.confidence, ed.agreeing, ed.totalVoters,
+        evCheck, techSignal, techDataAvailable,
+        regimeAllowed, rrRatio, metaDecision.scoreThreshold,
+      );
+
+      if (!oppScore.passes) {
+        this.log('verbose', `${snapshot.market}: score ${oppScore.summary} < threshold ${metaDecision.scoreThreshold}`);
         continue;
       }
 
-      // Dynamic sizing
-      const sizing = this.sizer.calculate(this.state.currentCapital, ed.confidence, stats, ddState, regimeParams.sizeMultiplier, this.state.consecutiveLosses);
+      // Dynamic sizing (meta-adjusted)
+      const sizing = this.sizer.calculate(this.state.currentCapital, ed.confidence, stats, ddState, regimeParams.sizeMultiplier * metaDecision.sizeMultiplier, this.state.consecutiveLosses);
       const collateral = Math.min(sizing.collateral, Math.max(1, maxCapital - tickCapitalAllocated));
-
-      const strategyName = allowedInRegime.join('+') || 'ensemble';
+      const strategyName = (allowedInRegime.length > 0 ? allowedInRegime : votingStrategies).join('+') || 'ensemble';
 
       const decision: TradeDecision = {
         action: 'open' as DecisionAction,
         market: snapshot.market, side, leverage, collateral, tp, sl,
         strategy: strategyName,
         confidence: ed.confidence,
-        reasoning: `${ed.agreeing}/${ed.totalVoters} strats | R:R=${rrRatio.toFixed(1)} | EV=${evCheck.ev.toFixed(2)} | TA:${techSignal.breakdown || 'n/a'} | $${collateral.toFixed(0)} | ${regime.regime}`,
+        reasoning: `SCORE=${oppScore.total} ${oppScore.summary} | ${metaDecision.mode} | ${regime.regime}`,
         signals: ed.bestResult?.signals ?? [],
         riskLevel: 'safe',
       };
@@ -415,22 +370,35 @@ export class LiveTradingAgent {
       decision.riskLevel = riskCheck.riskLevel;
       decision.blockReason = riskCheck.blockReason;
 
-      this.callbacks.onDecision?.(decision);
-      this.log('normal', `Decision: ${decision.action} ${decision.market} ${decision.side} | ${ed.agreeing}/${ed.totalVoters} agree | conf=${(ed.confidence * 100).toFixed(0)}% | R:R=${rrRatio.toFixed(1)} | $${collateral.toFixed(0)} | ${regime.regime}`);
+      // Portfolio intelligence — prevent correlated trades
+      const portfolioCheck = this.portfolioIntel.check(this.state.positions, snapshot.market, side, collateral * leverage, this.state.currentCapital);
+      if (!portfolioCheck.allowed) {
+        this.log('verbose', `${snapshot.market}: portfolio blocked — ${portfolioCheck.reason}`);
+        continue;
+      }
 
       if (decision.riskLevel !== 'blocked') {
-        await this.executeTrade(decision, snapshot);
-        tickPositionCount++;
-        tickCapitalAllocated += collateral;
-        // Record trade for frequency limiting
-        this.hourlyTrades.push(now);
-        const mt = this.marketHourlyTrades.get(snapshot.market) ?? [];
-        mt.push(now);
-        this.marketHourlyTrades.set(snapshot.market, mt);
-      } else {
-        this.log('normal', `Blocked: ${decision.blockReason}`);
-        this.journal.record(decision);
+        opportunities.push({ snapshot, score: oppScore.total, decision });
       }
+    }
+
+    // Execute ONLY the best opportunities (sorted by score, up to max positions)
+    opportunities.sort((a, b) => b.score - a.score);
+
+    for (const opp of opportunities) {
+      if (tickPositionCount >= metaDecision.maxPositions) break;
+      if (tickCapitalAllocated >= maxCapital) break;
+
+      this.callbacks.onDecision?.(opp.decision);
+      this.log('normal', `EXECUTE: ${opp.decision.market} ${opp.decision.side} | ${opp.decision.reasoning}`);
+
+      await this.executeTrade(opp.decision, opp.snapshot);
+      tickPositionCount++;
+      tickCapitalAllocated += opp.decision.collateral ?? 0;
+      this.hourlyTrades.push(now);
+      const mt = this.marketHourlyTrades.get(opp.snapshot.market) ?? [];
+      mt.push(now);
+      this.marketHourlyTrades.set(opp.snapshot.market, mt);
     }
   }
 

@@ -20,6 +20,12 @@ export { TechnicalAnalyzer } from './technical-indicators.js';
 export type { IndicatorSet, TechnicalSignal } from './technical-indicators.js';
 export { ExpectancyEngine } from './expectancy-engine.js';
 export type { StrategyStats, EVDecision } from './expectancy-engine.js';
+export { MetaAgent } from './meta-agent.js';
+export type { AggressionMode, MetaDecision } from './meta-agent.js';
+export { OpportunityScorer } from './opportunity-scorer.js';
+export type { OpportunityScore } from './opportunity-scorer.js';
+export { PortfolioIntel } from './portfolio-intel.js';
+export type { PortfolioCheck } from './portfolio-intel.js';
 
 // Supervisor
 export { AgentSupervisor } from './supervisor.js';
