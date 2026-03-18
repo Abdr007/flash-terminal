@@ -171,11 +171,13 @@ export class PositionManager {
   track(position: Position, initialStopLoss: number): void {
     const key = `${position.market}:${position.side}`;
     const entryPrice = position.entryPrice;
+    if (!Number.isFinite(entryPrice) || entryPrice <= 0) return;
     const initialRisk = Math.abs(entryPrice - initialStopLoss);
+    const initialRiskUsd = entryPrice > 0 ? initialRisk * (position.sizeUsd / entryPrice) : 0;
 
     this.managed.set(key, {
       position,
-      initialRiskUsd: initialRisk * (position.sizeUsd / entryPrice),
+      initialRiskUsd: Number.isFinite(initialRiskUsd) ? initialRiskUsd : 0,
       trailingStop: initialStopLoss,
       peakPrice: entryPrice,
       rMultiple: 0,
@@ -210,10 +212,12 @@ export class PositionManager {
       managed.peakPrice = currentPrice;
     }
 
-    // Calculate R-multiple
-    if (managed.initialRiskUsd > 0) {
+    // Calculate R-multiple (with numeric safety)
+    if (managed.initialRiskUsd > 0 && Number.isFinite(managed.initialRiskUsd)) {
       const currentPnl = position.pnl ?? 0;
-      managed.rMultiple = currentPnl / managed.initialRiskUsd;
+      if (Number.isFinite(currentPnl)) {
+        managed.rMultiple = currentPnl / managed.initialRiskUsd;
+      }
     }
 
     // Update trailing stop (ATR-based, never moves backward)

@@ -81,11 +81,12 @@ export class DynamicSizer {
     // 4. Regime multiplier (from regime adapter)
     const regimeMultiplier = regimeSizeMultiplier;
 
-    // Calculate final size percentage
+    // Calculate final size percentage (with numeric safety)
     const rawPct = this.basePct * confidenceMultiplier * performanceMultiplier * riskMultiplier * regimeMultiplier;
-    const clampedPct = Math.max(this.minPct, Math.min(this.maxPct, rawPct));
+    const clampedPct = Number.isFinite(rawPct) ? Math.max(this.minPct, Math.min(this.maxPct, rawPct)) : this.minPct;
 
-    const collateral = Math.max(1, Math.floor(capital * clampedPct * 100) / 100);
+    const rawCollateral = capital * clampedPct;
+    const collateral = Number.isFinite(rawCollateral) ? Math.max(1, Math.floor(rawCollateral * 100) / 100) : 1;
 
     return {
       collateral,

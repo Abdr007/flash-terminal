@@ -107,7 +107,7 @@ export class TechnicalAnalyzer {
       bbUpper: bb.upper,
       bbMiddle: bb.middle,
       bbLower: bb.lower,
-      bbWidth: bbRange / bb.middle,
+      bbWidth: bb.middle > 0 ? bbRange / bb.middle : 0,
       atr14,
       bbPosition,
     };

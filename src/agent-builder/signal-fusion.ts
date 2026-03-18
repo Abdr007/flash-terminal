@@ -423,17 +423,19 @@ export class SignalFusionEngine {
       }
     }
 
-    // Bayesian log-odds fusion
+    // Bayesian log-odds fusion (with numeric safety)
     let totalLogOdds = 0;
     for (const f of factors) {
       if (f.direction === 'neutral') continue;
+      if (!Number.isFinite(f.confidence) || !Number.isFinite(f.weight)) continue;
 
       const dirValue = f.direction === 'bullish' ? 1 : -1;
-      // Convert confidence to probability: 0.5 + direction * confidence * 0.5
       const p = Math.max(0.02, Math.min(0.98, 0.5 + dirValue * f.confidence * 0.5));
       const logOdds = f.weight * Math.log(p / (1 - p));
-      totalLogOdds += logOdds;
+      if (Number.isFinite(logOdds)) totalLogOdds += logOdds;
     }
+    // Clamp to prevent overflow in exp()
+    totalLogOdds = Math.max(-10, Math.min(10, totalLogOdds));
 
     // Convert back to probability
     const combinedProb = 1 / (1 + Math.exp(-totalLogOdds));
@@ -549,5 +551,6 @@ export class SignalFusionEngine {
   reset(): void {
     this.history.clear();
     this.factorAccuracy.clear();
+    this.oiHistory.clear();
   }
 }

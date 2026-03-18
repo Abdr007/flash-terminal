@@ -160,11 +160,39 @@ export class RegimeAdapter {
       confidence = Math.min(0.7, 1 - trendStrength);
     }
 
-    // Track regime duration
+    // Regime hysteresis — require 3 consecutive ticks before switching
     const current = this.currentRegimes.get(market);
     let duration = 1;
-    if (current && current.regime === regime) {
-      duration = current.duration + 1;
+    if (current) {
+      if (current.regime === regime) {
+        duration = current.duration + 1;
+      } else if (current.duration >= 3) {
+        // Only switch if new regime detected AND old regime was established (≥3 ticks)
+        // First tick of disagreement — keep old regime
+        duration = 1;
+      } else {
+        // Old regime wasn't established — allow switch
+        duration = 1;
+      }
+      // If old regime was established and this is first tick of new, keep old
+      if (current.regime !== regime && current.duration >= 3 && !this.currentRegimes.get(`${market}_pending`)) {
+        this.currentRegimes.set(`${market}_pending`, { regime, duration: 1 });
+        regime = current.regime; // Keep old regime
+        duration = current.duration + 1;
+      } else if (current.regime !== regime && this.currentRegimes.get(`${market}_pending`)?.regime === regime) {
+        const pending = this.currentRegimes.get(`${market}_pending`)!;
+        if (pending.duration >= 2) {
+          // Confirmed new regime after 2 pending ticks
+          this.currentRegimes.delete(`${market}_pending`);
+          duration = 1;
+        } else {
+          pending.duration++;
+          regime = current.regime; // Keep old
+          duration = current.duration + 1;
+        }
+      } else {
+        this.currentRegimes.delete(`${market}_pending`);
+      }
     }
     this.currentRegimes.set(market, { regime, duration });
 
@@ -262,7 +290,10 @@ export class RegimeAdapter {
 
     // Current volatility: recent 5 bars
     const recent = prices.slice(-5);
-    const recentReturns = recent.slice(1).map((p, i) => Math.abs((p - recent[i]) / recent[i]));
+    const recentReturns = recent.slice(1).map((p, i) => {
+      if (!Number.isFinite(recent[i]) || recent[i] === 0) return 0;
+      return Math.abs((p - recent[i]) / recent[i]);
+    }).filter(Number.isFinite);
     const currentVol = recentReturns.reduce((a, b) => a + b, 0) / recentReturns.length;
 
     // Record for history
@@ -285,10 +316,12 @@ export class RegimeAdapter {
   private estimateHurst(prices: number[]): number {
     if (prices.length < 20) return 0.5; // Neutral assumption
 
-    const returns = prices.slice(1).map((p, i) => Math.log(p / prices[i]));
+    const returns = prices.slice(1)
+      .map((p, i) => (prices[i] > 0 ? Math.log(p / prices[i]) : 0))
+      .filter(Number.isFinite);
     const n = returns.length;
+    if (n < 3) return 0.5;
 
-    // Rescaled range for full series
     const mean = returns.reduce((a, b) => a + b, 0) / n;
     const deviations = returns.map((r) => r - mean);
 
@@ -306,10 +339,12 @@ export class RegimeAdapter {
     if (stdDev === 0 || R === 0) return 0.5;
 
     const RS = R / stdDev;
-    // Hurst ≈ log(R/S) / log(n)
-    const H = Math.log(RS) / Math.log(n);
+    // Hurst ≈ log(R/S) / log(n) — guard log(n) for n < 2
+    const logN = Math.log(n);
+    if (logN <= 0 || !Number.isFinite(logN)) return 0.5;
+    const H = Math.log(RS) / logN;
 
-    return Math.max(0, Math.min(1, H));
+    return Number.isFinite(H) ? Math.max(0, Math.min(1, H)) : 0.5;
   }
 
   /** Reset all state */

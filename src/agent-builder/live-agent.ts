@@ -62,6 +62,8 @@ export class LiveTradingAgent {
   private hourlyTrades: number[] = [];
   /** Per-market hourly trade counter */
   private marketHourlyTrades: Map<string, number[]> = new Map();
+  /** Tick mutex — prevents concurrent tick execution */
+  private tickInProgress = false;
 
   private state: AgentState;
   private running = false;
@@ -133,12 +135,20 @@ export class LiveTradingAgent {
         break;
       }
 
-      try {
-        await this.tick();
-      } catch (error: unknown) {
-        const err = error instanceof Error ? error : new Error(String(error));
-        this.callbacks.onError?.(err, 'tick');
-        this.log('error', `Tick error: ${err.message}`);
+      // Tick mutex — skip if previous tick still running
+      if (this.tickInProgress) {
+        this.log('verbose', 'Tick skipped — previous tick still running');
+      } else {
+        this.tickInProgress = true;
+        try {
+          await this.tick();
+        } catch (error: unknown) {
+          const err = error instanceof Error ? error : new Error(String(error));
+          this.callbacks.onError?.(err, 'tick');
+          this.log('error', `Tick error: ${err.message}`);
+        } finally {
+          this.tickInProgress = false;
+        }
       }
 
       if (this.running && !this.stopRequested) {
@@ -154,7 +164,17 @@ export class LiveTradingAgent {
 
   stop(): void {
     this.stopRequested = true;
-    this.log('info', 'Stop requested');
+    // Full cleanup — prevent memory leaks on long sessions
+    this.prevSignals.clear();
+    this.marketCooldowns.clear();
+    this.marketHourlyTrades.clear();
+    this.hourlyTrades = [];
+    this.fusion.reset();
+    this.signals.reset();
+    this.positionMgr.reset();
+    this.regimeAdapter.reset();
+    this.technicals.reset();
+    this.log('info', 'Stop requested — state cleaned');
   }
 
   getState(): Readonly<AgentState> { return this.state; }
