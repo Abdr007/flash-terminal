@@ -54,6 +54,12 @@ export class LiveTradingAgent {
   private readonly sizer: DynamicSizer;
   /** Signal confirmation: track previous tick's direction per market */
   private prevSignals: Map<string, string> = new Map();
+  /** Per-market cooldown after trade close */
+  private marketCooldowns: Map<string, number> = new Map();
+  /** Hourly trade counter for frequency limiting */
+  private hourlyTrades: number[] = [];
+  /** Per-market hourly trade counter */
+  private marketHourlyTrades: Map<string, number[]> = new Map();
 
   private state: AgentState;
   private running = false;
@@ -198,14 +204,11 @@ export class LiveTradingAgent {
     }
 
     // ─── PHASE 3: SCAN + RANK ALL MARKETS ───────────────────────────
-    // Compute fusion signals for all markets first, then rank
     const compositeMap = new Map<string, CompositeSignal>();
     for (const snapshot of snapshots) {
-      const composite = this.fusion.fuse(snapshot, snapshot.fundingRate);
-      compositeMap.set(snapshot.market, composite);
+      compositeMap.set(snapshot.market, this.fusion.fuse(snapshot, snapshot.fundingRate));
     }
 
-    // Rank markets by opportunity — only trade the top N
     const rankedMarkets = this.scanner.rank(snapshots, compositeMap);
     const tradeableMarkets = new Set(rankedMarkets.map((r) => r.market));
 
@@ -213,31 +216,50 @@ export class LiveTradingAgent {
       this.log('verbose', `Scanner: ${rankedMarkets.map((r) => `${r.market}(${(r.score * 100).toFixed(0)}%)`).join(', ')} | ${snapshots.length - rankedMarkets.length} filtered out`);
     }
 
-    // ─── PHASE 4: ANALYZE + DECIDE (only ranked markets) ─────────
+    // ─── PHASE 4: PRECISION-FILTERED ANALYSIS + DECIDE ───────────
+    // Clean up hourly counters
+    const now = Date.now();
+    this.hourlyTrades = this.hourlyTrades.filter((t) => now - t < 3_600_000);
+
+    // FILTER: global trade frequency (max 6/hour)
+    if (this.hourlyTrades.length >= 6) {
+      this.log('verbose', 'Global trade limit: 6/hour reached');
+      return;
+    }
+
+    // FILTER: loss streak adaptation (Section 9)
+    if (this.state.consecutiveLosses >= 4) {
+      this.log('normal', `Loss streak ${this.state.consecutiveLosses} — pausing 10 min`);
+      return;
+    }
+
     let tickPositionCount = this.state.positions.length;
     let tickCapitalAllocated = this.state.positions.reduce((sum, p) => sum + (p.collateralUsd ?? 0), 0);
-    const maxCapitalPct = 0.15; // Max 15% of capital allocated
-    const maxCapital = this.state.currentCapital * maxCapitalPct;
+    const maxCapital = this.state.currentCapital * 0.15;
 
     for (const snapshot of snapshots) {
-      // Only trade scanner-approved markets
       if (!tradeableMarkets.has(snapshot.market)) continue;
-
-      // Guard: max positions
       if (tickPositionCount >= this.config.risk.maxPositions) continue;
-
-      // Guard: max capital
       if (tickCapitalAllocated >= maxCapital) continue;
 
-      // Regime detection
+      // FILTER: per-market cooldown (Section 3)
+      const marketCooldown = this.marketCooldowns.get(snapshot.market) ?? 0;
+      if (now < marketCooldown) {
+        this.log('verbose', `${snapshot.market}: market cooldown (${Math.ceil((marketCooldown - now) / 1000)}s)`);
+        continue;
+      }
+
+      // FILTER: per-market frequency (max 2/hour per market)
+      const mktTrades = (this.marketHourlyTrades.get(snapshot.market) ?? []).filter((t) => now - t < 3_600_000);
+      this.marketHourlyTrades.set(snapshot.market, mktTrades);
+      if (mktTrades.length >= 2) continue;
+
       const regime = this.regimeAdapter.detectRegime(snapshot.market, snapshot.price, snapshot.priceChange24h);
       const regimeParams = this.regimeAdapter.getParams(regime.regime);
-
-      // Get pre-computed composite
       const composite = compositeMap.get(snapshot.market)!;
       const marketSignals = this.signals.detect(snapshot);
 
-      // SIGNAL CONFIRMATION: require same direction for 2 consecutive ticks
+      // FILTER: 2-tick direction confirmation (Section 7)
       const prevDir = this.prevSignals.get(snapshot.market);
       this.prevSignals.set(snapshot.market, composite.direction);
       if (composite.direction !== 'neutral' && prevDir !== composite.direction) {
@@ -245,49 +267,60 @@ export class LiveTradingAgent {
         continue;
       }
 
-      // Minimum signal quality
-      if (composite.confidence < 0.35 || !composite.confirmed) {
+      // FILTER: signal quality (Section 4) — composite score, confidence, clarity
+      if (composite.confidence < 0.50) continue; // Raised from 0.35
+      if (!composite.confirmed) continue;
+      const totalDir = composite.factors.filter((f) => f.direction !== 'neutral').length;
+      const aligned = composite.confirmedFactors;
+      const clarity = totalDir > 0 ? aligned / totalDir : 0;
+      if (clarity < 0.6) {
+        this.log('verbose', `${snapshot.market}: low clarity ${(clarity * 100).toFixed(0)}% (${aligned}/${totalDir})`);
         continue;
       }
 
-      this.log('verbose', `${snapshot.market}: regime=${regime.regime} composite=${composite.compositeScore.toFixed(3)} dir=${composite.direction} conf=${(composite.confidence * 100).toFixed(0)}% factors=${composite.confirmedFactors}F`);
+      this.log('verbose', `${snapshot.market}: regime=${regime.regime} score=${composite.compositeScore.toFixed(3)} conf=${(composite.confidence * 100).toFixed(0)}% clarity=${(clarity * 100).toFixed(0)}% ${composite.confirmedFactors}F`);
 
       // Strategy ensemble
-      const ensembleDecision = this.ensemble.evaluate(snapshot, marketSignals, composite);
-      if (!ensembleDecision.shouldTrade) continue;
+      const ed = this.ensemble.evaluate(snapshot, marketSignals, composite);
+      if (!ed.shouldTrade) continue;
 
-      // Dynamic position sizing
-      const sizing = this.sizer.calculate(
-        this.state.currentCapital,
-        ensembleDecision.confidence,
-        stats,
-        ddState,
-        regimeParams.sizeMultiplier,
-        this.state.consecutiveLosses,
-      );
+      // FILTER: ensemble strength (Section 1)
+      // Require ≥2 strategies agreeing OR single strategy with confidence ≥0.85
+      if (ed.agreeing < 2 && ed.confidence < 0.85) {
+        this.log('verbose', `${snapshot.market}: weak consensus (${ed.agreeing}/${ed.totalVoters} agree, conf=${(ed.confidence * 100).toFixed(0)}%) — need ≥2 or ≥85%`);
+        continue;
+      }
 
-      // Cap to remaining budget
+      // Build trade parameters
+      const side = ed.side ?? 'long';
+      const leverage = this.risk.clampLeverage(Math.min(3, regimeParams.maxLeverage ?? 3));
+      const slDistance = snapshot.price * 0.02 * (regimeParams.stopAtrMultiplier ?? 2.0) / 2.0;
+      const tpDistance = slDistance * Math.max(2.0, regimeParams.takeProfitR ?? 2.0); // Min 2:1 R:R
+      const tp = ed.bestResult?.suggestedTp ?? (side === 'long' ? snapshot.price + tpDistance : snapshot.price - tpDistance);
+      const sl = ed.bestResult?.suggestedSl ?? (side === 'long' ? snapshot.price - slDistance : snapshot.price + slDistance);
+
+      // FILTER: R:R enforcement (Section 2) — minimum 1.5:1
+      const riskDist = Math.abs(snapshot.price - sl);
+      const rewardDist = Math.abs(tp - snapshot.price);
+      const rrRatio = riskDist > 0 ? rewardDist / riskDist : 0;
+      if (rrRatio < 1.5) {
+        this.log('verbose', `${snapshot.market}: R:R ${rrRatio.toFixed(1)} < 1.5 — rejected`);
+        continue;
+      }
+
+      // Dynamic sizing
+      const sizing = this.sizer.calculate(this.state.currentCapital, ed.confidence, stats, ddState, regimeParams.sizeMultiplier, this.state.consecutiveLosses);
       const collateral = Math.min(sizing.collateral, Math.max(1, maxCapital - tickCapitalAllocated));
 
-      // Build decision
-      const side = ensembleDecision.side ?? 'long';
-      const maxLev = regimeParams.maxLeverage ?? this.config.risk.maxLeverage;
-      const leverage = this.risk.clampLeverage(Math.min(3, maxLev));
-      const bestResult = ensembleDecision.bestResult;
-      const slDistance = snapshot.price * 0.015 * (regimeParams.stopAtrMultiplier ?? 2.0) / 2.0;
-      const tpDistance = slDistance * (regimeParams.takeProfitR ?? 2.0);
-      const tp = bestResult?.suggestedTp ?? (side === 'long' ? snapshot.price + tpDistance : snapshot.price - tpDistance);
-      const sl = bestResult?.suggestedSl ?? (side === 'long' ? snapshot.price - slDistance : snapshot.price + slDistance);
-
-      const strategyName = ensembleDecision.votes.filter((v) => v.result.shouldTrade && !v.shadow).map((v) => v.strategy).join('+') || 'ensemble';
+      const strategyName = ed.votes.filter((v) => v.result.shouldTrade && !v.shadow).map((v) => v.strategy).join('+') || 'ensemble';
 
       const decision: TradeDecision = {
         action: 'open' as DecisionAction,
         market: snapshot.market, side, leverage, collateral, tp, sl,
         strategy: strategyName,
-        confidence: ensembleDecision.confidence,
-        reasoning: `${ensembleDecision.reasoning} | size=$${collateral.toFixed(0)}(${(sizing.sizePct * 100).toFixed(1)}%) | ${regime.regime}`,
-        signals: bestResult?.signals ?? [],
+        confidence: ed.confidence,
+        reasoning: `${ed.agreeing}/${ed.totalVoters} strategies | R:R=${rrRatio.toFixed(1)} | clarity=${(clarity * 100).toFixed(0)}% | $${collateral.toFixed(0)}(${(sizing.sizePct * 100).toFixed(1)}%) | ${regime.regime}`,
+        signals: ed.bestResult?.signals ?? [],
         riskLevel: 'safe',
       };
 
@@ -296,12 +329,17 @@ export class LiveTradingAgent {
       decision.blockReason = riskCheck.blockReason;
 
       this.callbacks.onDecision?.(decision);
-      this.log('normal', `Decision: ${decision.action} ${decision.market} ${decision.side} | conf=${(decision.confidence * 100).toFixed(0)}% | $${collateral.toFixed(0)} | ${decision.reasoning}`);
+      this.log('normal', `Decision: ${decision.action} ${decision.market} ${decision.side} | ${ed.agreeing}/${ed.totalVoters} agree | conf=${(ed.confidence * 100).toFixed(0)}% | R:R=${rrRatio.toFixed(1)} | $${collateral.toFixed(0)} | ${regime.regime}`);
 
       if (decision.riskLevel !== 'blocked') {
         await this.executeTrade(decision, snapshot);
         tickPositionCount++;
         tickCapitalAllocated += collateral;
+        // Record trade for frequency limiting
+        this.hourlyTrades.push(now);
+        const mt = this.marketHourlyTrades.get(snapshot.market) ?? [];
+        mt.push(now);
+        this.marketHourlyTrades.set(snapshot.market, mt);
       } else {
         this.log('normal', `Blocked: ${decision.blockReason}`);
         this.journal.record(decision);
@@ -459,6 +497,11 @@ export class LiveTradingAgent {
   }
 
   private async closeWithReason(pos: Position, strategy: string, reasoning: string, closePercent?: number): Promise<void> {
+    // Set per-market cooldown: 3 min after close, 5 min after loss
+    const pnl = pos.pnl ?? 0;
+    const cooldownMs = pnl < 0 ? 300_000 : 180_000;
+    this.marketCooldowns.set(pos.market, Date.now() + cooldownMs);
+
     const decision: TradeDecision = {
       action: 'close' as DecisionAction,
       market: pos.market,

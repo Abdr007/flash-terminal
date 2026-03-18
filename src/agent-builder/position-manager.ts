@@ -224,11 +224,13 @@ export class PositionManager {
         ? managed.peakPrice - atrStop
         : managed.peakPrice + atrStop;
 
-      // Trailing stop only moves in favorable direction
-      if (isLong && newStop > managed.trailingStop) {
-        managed.trailingStop = newStop;
-      } else if (!isLong && newStop < managed.trailingStop) {
-        managed.trailingStop = newStop;
+      // Trailing stop only activates after 1R profit — let trade develop first
+      if (managed.rMultiple >= 1.0) {
+        if (isLong && newStop > managed.trailingStop) {
+          managed.trailingStop = newStop;
+        } else if (!isLong && newStop < managed.trailingStop) {
+          managed.trailingStop = newStop;
+        }
       }
     }
 
