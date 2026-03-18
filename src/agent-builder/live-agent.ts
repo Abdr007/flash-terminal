@@ -31,6 +31,8 @@ import { ExecutionModel } from './execution-model.js';
 import { CounterfactualTracker } from './counterfactual-tracker.js';
 import { MicroEntryAnalyzer } from './micro-entry.js';
 import { TimeIntelligence } from './time-intelligence.js';
+import { PolicyLearner } from './policy-learner.js';
+import { SimulationEngine } from './simulation-engine.js';
 import type { CompositeSignal } from './signal-fusion.js';
 
 import type {
@@ -69,6 +71,10 @@ export class LiveTradingAgent {
   private readonly counterfactual: CounterfactualTracker;
   private readonly microEntry: MicroEntryAnalyzer;
   private readonly timeIntel: TimeIntelligence;
+  private readonly policyLearner: PolicyLearner;
+  private readonly simEngine: SimulationEngine;
+  /** Track entry state for policy reward computation */
+  private activeTradeStates: Map<string, { state: import('./policy-learner.js').MarketState; action: import('./policy-learner.js').PolicyAction; entryTick: number }> = new Map();
   /** Signal confirmation: track previous tick's direction per market */
   private prevSignals: Map<string, string> = new Map();
   /** Per-market cooldown after trade close */
@@ -123,6 +129,8 @@ export class LiveTradingAgent {
     this.counterfactual = new CounterfactualTracker();
     this.microEntry = new MicroEntryAnalyzer();
     this.timeIntel = new TimeIntelligence();
+    this.policyLearner = new PolicyLearner();
+    this.simEngine = new SimulationEngine();
     this.state = this.createInitialState();
   }
 
@@ -135,7 +143,7 @@ export class LiveTradingAgent {
     this.stopRequested = false;
     this.setStatus(AgentStatus.RUNNING);
 
-    this.log('info', `Agent "${this.config.name}" v9 (self-improving) starting`);
+    this.log('info', `Agent "${this.config.name}" v10 (policy-learning) starting`);
     this.log('info', `Scanning: ${this.config.markets.length} markets → score + rank → top trades only`);
     this.log('info', `Strategies: ${this.strategies.map((s) => s.name).join(', ')}`);
     this.log('info', `Engines: meta-agent, opportunity scorer, portfolio intel, EV, Bayesian fusion, technicals`);
@@ -199,7 +207,9 @@ export class LiveTradingAgent {
     this.meta.reset();
     this.microEntry.reset();
     this.counterfactual.reset();
-    // Note: expectancy, scorer weights, timeIntel NOT reset — persist learning
+    this.simEngine.reset();
+    this.activeTradeStates.clear();
+    // Persist: expectancy, scorer weights, timeIntel, policyLearner
     this.log('info', 'Stop requested — state cleaned (EV stats preserved)');
   }
 
@@ -274,8 +284,9 @@ export class LiveTradingAgent {
     const now = Date.now();
     this.hourlyTrades = this.hourlyTrades.filter((t) => now - t < 3_600_000);
 
-    // Evaluate counterfactual outcomes from previous skips
+    // Evaluate counterfactual + simulation outcomes from previous ticks
     this.counterfactual.evaluate(snapshots);
+    this.simEngine.resolve(snapshots);
 
     // Record micro-entry prices
     for (const s of snapshots) this.microEntry.record(s.market, s.price);
@@ -341,6 +352,26 @@ export class LiveTradingAgent {
       this.prevSignals.set(snapshot.market, composite.direction);
       if (composite.direction !== 'neutral' && prevDir !== composite.direction) continue;
       if (composite.confidence < 0.30 || !composite.confirmed) continue;
+
+      // POLICY LEARNER: ask learned policy what to do in this state
+      const policyState = this.policyLearner.buildState(
+        regime.regime,
+        composite.direction,
+        composite.confidence,
+        Math.abs(snapshot.priceChange24h),
+        stats.winRate,
+      );
+      const policyRec = this.policyLearner.recommend(policyState);
+
+      if (!policyRec.action.startsWith('trade') && !policyRec.isExploration) {
+        this.log('verbose', `${snapshot.market}: policy recommends SKIP (conf=${(policyRec.confidence * 100).toFixed(0)}%)`);
+        // Still simulate for learning
+        this.simEngine.simulate(snapshot.market, composite.direction === 'bearish' ? 'short' : 'long', snapshot.price, 0, 'policy_skip', regime.regime, composite.confidence);
+        continue;
+      }
+
+      // Apply policy parameters to confidence floor
+      const policyParams = this.policyLearner.actionToParams(policyRec.action);
 
       // Strategy ensemble
       const ed = this.ensemble.evaluate(snapshot, marketSignals, composite);
@@ -439,7 +470,22 @@ export class LiveTradingAgent {
       const microBonus = microCheck.quality === 'excellent' ? 5 : microCheck.quality === 'good' ? 2 : 0;
       const finalScore = oppScore.total + microBonus;
 
+      // Apply policy size multiplier
+      if (policyParams.sizeMultiplier !== 1.0 && decision.collateral) {
+        decision.collateral = Math.max(1, decision.collateral * policyParams.sizeMultiplier);
+      }
+
+      // SIMULATION: record every scored opportunity for parallel learning
+      this.simEngine.simulate(
+        snapshot.market, side, snapshot.price, finalScore,
+        decision.strategy, regime.regime, ed.confidence,
+      );
+
       if (decision.riskLevel !== 'blocked') {
+        // Store policy state for reward computation on close
+        this.activeTradeStates.set(`${snapshot.market}:${side}`, {
+          state: policyState, action: policyRec.action, entryTick: this.state.iteration,
+        });
         opportunities.push({ snapshot, score: finalScore, decision });
       }
     }
@@ -830,14 +876,29 @@ export class LiveTradingAgent {
       // Time intelligence: record when this trade happened
       this.timeIntel.record(pnl);
 
-      // Log counterfactual insights periodically
+      // POLICY LEARNER: compute reward and update policy
+      const tradeKey = `${position.market}:${position.side}`;
+      const tradeState = this.activeTradeStates.get(tradeKey);
+      if (tradeState) {
+        const holdingTicks = this.state.iteration - tradeState.entryTick;
+        const reward = this.policyLearner.computeReward(pnl, decision.collateral ?? 100, decision.leverage ?? 3, holdingTicks);
+        this.policyLearner.update(tradeState.state, tradeState.action, reward);
+        this.activeTradeStates.delete(tradeKey);
+        this.log('verbose', `Policy: reward=${reward.toFixed(3)} for ${tradeState.action} in ${tradeState.state.regime}|${tradeState.state.signalDirection} (explore=${(this.policyLearner.getExplorationRate() * 100).toFixed(0)}%)`);
+      }
+
+      // Log simulation + counterfactual insights periodically
+      const simInsights = this.simEngine.getInsights();
+      if (simInsights.resolved >= 10) {
+        this.log('verbose', `Sim: ${simInsights.resolved} resolved, WR=${(simInsights.simWinRate * 100).toFixed(0)}%, optimal threshold=${simInsights.optimalThreshold}`);
+      }
       const cf = this.counterfactual.getInsights();
       if (cf.missedWins + cf.correctSkips >= 5) {
-        this.log('verbose', `Counterfactual: ${cf.correctSkips} correct skips, ${cf.missedWins} missed wins (skip accuracy ${(cf.skipAccuracy * 100).toFixed(0)}%)`);
+        this.log('verbose', `Skip analysis: ${cf.correctSkips} correct, ${cf.missedWins} missed (accuracy ${(cf.skipAccuracy * 100).toFixed(0)}%)`);
       }
 
       this.callbacks.onTrade?.(entry);
-      this.log('normal', `Closed: ${position.market} ${position.side} PnL=$${pnl.toFixed(2)} | weights updated`);
+      this.log('normal', `Closed: ${position.market} ${position.side} PnL=$${pnl.toFixed(2)} | policy+weights updated`);
     } catch (error: unknown) {
       const msg = error instanceof Error ? error.message : String(error);
       this.log('error', `Close failed: ${msg}`);

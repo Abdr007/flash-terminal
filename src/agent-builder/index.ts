@@ -34,6 +34,10 @@ export { CounterfactualTracker } from './counterfactual-tracker.js';
 export type { CounterfactualInsight } from './counterfactual-tracker.js';
 export { MicroEntryAnalyzer } from './micro-entry.js';
 export { TimeIntelligence } from './time-intelligence.js';
+export { PolicyLearner } from './policy-learner.js';
+export type { MarketState, PolicyAction, LearnedPattern } from './policy-learner.js';
+export { SimulationEngine } from './simulation-engine.js';
+export type { SimulationInsight } from './simulation-engine.js';
 
 // Supervisor
 export { AgentSupervisor } from './supervisor.js';
