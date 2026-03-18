@@ -16,6 +16,8 @@ export { MarketScanner } from './market-scanner.js';
 export type { MarketRanking } from './market-scanner.js';
 export { DynamicSizer } from './dynamic-sizer.js';
 export type { SizingResult } from './dynamic-sizer.js';
+export { TechnicalAnalyzer } from './technical-indicators.js';
+export type { IndicatorSet, TechnicalSignal } from './technical-indicators.js';
 
 // Supervisor
 export { AgentSupervisor } from './supervisor.js';

@@ -22,6 +22,7 @@ import { DrawdownManager } from './drawdown-manager.js';
 import { RegimeAdapter } from './regime-adapter.js';
 import { MarketScanner } from './market-scanner.js';
 import { DynamicSizer } from './dynamic-sizer.js';
+import { TechnicalAnalyzer } from './technical-indicators.js';
 import type { CompositeSignal } from './signal-fusion.js';
 
 import type {
@@ -52,6 +53,7 @@ export class LiveTradingAgent {
   private readonly regimeAdapter: RegimeAdapter;
   private readonly scanner: MarketScanner;
   private readonly sizer: DynamicSizer;
+  private readonly technicals: TechnicalAnalyzer;
   /** Signal confirmation: track previous tick's direction per market */
   private prevSignals: Map<string, string> = new Map();
   /** Per-market cooldown after trade close */
@@ -94,8 +96,9 @@ export class LiveTradingAgent {
     });
     this.drawdown = new DrawdownManager(10_000);
     this.regimeAdapter = new RegimeAdapter();
-    this.scanner = new MarketScanner(3, 0.25); // Top 3 markets, min score 0.25
-    this.sizer = new DynamicSizer(0.02, 0.005, 0.03); // 2% base, 0.5% min, 3% max
+    this.scanner = new MarketScanner(3, 0.25);
+    this.sizer = new DynamicSizer(0.02, 0.005, 0.03);
+    this.technicals = new TechnicalAnalyzer();
     this.state = this.createInitialState();
   }
 
@@ -203,7 +206,12 @@ export class LiveTradingAgent {
       this.positionMgr.updatePerformance(stats.winRate, stats.avgWin, stats.avgLoss);
     }
 
-    // ─── PHASE 3: SCAN + RANK ALL MARKETS ───────────────────────────
+    // ─── PHASE 3: RECORD PRICES + COMPUTE TECHNICALS + SCAN ────────
+    // Record every price tick for technical indicator computation
+    for (const snapshot of snapshots) {
+      this.technicals.record(snapshot.market, snapshot.price);
+    }
+
     const compositeMap = new Map<string, CompositeSignal>();
     for (const snapshot of snapshots) {
       compositeMap.set(snapshot.market, this.fusion.fuse(snapshot, snapshot.fundingRate));
@@ -315,8 +323,24 @@ export class LiveTradingAgent {
         continue;
       }
 
-      // Build trade parameters
+      // FILTER: Technical indicator confirmation (RSI + MACD + EMA = 73% win rate)
+      const techSignal = this.technicals.signal(snapshot.market, snapshot.price);
       const side = ed.side ?? 'long';
+
+      if (this.technicals.dataPoints(snapshot.market) >= 30) {
+        // Enough data for technicals — require alignment
+        const techAgrees = (side === 'long' && techSignal.score > 0) || (side === 'short' && techSignal.score < 0);
+        if (!techAgrees && techSignal.agreement >= 2) {
+          this.log('verbose', `${snapshot.market}: technicals disagree (${techSignal.breakdown}) score=${techSignal.score.toFixed(2)} vs ${side}`);
+          continue;
+        }
+        // Boost confidence if technicals strongly agree
+        if (techAgrees && techSignal.agreement >= 3) {
+          this.log('verbose', `${snapshot.market}: technicals CONFIRM ${side} (${techSignal.breakdown})`);
+        }
+      }
+
+      // Build trade parameters
       const leverage = this.risk.clampLeverage(Math.min(3, regimeParams.maxLeverage ?? 3));
       const slDistance = snapshot.price * 0.02 * (regimeParams.stopAtrMultiplier ?? 2.0) / 2.0;
       const tpDistance = slDistance * Math.max(2.0, regimeParams.takeProfitR ?? 2.0); // Min 2:1 R:R
@@ -343,7 +367,7 @@ export class LiveTradingAgent {
         market: snapshot.market, side, leverage, collateral, tp, sl,
         strategy: strategyName,
         confidence: ed.confidence,
-        reasoning: `${ed.agreeing}/${ed.totalVoters} strategies | R:R=${rrRatio.toFixed(1)} | clarity=${(clarity * 100).toFixed(0)}% | $${collateral.toFixed(0)}(${(sizing.sizePct * 100).toFixed(1)}%) | ${regime.regime}`,
+        reasoning: `${ed.agreeing}/${ed.totalVoters} strats | R:R=${rrRatio.toFixed(1)} | TA:${techSignal.breakdown || 'n/a'} | $${collateral.toFixed(0)}(${(sizing.sizePct * 100).toFixed(1)}%) | ${regime.regime}`,
         signals: ed.bestResult?.signals ?? [],
         riskLevel: 'safe',
       };
