@@ -23,6 +23,7 @@ import { RegimeAdapter } from './regime-adapter.js';
 import { MarketScanner } from './market-scanner.js';
 import { DynamicSizer } from './dynamic-sizer.js';
 import { TechnicalAnalyzer } from './technical-indicators.js';
+import { ExpectancyEngine } from './expectancy-engine.js';
 import type { CompositeSignal } from './signal-fusion.js';
 
 import type {
@@ -54,6 +55,7 @@ export class LiveTradingAgent {
   private readonly scanner: MarketScanner;
   private readonly sizer: DynamicSizer;
   private readonly technicals: TechnicalAnalyzer;
+  private readonly expectancy: ExpectancyEngine;
   /** Signal confirmation: track previous tick's direction per market */
   private prevSignals: Map<string, string> = new Map();
   /** Per-market cooldown after trade close */
@@ -101,6 +103,7 @@ export class LiveTradingAgent {
     this.scanner = new MarketScanner(3, 0.25);
     this.sizer = new DynamicSizer(0.02, 0.005, 0.03);
     this.technicals = new TechnicalAnalyzer();
+    this.expectancy = new ExpectancyEngine();
     this.state = this.createInitialState();
   }
 
@@ -113,11 +116,11 @@ export class LiveTradingAgent {
     this.stopRequested = false;
     this.setStatus(AgentStatus.RUNNING);
 
-    this.log('info', `Agent "${this.config.name}" v4 (quant-level) starting`);
-    this.log('info', `Scanning: ${this.config.markets.join(', ')} → trade top 3`);
+    this.log('info', `Agent "${this.config.name}" v5 (alpha engine) starting`);
+    this.log('info', `Scanning: ${this.config.markets.length} markets → trade top 3`);
     this.log('info', `Strategies: ${this.strategies.map((s) => s.name).join(', ')}`);
-    this.log('info', `Engines: Bayesian fusion, market scanner, dynamic sizing, regime-adaptive, funding harvester`);
-    this.log('info', `Risk: max ${this.config.risk.maxPositions} pos, max ${this.config.risk.maxLeverage}x, 2-tick confirmation`);
+    this.log('info', `Engines: EV filter, Bayesian fusion, technicals (RSI+MACD+EMA+BB), regime-adaptive, market scanner`);
+    this.log('info', `Risk: max ${this.config.risk.maxPositions} pos, max ${this.config.risk.maxLeverage}x, post-trade learning`);
     if (this.config.dryRun) this.log('info', 'DRY RUN — decisions logged but not executed');
 
     // Initialize capital from live context
@@ -174,7 +177,8 @@ export class LiveTradingAgent {
     this.positionMgr.reset();
     this.regimeAdapter.reset();
     this.technicals.reset();
-    this.log('info', 'Stop requested — state cleaned');
+    // Note: expectancy NOT reset — it persists learning across sessions
+    this.log('info', 'Stop requested — state cleaned (EV stats preserved)');
   }
 
   getState(): Readonly<AgentState> { return this.state; }
@@ -343,6 +347,21 @@ export class LiveTradingAgent {
         continue;
       }
 
+      // FILTER: Expected Value (EV) — reject negative-EV strategies
+      const primaryStrategy = allowedInRegime[0] || 'ensemble';
+      const evCheck = this.expectancy.checkEV(primaryStrategy, ed.confidence);
+      if (!evCheck.allowed) {
+        this.log('verbose', `${snapshot.market}: EV rejected — ${evCheck.reason}`);
+        continue;
+      }
+
+      // FILTER: System-wide EV failsafe
+      const systemEV = this.expectancy.getSystemEV();
+      if (systemEV < -2 && this.expectancy.getAllStats().some((s) => s.trades >= 10)) {
+        this.log('normal', `System EV negative (${systemEV.toFixed(2)}) — pausing new trades`);
+        continue;
+      }
+
       // FILTER: Technical indicator confirmation (RSI + MACD + EMA = 73% win rate)
       const techSignal = this.technicals.signal(snapshot.market, snapshot.price);
       const side = ed.side ?? 'long';
@@ -387,7 +406,7 @@ export class LiveTradingAgent {
         market: snapshot.market, side, leverage, collateral, tp, sl,
         strategy: strategyName,
         confidence: ed.confidence,
-        reasoning: `${ed.agreeing}/${ed.totalVoters} strats | R:R=${rrRatio.toFixed(1)} | TA:${techSignal.breakdown || 'n/a'} | $${collateral.toFixed(0)}(${(sizing.sizePct * 100).toFixed(1)}%) | ${regime.regime}`,
+        reasoning: `${ed.agreeing}/${ed.totalVoters} strats | R:R=${rrRatio.toFixed(1)} | EV=${evCheck.ev.toFixed(2)} | TA:${techSignal.breakdown || 'n/a'} | $${collateral.toFixed(0)} | ${regime.regime}`,
         signals: ed.bestResult?.signals ?? [],
         riskLevel: 'safe',
       };
@@ -748,8 +767,18 @@ export class LiveTradingAgent {
       });
 
       this.state = this.risk.processTradeResult(this.state, pnl);
+
+      // POST-TRADE LEARNING: update expectancy engine + strategy ensemble
+      this.expectancy.recordTrade(decision.strategy, pnl);
+      this.ensemble.recordOutcome(decision.strategy, pnl > 0);
+      // Update fusion engine factor accuracy
+      for (const signal of decision.signals) {
+        const wasCorrect = (signal.direction === 'bullish' && pnl > 0) || (signal.direction === 'bearish' && pnl > 0 && decision.side === 'short');
+        this.fusion.recordOutcome(signal.source, wasCorrect);
+      }
+
       this.callbacks.onTrade?.(entry);
-      this.log('normal', `Closed: ${position.market} ${position.side} PnL=$${pnl.toFixed(2)}`);
+      this.log('normal', `Closed: ${position.market} ${position.side} PnL=$${pnl.toFixed(2)} | EV updated`);
     } catch (error: unknown) {
       const msg = error instanceof Error ? error.message : String(error);
       this.log('error', `Close failed: ${msg}`);

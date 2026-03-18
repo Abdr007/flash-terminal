@@ -18,6 +18,8 @@ export { DynamicSizer } from './dynamic-sizer.js';
 export type { SizingResult } from './dynamic-sizer.js';
 export { TechnicalAnalyzer } from './technical-indicators.js';
 export type { IndicatorSet, TechnicalSignal } from './technical-indicators.js';
+export { ExpectancyEngine } from './expectancy-engine.js';
+export type { StrategyStats, EVDecision } from './expectancy-engine.js';
 
 // Supervisor
 export { AgentSupervisor } from './supervisor.js';
