@@ -139,8 +139,11 @@ export class MetaAgent {
     const disabled = strategyStats.filter((s) => s.disabled);
     if (disabled.length > active.length) { score -= 15; reasons.push(`${disabled.length}/${strategyStats.length} disabled`); }
 
-    // 5. Consecutive losses from drawdown state
-    if (drawdownState.barsSinceHigh > 30) { score -= 10; reasons.push('stale'); }
+    // 5. Stale equity — only penalize if we've actually traded and lost
+    // Don't penalize for not trading (that's correct behavior in quiet markets)
+    if (drawdownState.barsSinceHigh > 30 && recentTradeCount >= 5 && drawdownState.drawdownPct > 0.02) {
+      score -= 10; reasons.push('stale');
+    }
 
     // Determine mode
     let mode: AggressionMode;

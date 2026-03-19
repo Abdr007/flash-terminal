@@ -256,8 +256,7 @@ export class LiveTradingAgent {
     // Sync drawdown state to policy learner (disables exploration during DD)
     this.policyLearner.setDrawdownState(ddState.drawdownPct > 0.05);
 
-    // DASHBOARD: record tick (mode filled after meta-agent)
-    this.dashboard.recordTick(this.state.iteration, this.state.currentCapital, 'pending', this.policyLearner.getExplorationRate());
+    // Dashboard halt check (recording moved to after meta-agent for correct mode)
     const haltCheck = this.dashboard.shouldHalt();
     if (haltCheck.halt) {
       this.safetyStop(`Dashboard halt: ${haltCheck.reason}`);
@@ -344,6 +343,9 @@ export class LiveTradingAgent {
 
     this.log('verbose', `META: ${metaDecision.reason} | threshold=${metaDecision.scoreThreshold} | LR=${policyMetrics.learningRate.toFixed(3)} explore=${(policyMetrics.explorationRate * 100).toFixed(1)}%`);
 
+    // DASHBOARD: record tick with correct mode
+    this.dashboard.recordTick(this.state.iteration, this.state.currentCapital, metaDecision.mode, policyMetrics.explorationRate);
+
     // Hard guards (kept as safety net)
     if (this.hourlyTrades.length >= 6) return;
     if (this.state.consecutiveLosses >= 4) { this.log('normal', 'Loss streak 4+ — paused'); return; }
@@ -414,12 +416,20 @@ export class LiveTradingAgent {
       const techDataAvailable = this.technicals.dataPoints(snapshot.market) >= 30;
       const side = ed.side ?? 'long';
 
-      // Build trade parameters
+      // Build trade parameters — ensure minimum SL/TP distance for viable R:R
       const leverage = this.risk.clampLeverage(Math.min(3, regimeParams.maxLeverage ?? 3));
-      const slDistance = snapshot.price * 0.02 * (regimeParams.stopAtrMultiplier ?? 2.0) / 2.0;
-      const tpDistance = slDistance * Math.max(metaDecision.minRR, regimeParams.takeProfitR ?? 2.0);
-      const tp = ed.bestResult?.suggestedTp ?? (side === 'long' ? snapshot.price + tpDistance : snapshot.price - tpDistance);
-      const sl = ed.bestResult?.suggestedSl ?? (side === 'long' ? snapshot.price - slDistance : snapshot.price + slDistance);
+      const minSlPct = 0.015; // Minimum 1.5% stop distance
+      const slDistance = Math.max(snapshot.price * minSlPct, snapshot.price * 0.02 * (regimeParams.stopAtrMultiplier ?? 2.0) / 2.0);
+      const tpDistance = slDistance * Math.max(2.0, regimeParams.takeProfitR ?? 2.0); // Always at least 2:1
+      const defaultTp = side === 'long' ? snapshot.price + tpDistance : snapshot.price - tpDistance;
+      const defaultSl = side === 'long' ? snapshot.price - slDistance : snapshot.price + slDistance;
+      // Use strategy suggestion if it gives BETTER R:R, otherwise use defaults
+      const sugTp = ed.bestResult?.suggestedTp;
+      const sugSl = ed.bestResult?.suggestedSl;
+      const sugRR = sugTp && sugSl ? Math.abs(sugTp - snapshot.price) / Math.abs(snapshot.price - sugSl) : 0;
+      const defRR = tpDistance / slDistance;
+      const tp = (sugTp && sugRR >= defRR) ? sugTp : defaultTp;
+      const sl = (sugSl && sugRR >= defRR) ? sugSl : defaultSl;
       const riskDist = Math.abs(snapshot.price - sl);
       const rewardDist = Math.abs(tp - snapshot.price);
       const rrRatio = riskDist > 0 ? rewardDist / riskDist : 0;

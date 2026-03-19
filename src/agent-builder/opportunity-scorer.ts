@@ -103,13 +103,14 @@ export class OpportunityScorer {
     // 5. Regime component — NON-LINEAR: heavy penalty for mismatch
     const regimeScore = regimeAllowed ? 100 : 0; // Hard zero — regime mismatch is fatal
 
-    // 6. R:R component (0-100)
+    // 6. R:R component (0-100) — less punishing in quiet markets
     let rrScore: number;
     if (rrRatio >= 3) rrScore = 100;
-    else if (rrRatio >= 2) rrScore = 80;
-    else if (rrRatio >= 1.5) rrScore = 60;
-    else if (rrRatio >= 1) rrScore = 30;
-    else rrScore = 0;
+    else if (rrRatio >= 2) rrScore = 85;
+    else if (rrRatio >= 1.5) rrScore = 70;
+    else if (rrRatio >= 1) rrScore = 55;
+    else if (rrRatio >= 0.5) rrScore = 40;
+    else rrScore = 25; // Floor — never zero just from R:R
 
     // Weighted total using ADAPTIVE weights
     let total = Math.round(
