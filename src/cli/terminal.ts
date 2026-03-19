@@ -2686,7 +2686,7 @@ export class FlashTerminal {
         name: 'flash-agent',
         markets: getAllMarkets(),
         pollIntervalMs: 10_000,
-        maxIterations: 200,
+        maxIterations: 0, // Unlimited — runs until manually stopped
         dryRun,
         logLevel: 'verbose',
         risk: {
