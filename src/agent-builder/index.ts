@@ -38,6 +38,8 @@ export { PolicyLearner } from './policy-learner.js';
 export type { MarketState, PolicyAction, LearnedPattern } from './policy-learner.js';
 export { SimulationEngine } from './simulation-engine.js';
 export type { SimulationInsight } from './simulation-engine.js';
+export { PerformanceDashboard } from './performance-dashboard.js';
+export type { PerformanceSnapshot, AuditEntry, DegradationAlert, DashboardReport } from './performance-dashboard.js';
 
 // Supervisor
 export { AgentSupervisor } from './supervisor.js';

@@ -1499,6 +1499,14 @@ export class FlashTerminal {
       this.handleAgentReport();
       return;
     }
+    if (lower === 'agent dashboard' || lower === 'agent perf' || lower === 'agent performance') {
+      this.handleAgentDashboard();
+      return;
+    }
+    if (lower === 'agent audit' || lower === 'agent log') {
+      this.handleAgentAudit();
+      return;
+    }
 
     // ─── Doctor Diagnostic Intercept ───────────────────────────────
     // ─── Session Metrics ──────────────────────────────────────
@@ -2779,6 +2787,40 @@ export class FlashTerminal {
       console.log('  ' + this.liveAgent.getJournal().formatStats().split('\n').join('\n  '));
       console.log('');
     }
+  }
+
+  private handleAgentDashboard(): void {
+    if (!this.liveAgent) {
+      console.log(chalk.dim('  No agent session.'));
+      return;
+    }
+    const db = this.liveAgent.getDashboard();
+    const report = db.getReport();
+    console.log('');
+    console.log('  ' + db.formatReport(report).split('\n').join('\n  '));
+    console.log('');
+  }
+
+  private handleAgentAudit(): void {
+    if (!this.liveAgent) {
+      console.log(chalk.dim('  No agent session.'));
+      return;
+    }
+    const entries = this.liveAgent.getDashboard().getAuditLog(15);
+    if (entries.length === 0) {
+      console.log(chalk.dim('  No audit entries yet.'));
+      return;
+    }
+    console.log('');
+    console.log(`  ${theme.accentBold('AUDIT LOG')} (last ${entries.length})`);
+    console.log(`  ${theme.separator(60)}`);
+    for (const e of entries) {
+      const icon = e.outcome === 'executed' ? chalk.green('EX') : e.outcome === 'skipped' ? chalk.dim('SK') : chalk.yellow('BL');
+      const pnlStr = e.pnl !== undefined ? ` PnL=$${e.pnl.toFixed(2)}` : '';
+      console.log(`  [${icon}] T${e.tick} ${e.market} ${e.action} score=${e.score}${pnlStr}`);
+      console.log(chalk.dim(`       ${e.reasoning.slice(0, 80)}`));
+    }
+    console.log('');
   }
 
   private async handlePositionDebug(market: string): Promise<void> {

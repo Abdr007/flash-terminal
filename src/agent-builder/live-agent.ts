@@ -33,6 +33,7 @@ import { MicroEntryAnalyzer } from './micro-entry.js';
 import { TimeIntelligence } from './time-intelligence.js';
 import { PolicyLearner } from './policy-learner.js';
 import { SimulationEngine } from './simulation-engine.js';
+import { PerformanceDashboard } from './performance-dashboard.js';
 import type { CompositeSignal } from './signal-fusion.js';
 
 import type {
@@ -73,6 +74,7 @@ export class LiveTradingAgent {
   private readonly timeIntel: TimeIntelligence;
   private readonly policyLearner: PolicyLearner;
   private readonly simEngine: SimulationEngine;
+  private readonly dashboard: PerformanceDashboard;
   /** Track entry state for policy reward computation */
   private activeTradeStates: Map<string, { state: import('./policy-learner.js').MarketState; action: import('./policy-learner.js').PolicyAction; entryTick: number }> = new Map();
   /** Signal confirmation: track previous tick's direction per market */
@@ -131,6 +133,7 @@ export class LiveTradingAgent {
     this.timeIntel = new TimeIntelligence();
     this.policyLearner = new PolicyLearner();
     this.simEngine = new SimulationEngine();
+    this.dashboard = new PerformanceDashboard();
     this.state = this.createInitialState();
   }
 
@@ -216,6 +219,7 @@ export class LiveTradingAgent {
   getState(): Readonly<AgentState> { return this.state; }
   getJournal(): TradeJournal { return this.journal; }
   getRiskManager(): RiskManager { return this.risk; }
+  getDashboard(): PerformanceDashboard { return this.dashboard; }
   get isRunning(): boolean { return this.running; }
 
   // ─── Core Loop ─────────────────────────────────────────────────────
@@ -251,6 +255,14 @@ export class LiveTradingAgent {
     }
     // Sync drawdown state to policy learner (disables exploration during DD)
     this.policyLearner.setDrawdownState(ddState.drawdownPct > 0.05);
+
+    // DASHBOARD: record tick (mode filled after meta-agent)
+    this.dashboard.recordTick(this.state.iteration, this.state.currentCapital, 'pending', this.policyLearner.getExplorationRate());
+    const haltCheck = this.dashboard.shouldHalt();
+    if (haltCheck.halt) {
+      this.safetyStop(`Dashboard halt: ${haltCheck.reason}`);
+      return;
+    }
     if (ddState.sizeMultiplier < 0.15) {
       this.log('normal', `Drawdown ${(ddState.drawdownPct * 100).toFixed(1)}% — sizing reduced to ${(ddState.sizeMultiplier * 100).toFixed(0)}%`);
     }
@@ -517,6 +529,18 @@ export class LiveTradingAgent {
 
       this.callbacks.onDecision?.(opp.decision);
       this.log('normal', `EXECUTE: ${opp.decision.market} ${opp.decision.side} | ${opp.decision.reasoning}`);
+
+      // AUDIT: log execution
+      this.dashboard.audit({
+        tick: this.state.iteration,
+        timestamp: new Date().toISOString(),
+        market: opp.decision.market,
+        state: `${opp.decision.strategy}`,
+        action: `open_${opp.decision.side}`,
+        score: opp.score,
+        outcome: 'executed',
+        reasoning: opp.decision.reasoning,
+      });
 
       await this.executeTrade(opp.decision, opp.snapshot);
       tickPositionCount++;
@@ -919,6 +943,21 @@ export class LiveTradingAgent {
       if (cf.missedWins + cf.correctSkips >= 5) {
         this.log('verbose', `Skip analysis: ${cf.correctSkips} correct, ${cf.missedWins} missed (accuracy ${(cf.skipAccuracy * 100).toFixed(0)}%)`);
       }
+
+      // DASHBOARD: record trade + audit
+      this.dashboard.recordTrade(pnl, decision.strategy);
+      this.dashboard.audit({
+        tick: this.state.iteration,
+        timestamp: new Date().toISOString(),
+        market: position.market,
+        state: `${position.side}`,
+        action: 'close',
+        score: 0,
+        outcome: 'executed',
+        reward: tradeState ? this.policyLearner.computeReward(pnl, decision.collateral ?? 100, decision.leverage ?? 3, tradeState ? this.state.iteration - tradeState.entryTick : 0) : undefined,
+        pnl,
+        reasoning: decision.reasoning,
+      });
 
       this.callbacks.onTrade?.(entry);
       this.log('normal', `Closed: ${position.market} ${position.side} PnL=$${pnl.toFixed(2)} | policy+weights updated`);
