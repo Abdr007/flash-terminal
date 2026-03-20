@@ -111,6 +111,11 @@ export class LiveTradingAgent {
   private cachedSnapshots: MarketSnapshot[] = [];
   /** V16: Last full scan timestamp */
   private lastFullScanAt = 0;
+  /** V17: Rolling trade quality for fast-path gating */
+  private recentTradeEVs: number[] = [];
+  /** V17: Fast-path vs full-pipeline trade counter for ratio tracking */
+  private fastPathCount = 0;
+  private fullPipelineCount = 0;
   /** Current regime per market (for exit policy) */
   private marketRegimes: Map<string, string> = new Map();
 
@@ -277,6 +282,10 @@ export class LiveTradingAgent {
     this.simEngine.reset();
     this.macroRegime.reset();
     this.edgeRefiner.reset();
+    this.recentTradeEVs = [];
+    this.fastPathCount = 0;
+    this.fullPipelineCount = 0;
+    this.cachedSnapshots = [];
     this.activeTradeStates.clear();
     this.activeExitStates.clear();
     this.marketRegimes.clear();
@@ -317,12 +326,12 @@ export class LiveTradingAgent {
       return;
     }
 
-    // V16: OBSERVE — parallel fetch with smart scan scheduling
-    // Full scan every 3rd tick or if cache is stale (>30s); fast ticks use cached data
-    const FULL_SCAN_INTERVAL = 3;
-    const needsFullScan = this.state.iteration % FULL_SCAN_INTERVAL === 0
-      || this.cachedSnapshots.length === 0
-      || Date.now() - this.lastFullScanAt > 30_000;
+    // V17: OBSERVE — TTL-aware caching with quality-gated fast path
+    // Price data TTL: 15s (must be fresh for trading decisions)
+    // Full scan on first tick, then only when cache expires
+    const PRICE_TTL_MS = 15_000;
+    const cacheAge = Date.now() - this.lastFullScanAt;
+    const needsFullScan = this.cachedSnapshots.length === 0 || cacheAge > PRICE_TTL_MS;
 
     const [positions, snapshots] = await Promise.all([
       this.fetchPositions(),
@@ -333,6 +342,9 @@ export class LiveTradingAgent {
       this.cachedSnapshots = snapshots;
       this.lastFullScanAt = Date.now();
     }
+
+    // V17: On cached ticks, only monitor positions (no new entries from stale data)
+    const isFreshData = needsFullScan || cacheAge < 5_000; // <5s = fresh enough for entries
 
     if (!snapshots.length) {
       this.log('verbose', 'No market data available');
@@ -371,14 +383,20 @@ export class LiveTradingAgent {
     }
 
     // ─── PHASE 3: RECORD PRICES + COMPUTE TECHNICALS + SCAN ────────
-    // Record every price tick for technical indicator computation + V2 modules
+    // Always record prices (even from cache — updates technical history)
     for (const snapshot of snapshots) {
       this.technicals.record(snapshot.market, snapshot.price);
-      this.exitPolicy.recordPrice(snapshot.market, snapshot.price);   // V2: momentum tracking
-      this.correlationGuard.recordPrice(snapshot.market, snapshot.price); // V2: rolling correlation
+      this.exitPolicy.recordPrice(snapshot.market, snapshot.price);
+      this.correlationGuard.recordPrice(snapshot.market, snapshot.price);
     }
 
-    // MACRO REGIME: cross-asset environment detection
+    // V17: Cached ticks only monitor positions — no new entries from stale data
+    if (!isFreshData) {
+      this.log('verbose', `Fast tick (cache age ${Math.round(cacheAge / 1000)}s) — monitoring only`);
+      return;
+    }
+
+    // MACRO REGIME: cross-asset environment detection (only on fresh data)
     const macro = this.macroRegime.update(snapshots);
     if (macro.tradesBlocked) {
       this.log('normal', `MACRO RISK-OFF: ${macro.regime} (BTC ${macro.btcTrend}, vol ${macro.avgVolatility.toFixed(1)}%, corr ${(macro.correlationStrength * 100).toFixed(0)}%) — trades blocked`);
@@ -713,13 +731,26 @@ export class LiveTradingAgent {
       }
     } catch { /* health module may not be loaded */ }
 
-    // GLOBAL TRADE FILTER: if best opportunity is weak, do nothing
-    // Cold-start uses lower floor; ramps to 50 as trades accumulate
-    // Adaptive: floor raised by health threshold multiplier during degradation
+    // V17: TRADE QUALITY FILTER — if recent EV is negative, raise thresholds
+    let qualityMult = 1.0;
+    if (this.recentTradeEVs.length >= 10) {
+      const rollingEV = this.recentTradeEVs.reduce((a, b) => a + b, 0) / this.recentTradeEVs.length;
+      if (rollingEV < 0) {
+        qualityMult = 1.3; // Raise threshold 30% when recent trades are negative EV
+        this.log('verbose', `V17: Rolling EV $${rollingEV.toFixed(2)} < 0 — threshold raised 30%`);
+      }
+    }
+
+    // V17: FAST PATH RATIO — limit fast-path trades to 40% of total
+    const totalClassified = this.fastPathCount + this.fullPipelineCount;
+    const fastRatio = totalClassified > 10 ? this.fastPathCount / totalClassified : 0;
+    const fastPathAllowed = fastRatio < 0.4;
+
+    // GLOBAL TRADE FILTER
     const baseFloor = stats.totalTrades < COLD_START_TRADES
       ? Math.round(COLD_START_FLOOR + (50 - COLD_START_FLOOR) * (stats.totalTrades / COLD_START_TRADES))
       : 50;
-    const effectiveFloor = Math.round(baseFloor * healthThresholdMult);
+    const effectiveFloor = Math.round(baseFloor * healthThresholdMult * qualityMult);
     if (opportunities.length > 0 && opportunities[0].score < effectiveFloor) {
       this.log('verbose', `Best opportunity ${opportunities[0].decision.market} scored ${opportunities[0].score} < floor ${effectiveFloor} — no trades this tick`);
       opportunities.length = 0; // Clear all
@@ -729,8 +760,15 @@ export class LiveTradingAgent {
       if (tickPositionCount >= metaDecision.maxPositions) break;
       if (tickCapitalAllocated >= maxCapital) break;
 
+      // V17: Tier classification
+      const isTier1 = opp.decision.confidence >= 0.75
+        && opp.score >= effectiveFloor + 10
+        && opp.decision.riskLevel === 'safe';
+      const tier = isTier1 && fastPathAllowed ? 'T1-FAST' : 'T2-FULL';
+      if (isTier1) this.fastPathCount++; else this.fullPipelineCount++;
+
       this.callbacks.onDecision?.(opp.decision);
-      this.log('normal', `EXECUTE: ${opp.decision.market} ${opp.decision.side} | ${opp.decision.reasoning}`);
+      this.log('normal', `EXECUTE [${tier}]: ${opp.decision.market} ${opp.decision.side} | ${opp.decision.reasoning}`);
 
       // AUDIT: log execution
       this.dashboard.audit({
@@ -1257,6 +1295,15 @@ export class LiveTradingAgent {
 
       this.callbacks.onTrade?.(entry);
       this.log('normal', `Closed: ${position.market} ${position.side} PnL=$${pnl.toFixed(2)} | policy+weights updated`);
+
+      // V17: Track rolling trade quality for fast-path gating
+      this.recentTradeEVs.push(pnl);
+      if (this.recentTradeEVs.length > 20) this.recentTradeEVs.shift();
+
+      // V17: Learning protection — log rapid trading warning for awareness
+      if (this.hourlyTrades.length > 4) {
+        this.log('verbose', `V17: Rapid trading (${this.hourlyTrades.length} trades/hr) — meta-agent handles aggression`);
+      }
 
       // EDGE REFINEMENT: check if cycle should run
       const closedCount = this.journal.getStats().totalTrades;
