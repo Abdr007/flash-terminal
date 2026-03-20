@@ -100,8 +100,8 @@ export class OpportunityScorer {
       techScore = Math.min(100, 30 + techSignal.agreement * 15 + (Math.abs(techSignal.score) * 20));
     }
 
-    // 5. Regime component — NON-LINEAR: heavy penalty for mismatch
-    const regimeScore = regimeAllowed ? 100 : 0; // Hard zero — regime mismatch is fatal
+    // 5. Regime component — penalty for mismatch but not fatal
+    const regimeScore = regimeAllowed ? 100 : 30; // Soft penalty — allows through at reduced score
 
     // 6. R:R component (0-100) — less punishing in quiet markets
     let rrScore: number;
@@ -124,9 +124,9 @@ export class OpportunityScorer {
 
     // ─── NON-LINEAR PENALTIES ────────────────────────────────────
 
-    // Regime mismatch: exponential penalty (not just low score)
+    // Regime mismatch: moderate penalty (sizing already handles regime risk)
     if (!regimeAllowed) {
-      total = Math.round(total * 0.3); // Crush score — 70% penalty
+      total = Math.round(total * 0.65); // 35% penalty — regime sizing handles the rest
     }
 
     // Signal conflict penalty: if factors disagree, reduce trust
@@ -134,31 +134,36 @@ export class OpportunityScorer {
     const bullishCount = dirFactors.filter((f) => f.direction === 'bullish').length;
     const bearishCount = dirFactors.filter((f) => f.direction === 'bearish').length;
     const conflictRatio = Math.min(bullishCount, bearishCount) / Math.max(1, dirFactors.length);
+
+    // Penalties are CAPPED to prevent multiplicative crushing
+    // Max total penalty from all sources: 50% (floor at 50% of weighted score)
+    let penaltyMultiplier = 1.0;
+
+    // Conflict penalty (up to -25%)
     if (conflictRatio > 0.3) {
-      // More than 30% of signals conflict — heavy penalty
-      total = Math.round(total * (1 - conflictRatio)); // e.g. 40% conflict → 60% of score
+      penaltyMultiplier -= conflictRatio * 0.5; // 33% conflict → -16.5%, 50% → -25%
     }
 
-    // Execution cost: exponential penalty for high costs
+    // Execution cost penalty (up to -15%)
     let executionCost: ExecutionCost | null = null;
     if (positionSizeUsd && entryPrice && slPrice) {
       executionCost = this.executionModel.estimate(
         positionSizeUsd, marketOiUsd ?? 0, rrRatio, entryPrice, slPrice,
       );
       if (!executionCost.viable) {
-        total = Math.round(total * 0.3); // Exponential: costs destroy edge
+        penaltyMultiplier -= 0.15;
       } else if (executionCost.totalCostPct > 0.3) {
-        total = Math.round(total * 0.6);
-      } else if (executionCost.totalCostPct > 0.2) {
-        total = Math.round(total * 0.8);
+        penaltyMultiplier -= 0.10;
       }
     }
 
-    // UNCERTAINTY PENALTY: unstable signals reduce score
-    // If composite confidence is low despite having many factors → uncertain
+    // Uncertainty penalty (up to -10%)
     if (composite.totalFactors >= 3 && composite.confidence < 0.4) {
-      total = Math.round(total * 0.7); // Many signals but low confidence = noisy
+      penaltyMultiplier -= 0.10;
     }
+
+    // Apply capped penalty (never below 50% of base score)
+    total = Math.round(total * Math.max(0.50, penaltyMultiplier));
 
     total = Math.max(0, Math.min(100, total));
     const passes = total >= threshold;

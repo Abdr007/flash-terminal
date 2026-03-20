@@ -100,13 +100,17 @@ export class LiveTradingAgent {
   /** Autosave counter — save state every N ticks */
   private readonly autosaveInterval = 50;
   /** Tick timeout — prevents infinite hang if SDK call stalls */
-  private static readonly TICK_TIMEOUT_MS = 60_000;
+  private static readonly TICK_TIMEOUT_MS = 180_000; // 3 min — 32 markets × ~2-3s each
   /** Maximum entries per unbounded map — prevents memory leaks in long sessions */
   private static readonly MAX_MAP_ENTRIES = 200;
   /** Maximum journal entries kept in memory */
   private static readonly MAX_JOURNAL_ENTRIES = 2000;
   /** Daily risk reset tracking */
   private lastDailyResetDate = '';
+  /** V16: Cached snapshots for fast ticks (refreshed every full scan) */
+  private cachedSnapshots: MarketSnapshot[] = [];
+  /** V16: Last full scan timestamp */
+  private lastFullScanAt = 0;
   /** Current regime per market (for exit policy) */
   private marketRegimes: Map<string, string> = new Map();
 
@@ -133,7 +137,9 @@ export class LiveTradingAgent {
       atrMultiplier: 2.0,
       scaleOutLevels: [1, 2, 3],
       scaleOutPercents: [30, 30, 40],
-      maxFlatTicks: 20,
+      maxFlatTicks: 30,           // ~5 min flat → close
+      flatThresholdPct: 0.3,      // ±0.3% counts as flat
+      maxHoldTicks: 120,          // ~20 min max hold — give trades time to develop
       maxRiskPct: this.config.risk.positionSizePct,
       kellyFraction: 0.25,
     });
@@ -222,13 +228,23 @@ export class LiveTradingAgent {
       }
 
       if (this.running && !this.stopRequested) {
-        // ADAPTIVE: slow down scan frequency when system is degraded
+        // V16 ADAPTIVE POLLING: fast when volatile, slow when quiet
         let pollMs = this.config.pollIntervalMs;
+
+        // Volatility-adaptive: if recent snapshots show big moves, poll faster
+        if (this.cachedSnapshots.length > 0) {
+          const avgAbsChange = this.cachedSnapshots.reduce((s, snap) => s + Math.abs(snap.priceChange24h), 0) / this.cachedSnapshots.length;
+          if (avgAbsChange > 5) pollMs = Math.round(pollMs * 0.5);        // High vol → 2x faster
+          else if (avgAbsChange < 1) pollMs = Math.round(pollMs * 1.5);   // Low vol → 1.5x slower
+        }
+
+        // Health degradation override
         try {
           const { getHealth } = await import('../system/health.js');
           const dp = getHealth()?.getDegradationParams();
-          if (dp) pollMs = Math.round(pollMs * dp.scanIntervalMultiplier);
+          if (dp && dp.scanIntervalMultiplier > 1) pollMs = Math.round(pollMs * dp.scanIntervalMultiplier);
         } catch { /* health module may not be loaded */ }
+
         await sleep(pollMs);
       }
     }
@@ -301,11 +317,22 @@ export class LiveTradingAgent {
       return;
     }
 
-    // OBSERVE — use live context directly
+    // V16: OBSERVE — parallel fetch with smart scan scheduling
+    // Full scan every 3rd tick or if cache is stale (>30s); fast ticks use cached data
+    const FULL_SCAN_INTERVAL = 3;
+    const needsFullScan = this.state.iteration % FULL_SCAN_INTERVAL === 0
+      || this.cachedSnapshots.length === 0
+      || Date.now() - this.lastFullScanAt > 30_000;
+
     const [positions, snapshots] = await Promise.all([
       this.fetchPositions(),
-      this.fetchMarketSnapshots(),
+      needsFullScan ? this.fetchMarketSnapshots() : Promise.resolve(this.cachedSnapshots),
     ]);
+
+    if (needsFullScan && snapshots.length > 0) {
+      this.cachedSnapshots = snapshots;
+      this.lastFullScanAt = Date.now();
+    }
 
     if (!snapshots.length) {
       this.log('verbose', 'No market data available');
@@ -461,7 +488,19 @@ export class LiveTradingAgent {
 
     // Hard guards (kept as safety net)
     if (this.hourlyTrades.length >= 6) return;
-    if (this.state.consecutiveLosses >= 4) { this.log('normal', 'Loss streak 4+ — paused'); return; }
+    // Loss streak pause: skip 5 ticks (~50s cooldown), then resume with reduced size
+    if (this.state.consecutiveLosses >= 4) {
+      const ticksSinceLastTrade = this.state.lastTradeTimestamp > 0
+        ? Math.floor((Date.now() - this.state.lastTradeTimestamp) / (this.config.pollIntervalMs || 10_000))
+        : 999;
+      if (ticksSinceLastTrade < 5) {
+        this.log('normal', `Loss streak ${this.state.consecutiveLosses} — cooling down (${5 - ticksSinceLastTrade} ticks remaining)`);
+        return;
+      }
+      // After cooldown, reset streak so agent can try again (meta-agent already reduces aggression)
+      this.log('normal', `Loss streak cooldown expired — resuming with conservative mode`);
+      this.state.consecutiveLosses = 0;
+    }
 
     let tickPositionCount = this.state.positions.length;
     let tickCapitalAllocated = this.state.positions.reduce((sum, p) => sum + (p.collateralUsd ?? 0), 0);
@@ -506,7 +545,9 @@ export class LiveTradingAgent {
       );
       const policyRec = this.policyLearner.recommend(policyState);
 
-      if (!policyRec.action.startsWith('trade') && !policyRec.isExploration) {
+      // COLD-START OVERRIDE: ignore policy SKIP during first 15 trades — need data to learn from
+      const ignorePolicySkip = stats.totalTrades < COLD_START_TRADES;
+      if (!policyRec.action.startsWith('trade') && !policyRec.isExploration && !ignorePolicySkip) {
         this.log('verbose', `${snapshot.market}: policy recommends SKIP (conf=${(policyRec.confidence * 100).toFixed(0)}%)`);
         // Still simulate for learning
         this.simEngine.simulate(snapshot.market, composite.direction === 'bearish' ? 'short' : 'long', snapshot.price, 0, 'policy_skip', regime.regime, composite.confidence);
@@ -738,46 +779,60 @@ export class LiveTradingAgent {
     }
   }
 
+  /** V16: Parallel market fetch with concurrency limit + single OI/volume call */
   private async fetchMarketSnapshots(): Promise<MarketSnapshot[]> {
-    const snapshots: MarketSnapshot[] = [];
     const { SolanaInspector } = await import('../agent/solana-inspector.js');
     const inspector = new SolanaInspector(
       this.context.flashClient,
       this.context.dataClient,
     );
 
-    for (const market of this.config.markets) {
-      try {
-        const [marketData] = await inspector.getMarkets(market);
-        if (!marketData) continue;
+    // Fetch global data ONCE (not per-market)
+    let oiData: { markets?: Array<{ market: string; longOi: number; shortOi: number }> } | null = null;
+    let volumeData: { totalVolumeUsd?: number } | null = null;
+    try { [oiData, volumeData] = await Promise.all([
+      inspector.getOpenInterest().catch(() => null),
+      inspector.getVolume().catch(() => null),
+    ]); } catch { /* non-critical */ }
 
-        let volumeData: { totalVolumeUsd?: number } | null = null;
-        let oiData: { markets?: Array<{ market: string; longOi: number; shortOi: number }> } | null = null;
+    // Parallel market fetch with concurrency limit
+    const CONCURRENCY = 8;
+    const markets = this.config.markets;
+    const snapshots: MarketSnapshot[] = [];
 
-        try { volumeData = await inspector.getVolume(); } catch { /* optional */ }
-        try { oiData = await inspector.getOpenInterest(); } catch { /* optional */ }
+    for (let i = 0; i < markets.length; i += CONCURRENCY) {
+      const batch = markets.slice(i, i + CONCURRENCY);
+      const results = await Promise.allSettled(
+        batch.map(async (market) => {
+          const [marketData] = await inspector.getMarkets(market);
+          if (!marketData) return null;
 
-        const oiMarket = oiData?.markets?.find(
-          (m) => m.market.toUpperCase() === market.toUpperCase(),
-        );
-        const md = marketData as MarketData & Record<string, unknown>;
-        const longOi = oiMarket?.longOi ?? (md.openInterestLong as number) ?? 0;
-        const shortOi = oiMarket?.shortOi ?? (md.openInterestShort as number) ?? 0;
-        const totalOi = longOi + shortOi;
+          const md = marketData as MarketData & Record<string, unknown>;
+          const oiMarket = oiData?.markets?.find(
+            (m) => m.market.toUpperCase() === market.toUpperCase(),
+          );
+          const longOi = oiMarket?.longOi ?? (md.openInterestLong as number) ?? 0;
+          const shortOi = oiMarket?.shortOi ?? (md.openInterestShort as number) ?? 0;
+          const totalOi = longOi + shortOi;
 
-        snapshots.push({
-          market: market.toUpperCase(),
-          price: marketData.price ?? 0,
-          priceChange24h: marketData.priceChange24h ?? 0,
-          volume24h: volumeData?.totalVolumeUsd ?? 0,
-          longOi,
-          shortOi,
-          oiRatio: totalOi > 0 ? longOi / totalOi : 0.5,
-          fundingRate: (md.fundingRate as number) ?? undefined,
-          timestamp: Date.now(),
-        });
-      } catch (error: unknown) {
-        this.log('verbose', `Failed to fetch ${market}: ${error instanceof Error ? error.message : error}`);
+          return {
+            market: market.toUpperCase(),
+            price: marketData.price ?? 0,
+            priceChange24h: marketData.priceChange24h ?? 0,
+            volume24h: volumeData?.totalVolumeUsd ?? 0,
+            longOi,
+            shortOi,
+            oiRatio: totalOi > 0 ? longOi / totalOi : 0.5,
+            fundingRate: (md.fundingRate as number) ?? undefined,
+            timestamp: Date.now(),
+          } as MarketSnapshot;
+        }),
+      );
+
+      for (const result of results) {
+        if (result.status === 'fulfilled' && result.value) {
+          snapshots.push(result.value);
+        }
       }
     }
 

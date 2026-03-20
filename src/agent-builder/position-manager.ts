@@ -69,6 +69,8 @@ export interface PositionManagerConfig {
   maxFlatTicks: number;
   /** Flat threshold — PnL change % considered "flat" (default: 0.5) */
   flatThresholdPct: number;
+  /** Max ticks ANY position can be held before forced close (default: 60) */
+  maxHoldTicks: number;
   /** Maximum risk per trade as % of capital (default: 0.02 = 2%) */
   maxRiskPct: number;
   /** Kelly fraction (default: 0.25 = quarter-Kelly for safety) */
@@ -83,6 +85,7 @@ const DEFAULT_CONFIG: PositionManagerConfig = {
   flatThresholdPct: 0.3,
   maxRiskPct: 0.02,
   kellyFraction: 0.25,
+  maxHoldTicks: 60,      // ~10 min at 10s — force close stale positions
 };
 
 // ─── Position Manager ────────────────────────────────────────────────────────
@@ -279,6 +282,15 @@ export class PositionManager {
     if (pnlPct < -8) {
       managed.action = 'close';
       managed.reason = `Hard stop loss at ${pnlPct.toFixed(1)}%`;
+      return managed;
+    }
+
+    // Max hold time — force close ANY position held too long (prevents slot hogging)
+    const holdMs = Date.now() - managed.entryTime;
+    const holdTicks = Math.floor(holdMs / 10_000); // approximate ticks at ~10s
+    if (holdTicks >= this.config.maxHoldTicks) {
+      managed.action = 'time_decay_exit';
+      managed.reason = `Max hold time ${holdTicks} ticks — freeing position slot (PnL: ${pnlPct.toFixed(1)}%)`;
       return managed;
     }
 
