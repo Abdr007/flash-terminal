@@ -464,6 +464,13 @@ export const COMMAND_REGISTRY: CommandEntry[] = [
     aliases: ['flash doctor', 'health', 'flash health'],
   },
   {
+    name: 'system health',
+    action: null,
+    category: 'Utilities',
+    description: 'Runtime health: event loop, memory, errors',
+    aliases: ['sys health', 'runtime'],
+  },
+  {
     name: 'engine status',
     action: ActionType.EngineStatus,
     category: 'Utilities',

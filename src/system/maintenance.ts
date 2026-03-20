@@ -15,8 +15,9 @@ import { getLogger } from '../utils/logger.js';
 const CACHE_SWEEP_INTERVAL_MS = 5 * 60_000; // 5 minutes
 const MEMORY_CHECK_INTERVAL_MS = 5 * 60_000; // 5 minutes
 const ORACLE_CHECK_INTERVAL_MS = 10_000; // 10 seconds
-const RSS_WARNING_THRESHOLD = 800 * 1024 * 1024; // 800 MB
-const RSS_CRITICAL_THRESHOLD = 1.2 * 1024 * 1024 * 1024; // 1.2 GB
+// Realistic for flash-sdk + Solana: baseline ~500-800MB with all pools loaded
+const RSS_WARNING_THRESHOLD = 1.2 * 1024 * 1024 * 1024;  // 1.2 GB
+const RSS_CRITICAL_THRESHOLD = 1.8 * 1024 * 1024 * 1024;  // 1.8 GB
 
 export interface MaintenanceHandle {
   stop(): void;
@@ -52,14 +53,24 @@ export function startMaintenance(): MaintenanceHandle {
   timers.push(cacheSweepTimer);
 
   // ── Memory Monitoring (every 5 min) ────────────────────────────────────
-  const memoryTimer = setInterval(() => {
+  const memoryTimer = setInterval(async () => {
     try {
       const mem = process.memoryUsage();
       const rssMB = Math.round(mem.rss / (1024 * 1024));
       const heapMB = Math.round(mem.heapUsed / (1024 * 1024));
 
       if (mem.rss > RSS_CRITICAL_THRESHOLD) {
-        logger.warn('MEMORY', `RSS ${rssMB}MB exceeds critical threshold — consider restarting`);
+        logger.warn('MEMORY', `RSS ${rssMB}MB exceeds critical threshold — attempting relief`);
+        // Active memory relief: clear non-critical caches
+        try {
+          const { getStateCache } = await import('../core/state-cache.js');
+          const cache = getStateCache();
+          if (cache) {
+            // State cache will re-populate on next refresh cycle (3s)
+            (cache as unknown as { accountCache: Map<string, unknown> }).accountCache?.clear();
+            logger.info('MEMORY', 'Cleared state-cache account buffers');
+          }
+        } catch { /* non-critical */ }
         // Hint GC if available (Node started with --expose-gc)
         if (typeof global.gc === 'function') {
           global.gc();

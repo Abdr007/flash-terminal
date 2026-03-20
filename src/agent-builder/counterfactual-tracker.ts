@@ -49,6 +49,8 @@ export class CounterfactualTracker {
   private records: CounterfactualRecord[] = [];
   private readonly maxRecords = 200;
   private readonly evaluateAfterTicks = 5; // Check outcome after 5 ticks (~50s)
+  /** Half-life for counterfactual insights in ms (2 hours) */
+  private readonly insightHalfLifeMs = 7_200_000;
 
   /**
    * Record a skipped trade opportunity.
@@ -152,12 +154,24 @@ export class CounterfactualTracker {
   /**
    * Should the system loosen a specific filter?
    * Returns true if that filter is rejecting too many winners.
+   * Applies exponential decay — old insights carry less weight.
    */
   isOverFiltering(reason: string, threshold = 0.6): boolean {
+    const now = Date.now();
     const evaluated = this.records.filter((r) => r.reason === reason && r.wouldHaveWon !== undefined);
-    if (evaluated.length < 5) return false; // Not enough data
-    const missedWins = evaluated.filter((r) => r.wouldHaveWon === true).length;
-    return (missedWins / evaluated.length) > threshold;
+    if (evaluated.length < 10) return false; // Require 10 samples (not 5) to prevent overfitting
+
+    // Weighted count with exponential decay
+    let weightedMissed = 0;
+    let weightedTotal = 0;
+    for (const r of evaluated) {
+      const age = now - r.timestamp;
+      const weight = Math.pow(0.5, age / this.insightHalfLifeMs); // Half-life decay
+      weightedTotal += weight;
+      if (r.wouldHaveWon === true) weightedMissed += weight;
+    }
+
+    return weightedTotal > 0 && (weightedMissed / weightedTotal) > threshold;
   }
 
   reset(): void {

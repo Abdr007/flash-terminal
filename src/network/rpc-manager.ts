@@ -188,6 +188,12 @@ export class RpcManager {
       const latencyMs = Date.now() - start;
       this.latencyHistory.set(endpoint.url, latencyMs);
 
+      // Feed latency to system health monitor
+      try {
+        const { getHealth } = await import('../system/health.js');
+        getHealth()?.recordRpcLatency(latencyMs);
+      } catch { /* health monitor may not be initialized yet */ }
+
       // Get slot for sync check and slot lag detection
       let slot: number | undefined;
       let slotLag: number | undefined;

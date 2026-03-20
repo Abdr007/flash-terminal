@@ -327,6 +327,9 @@ export class AgentSupervisor {
       this.agent.stop();
       this.log('Graceful stop requested');
     }
+    // Release tracking state to prevent leaks between sessions
+    this.hourlyTradeTimestamps = [];
+    this.agent = null;
   }
 
   // ─── SECTION 3 & 5: Monitoring & Evaluation ────────────────────────

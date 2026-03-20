@@ -161,6 +161,11 @@ export class EventMonitor {
       clearInterval(this.interval);
       this.interval = null;
     }
+    // Release all cached state to prevent memory leaks
+    this.prevMarket.clear();
+    this.prevPosition.clear();
+    this.prevProtocol = null;
+    this.knownWhaleKeys.clear();
   }
 
   // ─── Tick Dispatcher ─────────────────────────────────────────────────

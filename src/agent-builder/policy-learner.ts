@@ -55,7 +55,7 @@ const EXPLORATION_RATE = 0.12;       // Start lower — 12% not 15%
 const MIN_EXPLORATION = 0.025;       // Floor at 2.5% (prevents stagnation)
 const EXPLORATION_DECAY = 0.997;     // Slower decay — reach floor in ~200 updates
 const MIN_VISITS_FOR_UPDATE = 2;    // Minimum visits before Q-value updates take effect
-const MIN_VISITS_FOR_TRUST = 5;     // Minimum visits before trusting a policy decision
+const MIN_VISITS_FOR_TRUST = 25;    // Minimum visits before trusting a policy decision
 
 // ─── Policy Learner ──────────────────────────────────────────────────────────
 
@@ -207,34 +207,69 @@ export class PolicyLearner {
    * Compute risk-adjusted reward from a trade outcome.
    * Reward = PnL / risk taken, penalized for drawdown.
    */
+  /**
+   * Compute risk-adjusted reward from a trade outcome.
+   *
+   * V2 formula:
+   *   reward = (PnL / risk) × time_efficiency × consistency_bonus − drawdown_penalty
+   *
+   * Improvements over V1:
+   * - Non-linear drawdown penalty (exponential for large losses)
+   * - Stagnation penalty for trades that go nowhere
+   * - Clean trend capture bonus (high R in few ticks)
+   * - Graduated time efficiency (smoother curve)
+   */
   computeReward(pnl: number, collateral: number, leverage: number, holdingTicks: number): number {
     if (!Number.isFinite(pnl) || collateral <= 0) return 0;
 
     const riskTaken = collateral * leverage;
     const returnOnRisk = riskTaken > 0 ? pnl / riskTaken : 0;
 
-    // Time efficiency: quick wins rewarded, slow trades penalized
-    const timeFactor = holdingTicks <= 5 ? 1.1 : holdingTicks <= 15 ? 1.0 : holdingTicks <= 30 ? 0.9 : 0.75;
+    // Time efficiency: smooth curve instead of stepped
+    // Optimal: 5-12 ticks. Penalty ramps beyond 20.
+    let timeFactor: number;
+    if (holdingTicks <= 3) timeFactor = 1.05;           // Very quick — slight bonus
+    else if (holdingTicks <= 12) timeFactor = 1.1;       // Sweet spot
+    else if (holdingTicks <= 20) timeFactor = 1.0;       // Normal
+    else if (holdingTicks <= 30) timeFactor = 0.85;      // Getting stale
+    else timeFactor = 0.65;                               // Stagnant — heavy penalty
 
-    // Asymmetric: losses hurt more than wins help (loss aversion)
-    const asymmetry = pnl >= 0 ? 1.0 : 1.8;
+    // Asymmetric: losses hurt 2x (prospect theory)
+    const asymmetry = pnl >= 0 ? 1.0 : 2.0;
 
-    // Drawdown penalty: large losses penalized exponentially
-    const ddPenalty = pnl < 0 ? Math.pow(Math.abs(returnOnRisk) + 1, 1.3) : 1.0;
+    // Non-linear drawdown penalty: exponential for large losses
+    let ddPenalty = 1.0;
+    if (pnl < 0) {
+      const absRoR = Math.abs(returnOnRisk);
+      ddPenalty = Math.pow(absRoR + 1, 1.5); // steeper curve for bigger losses
+    }
 
-    // Consistency bonus: reward trades close to average (stable system)
+    // Consistency bonus: reward maintaining a winning streak
     let consistencyBonus = 0;
     if (this.recentRewards.length >= 5 && pnl > 0) {
-      const avgReward = this.recentRewards.reduce((a, b) => a + b, 0) / this.recentRewards.length;
-      if (avgReward > 0 && returnOnRisk > 0) {
-        consistencyBonus = 0.1; // Bonus for continuing a winning streak
+      const recentPositive = this.recentRewards.slice(-5).filter((r) => r > 0).length;
+      if (recentPositive >= 3) {
+        consistencyBonus = 0.1 + (recentPositive - 3) * 0.05; // 0.1 at 3/5, 0.2 at 5/5
       }
     }
 
+    // Clean trend capture bonus: caught a big move quickly
+    if (pnl > 0 && returnOnRisk > 0.03 && holdingTicks <= 10) {
+      consistencyBonus += 0.15;
+    }
+
+    // Stagnation penalty: trade went nowhere (PnL ≈ 0 after many ticks)
+    let stagnationPenalty = 0;
+    if (holdingTicks > 20 && Math.abs(returnOnRisk) < 0.005) {
+      stagnationPenalty = 0.1; // Penalty for wasting a position slot
+    }
+
     const baseReward = returnOnRisk * timeFactor;
-    return pnl >= 0
-      ? baseReward + consistencyBonus
-      : -Math.abs(baseReward) * asymmetry * ddPenalty;
+    const reward = pnl >= 0
+      ? baseReward + consistencyBonus - stagnationPenalty
+      : -Math.abs(baseReward) * asymmetry * ddPenalty - stagnationPenalty;
+
+    return Number.isFinite(reward) ? reward : 0;
   }
 
   // ─── Evaluation Metrics ────────────────────────────────────────────
@@ -382,6 +417,64 @@ export class PolicyLearner {
       }
     }
     return best;
+  }
+
+  // ─── Serialization ──────────────────────────────────────────────────
+
+  serialize(): {
+    entries: Array<{ key: string; entry: { qValues: Record<string, number>; visits: number; avgReward: number } }>;
+    explorationRate: number;
+    learningRate: number;
+    totalUpdates: number;
+    recentRewards: number[];
+    shortWindow: number[];
+    metrics: { totalReward: number; maxDrawdown: number; peakReward: number; winCount: number; lossCount: number };
+  } {
+    const entries: Array<{ key: string; entry: { qValues: Record<string, number>; visits: number; avgReward: number } }> = [];
+    for (const [key, entry] of this.policy) {
+      entries.push({ key, entry: { qValues: { ...entry.qValues }, visits: entry.visits, avgReward: entry.avgReward } });
+    }
+    return {
+      entries,
+      explorationRate: this.currentExploration,
+      learningRate: this.currentLearningRate,
+      totalUpdates: this.totalUpdates,
+      recentRewards: [...this.recentRewards],
+      shortWindow: [...this.shortWindow],
+      metrics: { ...this.metrics },
+    };
+  }
+
+  restore(data: ReturnType<PolicyLearner['serialize']>): void {
+    if (!data || !Array.isArray(data.entries)) return;
+    this.policy.clear();
+    for (const { key, entry } of data.entries) {
+      if (key && entry && entry.qValues && typeof entry.visits === 'number') {
+        this.policy.set(key, {
+          qValues: {
+            trade_aggressive: entry.qValues.trade_aggressive ?? 0,
+            trade_normal: entry.qValues.trade_normal ?? 0,
+            trade_conservative: entry.qValues.trade_conservative ?? 0,
+            skip: entry.qValues.skip ?? 0,
+          },
+          visits: entry.visits,
+          avgReward: entry.avgReward ?? 0,
+        });
+      }
+    }
+    if (Number.isFinite(data.explorationRate)) this.currentExploration = data.explorationRate;
+    if (Number.isFinite(data.learningRate)) this.currentLearningRate = data.learningRate;
+    if (Number.isFinite(data.totalUpdates)) this.totalUpdates = data.totalUpdates;
+    if (Array.isArray(data.recentRewards)) this.recentRewards = data.recentRewards.filter(Number.isFinite).slice(-50);
+    if (Array.isArray(data.shortWindow)) this.shortWindow = data.shortWindow.filter(Number.isFinite).slice(-10);
+    if (data.metrics && typeof data.metrics === 'object') {
+      const m = data.metrics;
+      if (Number.isFinite(m.totalReward)) this.metrics.totalReward = m.totalReward;
+      if (Number.isFinite(m.maxDrawdown)) this.metrics.maxDrawdown = m.maxDrawdown;
+      if (Number.isFinite(m.peakReward)) this.metrics.peakReward = m.peakReward;
+      if (Number.isFinite(m.winCount)) this.metrics.winCount = m.winCount;
+      if (Number.isFinite(m.lossCount)) this.metrics.lossCount = m.lossCount;
+    }
   }
 
   reset(): void {

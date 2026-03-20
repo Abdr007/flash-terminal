@@ -102,6 +102,30 @@ export class AdaptiveWeights {
     return Array.from(this.weights.values());
   }
 
+  // ─── Serialization ──────────────────────────────────────────────────
+
+  serialize(): WeightState[] {
+    return Array.from(this.weights.values()).map(s => ({ ...s }));
+  }
+
+  restore(data: WeightState[]): void {
+    if (!Array.isArray(data)) return;
+    for (const s of data) {
+      const existing = this.weights.get(s.name);
+      if (existing) {
+        existing.weight = Number.isFinite(s.weight) ? s.weight : existing.baseWeight;
+        existing.shortTermAccuracy = Number.isFinite(s.shortTermAccuracy) ? s.shortTermAccuracy : 0.5;
+        existing.longTermAccuracy = Number.isFinite(s.longTermAccuracy) ? s.longTermAccuracy : 0.5;
+        existing.accuracy = Number.isFinite(s.accuracy) ? s.accuracy : 0.5;
+        existing.shortTermPredictions = Number.isFinite(s.shortTermPredictions) ? s.shortTermPredictions : 0;
+        existing.shortTermCorrect = Number.isFinite(s.shortTermCorrect) ? s.shortTermCorrect : 0;
+        existing.longTermPredictions = Number.isFinite(s.longTermPredictions) ? s.longTermPredictions : 0;
+        existing.longTermCorrect = Number.isFinite(s.longTermCorrect) ? s.longTermCorrect : 0;
+      }
+    }
+    this.normalize();
+  }
+
   reset(): void {
     for (const state of this.weights.values()) {
       state.weight = state.baseWeight;

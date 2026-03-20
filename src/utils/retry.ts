@@ -12,6 +12,46 @@ const DEFAULT_RETRY: RetryOptions = {
   maxDelayMs: 5000,
 };
 
+// ─── Global Retry Budget ─────────────────────────────────────────────────────
+//
+// Prevents retry storms during outages. All retry callers share a single budget.
+// When the budget is exhausted, retries fail immediately (fail-fast).
+// Budget refills over time.
+
+const BUDGET_WINDOW_MS = 60_000;  // 1-minute sliding window
+const MAX_RETRIES_PER_WINDOW = 50; // Max retries across all modules per window
+const retryTimestamps: number[] = [];
+
+/**
+ * Check if a retry is allowed within the global budget.
+ * Returns true if the retry should proceed, false if budget is exhausted.
+ */
+function consumeRetryBudget(): boolean {
+  const now = Date.now();
+  // Evict expired entries
+  while (retryTimestamps.length > 0 && retryTimestamps[0] < now - BUDGET_WINDOW_MS) {
+    retryTimestamps.shift();
+  }
+  if (retryTimestamps.length >= MAX_RETRIES_PER_WINDOW) {
+    return false; // Budget exhausted — fail fast
+  }
+  retryTimestamps.push(now);
+  return true;
+}
+
+/** Get current retry budget usage (for diagnostics). */
+export function getRetryBudgetUsage(): { used: number; max: number; exhausted: boolean } {
+  const now = Date.now();
+  while (retryTimestamps.length > 0 && retryTimestamps[0] < now - BUDGET_WINDOW_MS) {
+    retryTimestamps.shift();
+  }
+  return {
+    used: retryTimestamps.length,
+    max: MAX_RETRIES_PER_WINDOW,
+    exhausted: retryTimestamps.length >= MAX_RETRIES_PER_WINDOW,
+  };
+}
+
 /**
  * Extract a rate-limit delay from a 429 error, if present.
  * Checks for Retry-After header value embedded in the error message,
@@ -55,6 +95,12 @@ export async function withRetry<T>(fn: () => Promise<T>, label: string, opts: Pa
     } catch (err: unknown) {
       lastError = err instanceof Error ? err : new Error(String(err));
       if (attempt < maxAttempts) {
+        // Check global retry budget — fail fast during outages
+        if (!consumeRetryBudget()) {
+          logger.warn('RETRY', `${label} retry budget exhausted (${MAX_RETRIES_PER_WINDOW} retries in ${BUDGET_WINDOW_MS / 1000}s) — failing fast`);
+          break;
+        }
+
         // Check for HTTP 429 rate limiting
         const rateLimitDelay = extractRateLimitDelay(lastError);
         let delay: number;
@@ -79,6 +125,13 @@ export async function withRetry<T>(fn: () => Promise<T>, label: string, opts: Pa
             },
           );
         }
+
+        // ADAPTIVE: multiply delay when system is degraded
+        try {
+          const { getHealth } = await import('../system/health.js');
+          const mult = getHealth()?.getDegradationParams().retryDelayMultiplier ?? 1.0;
+          if (mult > 1.0) delay = Math.min(delay * mult, maxDelayMs * 4);
+        } catch { /* health not initialized */ }
 
         await new Promise((resolve) => setTimeout(resolve, delay));
       }

@@ -96,16 +96,17 @@ export class TradingAgent {
       }
 
       try {
-        await this.tick();
+        // Tick timeout — prevents infinite hang if SDK/RPC call stalls
+        await Promise.race([
+          this.tick(),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error('Tick timeout exceeded')), 60_000),
+          ),
+        ]);
       } catch (error: unknown) {
         const err = error instanceof Error ? error : new Error(String(error));
         this.callbacks.onError?.(err, 'tick');
         this.log('error', `Tick error: ${err.message}`);
-
-        // Count consecutive tick errors — safety stop after 5
-        if (this.state.iteration > 0) {
-          // Don't safety-stop on first tick
-        }
       }
 
       if (this.running && !this.stopRequested) {

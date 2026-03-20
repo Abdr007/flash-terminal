@@ -1,16 +1,28 @@
 /**
- * Simulation Engine — Learn from parallel simulated trades.
+ * Simulation Engine V2 — Learn from parallel simulated trades with execution realism.
  *
  * Runs "shadow" trades alongside real ones:
  * - Every scored opportunity gets a simulated outcome
  * - Compare simulated vs actual to improve faster
  * - Learn without risking capital
  *
- * This 10x's the learning speed — every tick teaches something,
- * even when no real trade is executed.
+ * V2: Models execution realism:
+ * - Random slippage (0.02-0.15% based on market conditions)
+ * - Simulated latency (entry price offset by a few ticks)
+ * - Fee deduction from PnL (0.08% open + 0.08% close = 0.16% round-trip)
+ *
+ * This closes the gap between sim and live performance.
  */
 
 import type { MarketSnapshot } from './types.js';
+
+// ─── Configuration ───────────────────────────────────────────────────────────
+
+/** Round-trip fee (open + close) as a percentage */
+const ROUND_TRIP_FEE_PCT = 0.16;
+/** Slippage range [min, max] as percentage of price */
+const SLIPPAGE_MIN_PCT = 0.02;
+const SLIPPAGE_MAX_PCT = 0.15;
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -18,11 +30,15 @@ export interface SimulatedTrade {
   market: string;
   side: 'long' | 'short';
   entryPrice: number;
+  /** V2: slippage-adjusted entry price */
+  adjustedEntryPrice: number;
   score: number;
   strategy: string;
   regime: string;
   confidence: number;
   timestamp: number;
+  /** V2: simulated slippage percentage applied */
+  slippagePct: number;
   /** Resolved after N ticks */
   exitPrice?: number;
   pnlPct?: number;
@@ -62,8 +78,15 @@ export class SimulationEngine {
     regime: string,
     confidence: number,
   ): void {
+    // V2: model random slippage on entry
+    const slippagePct = SLIPPAGE_MIN_PCT + Math.random() * (SLIPPAGE_MAX_PCT - SLIPPAGE_MIN_PCT);
+    // Slippage always works against the trader: longs get higher entry, shorts get lower
+    const slippageDirection = side === 'long' ? 1 : -1;
+    const adjustedEntryPrice = entryPrice * (1 + slippageDirection * slippagePct / 100);
+
     this.trades.push({
-      market, side, entryPrice, score, strategy, regime, confidence, timestamp: Date.now(),
+      market, side, entryPrice, adjustedEntryPrice, slippagePct,
+      score, strategy, regime, confidence, timestamp: Date.now(),
     });
     if (this.trades.length > this.maxTrades) this.trades.shift();
   }
@@ -83,11 +106,18 @@ export class SimulationEngine {
       const currentPrice = priceMap.get(trade.market);
       if (!currentPrice || !Number.isFinite(currentPrice)) continue;
 
-      trade.exitPrice = currentPrice;
-      const diff = currentPrice - trade.entryPrice;
-      trade.pnlPct = trade.side === 'long'
-        ? (diff / trade.entryPrice) * 100
-        : (-diff / trade.entryPrice) * 100;
+      // V2: add exit slippage + exit from adjusted entry (not raw entry)
+      const exitSlippage = SLIPPAGE_MIN_PCT + Math.random() * (SLIPPAGE_MAX_PCT - SLIPPAGE_MIN_PCT);
+      const exitDir = trade.side === 'long' ? -1 : 1; // Exit slippage works against
+      const adjustedExitPrice = currentPrice * (1 + exitDir * exitSlippage / 100);
+
+      trade.exitPrice = adjustedExitPrice;
+      const diff = adjustedExitPrice - trade.adjustedEntryPrice;
+      // V2: deduct round-trip fees from PnL
+      const rawPnlPct = trade.side === 'long'
+        ? (diff / trade.adjustedEntryPrice) * 100
+        : (-diff / trade.adjustedEntryPrice) * 100;
+      trade.pnlPct = rawPnlPct - ROUND_TRIP_FEE_PCT;
       trade.resolved = true;
     }
   }

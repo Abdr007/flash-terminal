@@ -13,6 +13,8 @@ import type { JournalEntry, JournalStats, TradeDecision, DecisionAction } from '
 export class TradeJournal {
   private entries: JournalEntry[] = [];
   private nextId = 1;
+  /** Maximum entries retained in memory — prevents unbounded growth in long sessions */
+  private static readonly MAX_ENTRIES = 2000;
 
   // ─── Recording ─────────────────────────────────────────────────────
 
@@ -53,6 +55,12 @@ export class TradeJournal {
     }
 
     this.entries.push(entry);
+
+    // Evict oldest entries when cap exceeded — keeps memory bounded in long sessions
+    if (this.entries.length > TradeJournal.MAX_ENTRIES) {
+      this.entries = this.entries.slice(-TradeJournal.MAX_ENTRIES);
+    }
+
     return entry;
   }
 

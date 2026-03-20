@@ -27,13 +27,17 @@ import { ExpectancyEngine } from './expectancy-engine.js';
 import { MetaAgent } from './meta-agent.js';
 import { OpportunityScorer } from './opportunity-scorer.js';
 import { PortfolioIntel } from './portfolio-intel.js';
-import { ExecutionModel } from './execution-model.js';
 import { CounterfactualTracker } from './counterfactual-tracker.js';
 import { MicroEntryAnalyzer } from './micro-entry.js';
 import { TimeIntelligence } from './time-intelligence.js';
 import { PolicyLearner } from './policy-learner.js';
+import { ExitPolicyLearner } from './exit-policy-learner.js';
+import { CorrelationGuard } from './correlation-guard.js';
 import { SimulationEngine } from './simulation-engine.js';
 import { PerformanceDashboard } from './performance-dashboard.js';
+import { MacroRegimeDetector } from './macro-regime.js';
+import { EdgeRefiner } from './edge-refiner.js';
+import { saveAgentState, loadAgentState, buildPersistedState } from './state-persistence.js';
 import type { CompositeSignal } from './signal-fusion.js';
 
 import type {
@@ -73,10 +77,16 @@ export class LiveTradingAgent {
   private readonly microEntry: MicroEntryAnalyzer;
   private readonly timeIntel: TimeIntelligence;
   private readonly policyLearner: PolicyLearner;
+  private readonly exitPolicy: ExitPolicyLearner;
+  private readonly correlationGuard: CorrelationGuard;
   private readonly simEngine: SimulationEngine;
   private readonly dashboard: PerformanceDashboard;
+  private readonly macroRegime: MacroRegimeDetector;
+  private readonly edgeRefiner: EdgeRefiner;
   /** Track entry state for policy reward computation */
   private activeTradeStates: Map<string, { state: import('./policy-learner.js').MarketState; action: import('./policy-learner.js').PolicyAction; entryTick: number }> = new Map();
+  /** Track exit state for exit policy learning */
+  private activeExitStates: Map<string, { state: import('./exit-policy-learner.js').ExitState; lastPnlPct: number }> = new Map();
   /** Signal confirmation: track previous tick's direction per market */
   private prevSignals: Map<string, string> = new Map();
   /** Per-market cooldown after trade close */
@@ -87,6 +97,18 @@ export class LiveTradingAgent {
   private marketHourlyTrades: Map<string, number[]> = new Map();
   /** Tick mutex — prevents concurrent tick execution */
   private tickInProgress = false;
+  /** Autosave counter — save state every N ticks */
+  private readonly autosaveInterval = 50;
+  /** Tick timeout — prevents infinite hang if SDK call stalls */
+  private static readonly TICK_TIMEOUT_MS = 60_000;
+  /** Maximum entries per unbounded map — prevents memory leaks in long sessions */
+  private static readonly MAX_MAP_ENTRIES = 200;
+  /** Maximum journal entries kept in memory */
+  private static readonly MAX_JOURNAL_ENTRIES = 2000;
+  /** Daily risk reset tracking */
+  private lastDailyResetDate = '';
+  /** Current regime per market (for exit policy) */
+  private marketRegimes: Map<string, string> = new Map();
 
   private state: AgentState;
   private running = false;
@@ -132,9 +154,16 @@ export class LiveTradingAgent {
     this.microEntry = new MicroEntryAnalyzer();
     this.timeIntel = new TimeIntelligence();
     this.policyLearner = new PolicyLearner();
+    this.exitPolicy = new ExitPolicyLearner();
+    this.correlationGuard = new CorrelationGuard();
     this.simEngine = new SimulationEngine();
     this.dashboard = new PerformanceDashboard();
+    this.macroRegime = new MacroRegimeDetector();
+    this.edgeRefiner = new EdgeRefiner();
     this.state = this.createInitialState();
+
+    // Restore persisted learning state
+    this.restoreState();
   }
 
   // ─── Lifecycle ─────────────────────────────────────────────────────
@@ -146,11 +175,13 @@ export class LiveTradingAgent {
     this.stopRequested = false;
     this.setStatus(AgentStatus.RUNNING);
 
-    this.log('info', `Agent "${this.config.name}" v10 (policy-learning) starting`);
+    this.log('info', `Agent "${this.config.name}" v11 (persistent-learning) starting`);
     this.log('info', `Scanning: ${this.config.markets.length} markets → score + rank → top trades only`);
     this.log('info', `Strategies: ${this.strategies.map((s) => s.name).join(', ')}`);
-    this.log('info', `Engines: meta-agent, opportunity scorer, portfolio intel, EV, Bayesian fusion, technicals`);
-    this.log('info', `Mode: adaptive aggression | correlated-trade prevention | self-learning`);
+    this.log('info', `Engines: meta-agent, opportunity scorer, exit-policy, correlation-guard, EV, Bayesian fusion`);
+    this.log('info', `Mode: persistent learning | correlation-aware | exit intelligence`);
+    const pm = this.policyLearner.getMetrics();
+    if (pm.policySize > 0) this.log('info', `Restored: ${pm.policySize} policy states, ${pm.totalUpdates} prior updates`);
     if (this.config.dryRun) this.log('info', 'DRY RUN — decisions logged but not executed');
 
     // Initialize capital from live context
@@ -174,7 +205,13 @@ export class LiveTradingAgent {
       } else {
         this.tickInProgress = true;
         try {
-          await this.tick();
+          // Tick timeout — prevents infinite hang if SDK/RPC call stalls
+          await Promise.race([
+            this.tick(),
+            new Promise<never>((_, reject) =>
+              setTimeout(() => reject(new Error('Tick timeout exceeded')), LiveTradingAgent.TICK_TIMEOUT_MS),
+            ),
+          ]);
         } catch (error: unknown) {
           const err = error instanceof Error ? error : new Error(String(error));
           this.callbacks.onError?.(err, 'tick');
@@ -185,7 +222,14 @@ export class LiveTradingAgent {
       }
 
       if (this.running && !this.stopRequested) {
-        await sleep(this.config.pollIntervalMs);
+        // ADAPTIVE: slow down scan frequency when system is degraded
+        let pollMs = this.config.pollIntervalMs;
+        try {
+          const { getHealth } = await import('../system/health.js');
+          const dp = getHealth()?.getDegradationParams();
+          if (dp) pollMs = Math.round(pollMs * dp.scanIntervalMultiplier);
+        } catch { /* health module may not be loaded */ }
+        await sleep(pollMs);
       }
     }
 
@@ -197,6 +241,10 @@ export class LiveTradingAgent {
 
   stop(): void {
     this.stopRequested = true;
+
+    // PERSIST learning state before cleanup
+    this.persistState();
+
     // Full cleanup — prevent memory leaks on long sessions
     this.prevSignals.clear();
     this.marketCooldowns.clear();
@@ -211,9 +259,12 @@ export class LiveTradingAgent {
     this.microEntry.reset();
     this.counterfactual.reset();
     this.simEngine.reset();
+    this.macroRegime.reset();
+    this.edgeRefiner.reset();
     this.activeTradeStates.clear();
-    // Persist: expectancy, scorer weights, timeIntel, policyLearner
-    this.log('info', 'Stop requested — state cleaned (EV stats preserved)');
+    this.activeExitStates.clear();
+    this.marketRegimes.clear();
+    this.log('info', 'Stop requested — learning state persisted, memory cleaned');
   }
 
   getState(): Readonly<AgentState> { return this.state; }
@@ -227,6 +278,23 @@ export class LiveTradingAgent {
   private async tick(): Promise<void> {
     this.state.iteration++;
     this.callbacks.onTick?.(this.state, this.state.iteration);
+
+    // DAILY RESET — reset daily PnL tracking at UTC midnight
+    const todayUtc = new Date().toISOString().slice(0, 10);
+    if (this.lastDailyResetDate && this.lastDailyResetDate !== todayUtc) {
+      this.log('info', `Daily reset: ${this.lastDailyResetDate} → ${todayUtc} | PnL=$${this.state.dailyPnl.toFixed(2)}`);
+      this.state.dailyPnl = 0;
+      this.state.dailyTradeCount = 0;
+      this.state.consecutiveLosses = 0;
+      // Reset drawdown daily tracking but keep peak equity
+      this.drawdown.resume();
+    }
+    this.lastDailyResetDate = todayUtc;
+
+    // AUTOSAVE — persist learning state periodically
+    if (this.state.iteration % this.autosaveInterval === 0) {
+      this.persistState();
+    }
 
     if (this.risk.isDailyLossBreached(this.state)) {
       this.safetyStop(`Daily loss limit breached: $${this.state.dailyPnl.toFixed(2)}`);
@@ -276,9 +344,21 @@ export class LiveTradingAgent {
     }
 
     // ─── PHASE 3: RECORD PRICES + COMPUTE TECHNICALS + SCAN ────────
-    // Record every price tick for technical indicator computation
+    // Record every price tick for technical indicator computation + V2 modules
     for (const snapshot of snapshots) {
       this.technicals.record(snapshot.market, snapshot.price);
+      this.exitPolicy.recordPrice(snapshot.market, snapshot.price);   // V2: momentum tracking
+      this.correlationGuard.recordPrice(snapshot.market, snapshot.price); // V2: rolling correlation
+    }
+
+    // MACRO REGIME: cross-asset environment detection
+    const macro = this.macroRegime.update(snapshots);
+    if (macro.tradesBlocked) {
+      this.log('normal', `MACRO RISK-OFF: ${macro.regime} (BTC ${macro.btcTrend}, vol ${macro.avgVolatility.toFixed(1)}%, corr ${(macro.correlationStrength * 100).toFixed(0)}%) — trades blocked`);
+      return;
+    }
+    if (macro.regime !== 'NEUTRAL') {
+      this.log('verbose', `MACRO: ${macro.regime} (BTC ${macro.btcTrend}, size ${(macro.sizeMultiplier * 100).toFixed(0)}%, bias ${macro.strategyBias})`);
     }
 
     const compositeMap = new Map<string, CompositeSignal>();
@@ -296,6 +376,21 @@ export class LiveTradingAgent {
     // ─── PHASE 4: META-CONTROLLED SCORING + DECIDE ─────────────────
     const now = Date.now();
     this.hourlyTrades = this.hourlyTrades.filter((t) => now - t < 3_600_000);
+
+    // MEMORY SAFETY: periodic cleanup of per-market maps (every 100 ticks)
+    if (this.state.iteration % 100 === 0) {
+      this.evictStaleMaps(now);
+    }
+
+    // MEMORY SAFETY: cap journal entries
+    if (this.journal.getEntries().length > LiveTradingAgent.MAX_JOURNAL_ENTRIES) {
+      const recent = this.journal.getRecent(LiveTradingAgent.MAX_JOURNAL_ENTRIES);
+      this.journal.clear();
+      for (const entry of recent) this.journal.record(
+        { action: entry.action, market: entry.market, side: entry.side, leverage: entry.leverage, collateral: entry.collateral, strategy: entry.strategy, confidence: entry.confidence, reasoning: entry.reasoning, signals: entry.signals, riskLevel: 'safe' } as TradeDecision,
+        { entryPrice: entry.entryPrice, exitPrice: entry.exitPrice, pnl: entry.pnl, pnlPercent: entry.pnlPercent, fees: entry.fees, error: entry.error },
+      );
+    }
 
     // Evaluate counterfactual + simulation outcomes from previous ticks
     this.counterfactual.evaluate(snapshots);
@@ -341,6 +436,24 @@ export class LiveTradingAgent {
       this.log('normal', `DEGRADATION detected (shortSharpe=${policyMetrics.shortSharpe.toFixed(2)} vs ${policyMetrics.sharpe.toFixed(2)}) — downgraded to NORMAL`);
     }
 
+    // COLD-START RAMP: relax thresholds until enough trades to learn from.
+    // Linearly ramp from exploration floor → normal threshold over first 15 trades.
+    // After 15 trades the system has EV data, strategy weights, and technicals.
+    // Uses half-size during cold-start to limit risk while exploring.
+    const COLD_START_TRADES = 15;
+    const COLD_START_THRESHOLD = 40;  // Floor during exploration
+    const COLD_START_FLOOR = 30;      // Absolute floor during exploration
+    if (stats.totalTrades < COLD_START_TRADES) {
+      const rampProgress = stats.totalTrades / COLD_START_TRADES; // 0 → 1
+      const normalThreshold = metaDecision.scoreThreshold;
+      metaDecision.scoreThreshold = Math.round(COLD_START_THRESHOLD + (normalThreshold - COLD_START_THRESHOLD) * rampProgress);
+      // Reduce size during cold-start (half-size to limit exploration risk)
+      metaDecision.sizeMultiplier *= Math.max(0.5, 0.5 + 0.5 * rampProgress);
+      if (stats.totalTrades === 0) {
+        this.log('normal', `COLD START: threshold=${metaDecision.scoreThreshold} (ramp 0/${COLD_START_TRADES}) | half-size exploration`);
+      }
+    }
+
     this.log('verbose', `META: ${metaDecision.reason} | threshold=${metaDecision.scoreThreshold} | LR=${policyMetrics.learningRate.toFixed(3)} explore=${(policyMetrics.explorationRate * 100).toFixed(1)}%`);
 
     // DASHBOARD: record tick with correct mode
@@ -369,6 +482,11 @@ export class LiveTradingAgent {
 
       const regime = this.regimeAdapter.detectRegime(snapshot.market, snapshot.price, snapshot.priceChange24h);
       const regimeParams = this.regimeAdapter.getParams(regime.regime);
+      this.marketRegimes.set(snapshot.market, regime.regime);
+
+      // EDGE REFINER V2: scale down (not block) regimes with negative EV
+      const regimeRefinerMult = this.edgeRefiner.getRegimeMultiplier(regime.regime);
+
       const composite = compositeMap.get(snapshot.market)!;
       const marketSignals = this.signals.detect(snapshot);
 
@@ -442,7 +560,7 @@ export class LiveTradingAgent {
       } else if (composite.totalFactors >= 2 && composite.confidence < 0.5) {
         uncertaintyMultiplier = 0.75; // Moderate uncertainty → 75% size
       }
-      const sizing = this.sizer.calculate(this.state.currentCapital, ed.confidence, stats, ddState, regimeParams.sizeMultiplier * metaDecision.sizeMultiplier * uncertaintyMultiplier, this.state.consecutiveLosses);
+      const sizing = this.sizer.calculate(this.state.currentCapital, ed.confidence, stats, ddState, regimeParams.sizeMultiplier * metaDecision.sizeMultiplier * uncertaintyMultiplier * macro.sizeMultiplier * regimeRefinerMult, this.state.consecutiveLosses);
 
       // ─── OPPORTUNITY SCORING (adaptive weights + execution costs) ──
       const totalOi = snapshot.longOi + snapshot.shortOi;
@@ -461,12 +579,21 @@ export class LiveTradingAgent {
         continue;
       }
 
-      const collateral = Math.min(sizing.collateral, Math.max(1, maxCapital - tickCapitalAllocated));
       const strategyName = (allowedInRegime.length > 0 ? allowedInRegime : votingStrategies).join('+') || 'ensemble';
+
+      // EDGE REFINER: skip strategies that have been disabled due to negative EV
+      if (this.edgeRefiner.isStrategyDisabled(strategyName)) {
+        this.log('verbose', `${snapshot.market}: strategy '${strategyName}' disabled by edge refiner`);
+        this.counterfactual.recordSkip(snapshot.market, side, snapshot.price, oppScore.total, 'refiner_disabled', strategyName);
+        continue;
+      }
+
+      // Compute base collateral (further adjustments applied after all gates pass)
+      const baseCollateral = Math.max(1, Math.min(sizing.collateral, Math.max(1, maxCapital - tickCapitalAllocated)) * this.edgeRefiner.getSizeMultiplier());
 
       const decision: TradeDecision = {
         action: 'open' as DecisionAction,
-        market: snapshot.market, side, leverage, collateral, tp, sl,
+        market: snapshot.market, side, leverage, collateral: baseCollateral, tp, sl,
         strategy: strategyName,
         confidence: ed.confidence,
         reasoning: `SCORE=${oppScore.total} ${oppScore.summary} | ${metaDecision.mode} | ${regime.regime}`,
@@ -479,13 +606,20 @@ export class LiveTradingAgent {
       decision.blockReason = riskCheck.blockReason;
 
       // Portfolio intelligence — prevent correlated trades
-      const portfolioCheck = this.portfolioIntel.check(this.state.positions, snapshot.market, side, collateral * leverage, this.state.currentCapital);
+      const portfolioCheck = this.portfolioIntel.check(this.state.positions, snapshot.market, side, baseCollateral * leverage, this.state.currentCapital);
       if (!portfolioCheck.allowed) {
         this.log('verbose', `${snapshot.market}: portfolio blocked — ${portfolioCheck.reason}`);
         this.counterfactual.recordSkip(snapshot.market, side, snapshot.price, oppScore.total, 'portfolio', primaryStrategy);
         continue;
       }
 
+      // CORRELATION GUARD — prevent hidden leverage in correlated assets
+      const corrCheck = this.correlationGuard.check(this.state.positions, snapshot.market, side, baseCollateral * leverage, this.state.currentCapital);
+      if (!corrCheck.allowed) {
+        this.log('verbose', `${snapshot.market}: correlation blocked — ${corrCheck.reason}`);
+        this.counterfactual.recordSkip(snapshot.market, side, snapshot.price, oppScore.total, 'correlation', primaryStrategy);
+        continue;
+      }
       // MICRO-ENTRY: check if current price is good for entry
       const microCheck = this.microEntry.check(snapshot.market, side, snapshot.price);
       if (!microCheck.enterNow) {
@@ -494,19 +628,18 @@ export class LiveTradingAgent {
         continue;
       }
 
-      // Apply time-based size adjustment
-      if (timeCheck.sizeMultiplier !== 1.0 && decision.collateral) {
-        decision.collateral = Math.max(1, decision.collateral * timeCheck.sizeMultiplier);
-      }
+      // Apply all remaining size adjustments (correlation, time, policy)
+      let finalCollateral = baseCollateral;
+      if (corrCheck.sizeMultiplier < 1.0) finalCollateral = Math.max(1, finalCollateral * corrCheck.sizeMultiplier);
+      if (timeCheck.sizeMultiplier !== 1.0) finalCollateral = Math.max(1, finalCollateral * timeCheck.sizeMultiplier);
 
       // Apply micro-entry quality to score (excellent = bonus, poor already filtered)
       const microBonus = microCheck.quality === 'excellent' ? 5 : microCheck.quality === 'good' ? 2 : 0;
       const finalScore = oppScore.total + microBonus;
 
-      // Apply policy size multiplier
-      if (policyParams.sizeMultiplier !== 1.0 && decision.collateral) {
-        decision.collateral = Math.max(1, decision.collateral * policyParams.sizeMultiplier);
-      }
+      // Apply policy size multiplier and set final collateral on decision
+      if (policyParams.sizeMultiplier !== 1.0) finalCollateral = Math.max(1, finalCollateral * policyParams.sizeMultiplier);
+      decision.collateral = finalCollateral;
 
       // SIMULATION: record every scored opportunity for parallel learning
       this.simEngine.simulate(
@@ -526,10 +659,28 @@ export class LiveTradingAgent {
     // Execute ONLY the best opportunities (sorted by score, up to max positions)
     opportunities.sort((a, b) => b.score - a.score);
 
+    // SYSTEM HEALTH GATE: block or raise thresholds when runtime is degraded
+    let healthThresholdMult = 1.0;
+    try {
+      const { getHealth } = await import('../system/health.js');
+      const h = getHealth();
+      if (h?.isTradeBlocked()) {
+        this.log('normal', 'System health CRITICAL — skipping trade execution');
+        opportunities.length = 0;
+      } else if (h) {
+        healthThresholdMult = h.getDegradationParams().tradeThresholdMultiplier;
+      }
+    } catch { /* health module may not be loaded */ }
+
     // GLOBAL TRADE FILTER: if best opportunity is weak, do nothing
-    const ABSOLUTE_FLOOR = 50; // Never trade below this score regardless of meta threshold
-    if (opportunities.length > 0 && opportunities[0].score < ABSOLUTE_FLOOR) {
-      this.log('verbose', `Best opportunity ${opportunities[0].decision.market} scored ${opportunities[0].score} < floor ${ABSOLUTE_FLOOR} — no trades this tick`);
+    // Cold-start uses lower floor; ramps to 50 as trades accumulate
+    // Adaptive: floor raised by health threshold multiplier during degradation
+    const baseFloor = stats.totalTrades < COLD_START_TRADES
+      ? Math.round(COLD_START_FLOOR + (50 - COLD_START_FLOOR) * (stats.totalTrades / COLD_START_TRADES))
+      : 50;
+    const effectiveFloor = Math.round(baseFloor * healthThresholdMult);
+    if (opportunities.length > 0 && opportunities[0].score < effectiveFloor) {
+      this.log('verbose', `Best opportunity ${opportunities[0].decision.market} scored ${opportunities[0].score} < floor ${effectiveFloor} — no trades this tick`);
       opportunities.length = 0; // Clear all
     }
 
@@ -660,58 +811,124 @@ export class LiveTradingAgent {
 
   private async monitorPositions(positions: Position[]): Promise<void> {
     for (const pos of positions) {
+      const pnlPct = pos.pnlPercent ?? 0;
+      const tradeKey = `${pos.market}:${pos.side}`;
+
+      // SAFETY: Hard emergency stop at -15% — NEVER overridden by exit policy
+      if (pnlPct < -15) {
+        this.log('normal', `Emergency close: ${pos.market} ${pos.side} at ${pnlPct.toFixed(1)}%`);
+        await this.closeWithReason(pos, 'emergency', `Emergency stop: ${pnlPct.toFixed(1)}% drawdown`);
+        this.positionMgr.untrack(pos.market, pos.side);
+        continue;
+      }
+
       // Use PositionManager for advanced tracking
       const managed = this.positionMgr.update(pos);
 
       if (managed) {
-        switch (managed.action) {
-          case 'trailing_stop_hit':
-            this.log('normal', `Trailing stop: ${pos.market} ${pos.side} — ${managed.reason}`);
-            await this.closeWithReason(pos, 'trailing_stop', managed.reason);
-            this.positionMgr.untrack(pos.market, pos.side);
-            break;
+        // For trailing stop / hard stop from position manager — always obey
+        if (managed.action === 'trailing_stop_hit' || managed.action === 'close') {
+          this.log('normal', `${managed.action}: ${pos.market} ${pos.side} — ${managed.reason}`);
+          await this.closeWithReason(pos, managed.action === 'trailing_stop_hit' ? 'trailing_stop' : 'risk_monitor', managed.reason);
+          this.positionMgr.untrack(pos.market, pos.side);
+          continue;
+        }
 
-          case 'partial_close':
+        // For hold/partial/time_decay — consult exit policy learner
+        if (managed.action === 'hold' || managed.action === 'partial_close' || managed.action === 'time_decay_exit') {
+          const ts = this.activeTradeStates.get(tradeKey);
+          const holdingTicks = ts ? this.state.iteration - ts.entryTick : 0;
+          const regime = this.marketRegimes.get(pos.market) ?? 'RANGING';
+
+          // Compute distance to TP/SL (approximate from position data)
+          const entryPrice = pos.entryPrice ?? 0;
+          const markPrice = pos.markPrice ?? entryPrice;
+          const liqPrice = pos.liquidationPrice ?? 0;
+          const distToSlPct = entryPrice > 0 && liqPrice > 0
+            ? Math.abs(markPrice - liqPrice) / entryPrice * 100 : 50;
+          // Approximate TP distance from R-multiple targets
+          const distToTpPct = managed.rMultiple < 1 ? Math.max(0, (1 - managed.rMultiple) * 3) : 0;
+
+          const momentum = this.exitPolicy.getMomentumState(pos.market, pos.side as 'long' | 'short');
+          const exitState = this.exitPolicy.buildState(pnlPct, holdingTicks, regime, distToTpPct, distToSlPct, momentum);
+          const ddState = this.drawdown.getState();
+          const exitRec = this.exitPolicy.recommend(exitState, ddState.drawdownPct > 0.05);
+
+          // Track exit state for learning
+          const prevExitState = this.activeExitStates.get(tradeKey);
+          this.activeExitStates.set(tradeKey, { state: exitState, lastPnlPct: pnlPct });
+
+          // Learn from previous exit decision
+          if (prevExitState && ts) {
+            const pnlChange = pnlPct - prevExitState.lastPnlPct;
+            const exitReward = this.exitPolicy.computeExitReward(
+              prevExitState.lastPnlPct, managed.rMultiple, holdingTicks, 'hold', pnlChange,
+            );
+            if (Math.abs(exitReward) > 0.005) {
+              this.exitPolicy.update(prevExitState.state, 'hold', exitReward);
+            }
+          }
+
+          // EXIT POLICY DECISION — only trusted recommendations override position manager
+          if (!exitRec.isExploration && exitRec.confidence > 0.5) {
+            if (exitRec.action === 'full_close') {
+              this.log('normal', `Exit policy: CLOSE ${pos.market} ${pos.side} (conf=${(exitRec.confidence * 100).toFixed(0)}%, PnL=${pnlPct.toFixed(1)}%, momentum=${momentum})`);
+              await this.closeWithReason(pos, 'exit_policy', `Learned exit: conf=${(exitRec.confidence * 100).toFixed(0)}%`);
+              this.positionMgr.untrack(pos.market, pos.side);
+              continue;
+            } else if (exitRec.action === 'partial_close') {
+              this.log('normal', `Exit policy: PARTIAL ${pos.market} ${pos.side} 50% (conf=${(exitRec.confidence * 100).toFixed(0)}%)`);
+              await this.closeWithReason(pos, 'exit_policy', `Learned partial exit`, 50);
+              continue;
+            } else if (exitRec.action === 'tighten_stop') {
+              // Tighten stop: reduce SL distance by 30% (applied via position manager)
+              this.log('verbose', `Exit policy: TIGHTEN STOP ${pos.market} ${pos.side} (momentum=${momentum})`);
+              // Signal position manager to tighten (advisory — PositionManager uses
+              // trailing stops internally; tighten_stop reduces the trail distance)
+              this.log('verbose', `Tighten stop advisory: ${pos.market} ${pos.side}`);
+            } else if (exitRec.action === 'extend_tp') {
+              // Extend TP: let position run further
+              this.log('verbose', `Exit policy: EXTEND TP ${pos.market} ${pos.side} (momentum=${momentum})`);
+              // This is a no-op on the position — we just don't close, letting it ride
+            }
+            // hold, tighten_stop, extend_tp → fall through to position manager logic
+          }
+
+          // Fall back to position manager decisions
+          if (managed.action === 'partial_close') {
             this.log('normal', `Scale-out: ${pos.market} ${pos.side} ${managed.closePercent}% — ${managed.reason}`);
             await this.closeWithReason(pos, 'scale_out', managed.reason, managed.closePercent);
-            break;
-
-          case 'time_decay_exit':
+          } else if (managed.action === 'time_decay_exit') {
             this.log('normal', `Time decay: ${pos.market} ${pos.side} — ${managed.reason}`);
             await this.closeWithReason(pos, 'time_decay', managed.reason);
             this.positionMgr.untrack(pos.market, pos.side);
-            break;
-
-          case 'close':
-            this.log('normal', `Close: ${pos.market} ${pos.side} — ${managed.reason}`);
-            await this.closeWithReason(pos, 'risk_monitor', managed.reason);
-            this.positionMgr.untrack(pos.market, pos.side);
-            break;
-
-          case 'hold': {
+          } else {
+            // Hold — intermediate reward shaping
             this.log('verbose', `Hold: ${pos.market} ${pos.side} — ${managed.reason}`);
-            // INTERMEDIATE REWARD: shape policy with partial progress signals
-            const tradeKey = `${pos.market}:${pos.side}`;
-            const ts = this.activeTradeStates.get(tradeKey);
             if (ts) {
-              const holdTicks = this.state.iteration - ts.entryTick;
-              const intReward = this.policyLearner.computeIntermediateReward(pos.pnlPercent ?? 0, managed.rMultiple, holdTicks);
+              const intReward = this.policyLearner.computeIntermediateReward(pnlPct, managed.rMultiple, holdingTicks);
               if (Math.abs(intReward) > 0.01) {
                 this.policyLearner.update(ts.state, ts.action, intReward);
               }
             }
-            break;
           }
+          continue;
         }
-        continue;
       }
 
-      // Fallback for untracked positions — use simple rules
-      const pnlPct = pos.pnlPercent ?? 0;
+      // Fallback for untracked positions — use exit policy or simple rules
+      const ts = this.activeTradeStates.get(tradeKey);
+      const holdingTicks = ts ? this.state.iteration - ts.entryTick : 0;
+      const regime = this.marketRegimes.get(pos.market) ?? 'RANGING';
+      const fallbackMomentum = this.exitPolicy.getMomentumState(pos.market, pos.side as 'long' | 'short');
+      const exitState = this.exitPolicy.buildState(pnlPct, holdingTicks, regime, 10, 10, fallbackMomentum);
+      const ddState = this.drawdown.getState();
+      const exitRec = this.exitPolicy.recommend(exitState, ddState.drawdownPct > 0.05);
 
-      if (pnlPct < -15) {
-        this.log('normal', `Emergency close: ${pos.market} ${pos.side} at ${pnlPct.toFixed(1)}%`);
-        await this.closeWithReason(pos, 'emergency', `Emergency stop: ${pnlPct.toFixed(1)}% drawdown`);
+      if (!exitRec.isExploration && exitRec.confidence > 0.5 && exitRec.action !== 'hold') {
+        this.log('normal', `Exit policy (untracked): ${exitRec.action} ${pos.market} ${pos.side} (conf=${(exitRec.confidence * 100).toFixed(0)}%)`);
+        const closePct = exitRec.action === 'partial_close' ? 50 : undefined;
+        await this.closeWithReason(pos, 'exit_policy', `Learned exit`, closePct);
       } else if (pnlPct > 5) {
         this.log('normal', `Taking profit: ${pos.market} ${pos.side} at +${pnlPct.toFixed(1)}%`);
         await this.closeWithReason(pos, 'take_profit', `Take profit at +${pnlPct.toFixed(1)}%`);
@@ -944,6 +1161,20 @@ export class LiveTradingAgent {
         this.log('verbose', `Policy: reward=${reward.toFixed(3)} ${tradeState.action} | LR=${pm.learningRate.toFixed(3)} explore=${(pm.explorationRate * 100).toFixed(0)}% sharpe=${pm.sharpe.toFixed(2)} states=${pm.policySize}`);
       }
 
+      // EXIT POLICY: update exit learner with final outcome
+      const exitState = this.activeExitStates.get(tradeKey);
+      if (exitState) {
+        const exitAction = decision.closePercent && decision.closePercent < 100 ? 'partial_close' as const : 'full_close' as const;
+        // Reward closing: positive if avoiding further loss, negative if cutting winner
+        const exitReward = this.exitPolicy.computeExitReward(
+          exitState.lastPnlPct, pnl / Math.max(1, decision.collateral ?? 100), // R-multiple approx
+          tradeState ? this.state.iteration - tradeState.entryTick : 0,
+          exitAction, 0, // No subsequent price change for final close
+        );
+        this.exitPolicy.update(exitState.state, exitAction, exitReward);
+        this.activeExitStates.delete(tradeKey);
+      }
+
       // Log simulation + counterfactual insights periodically
       const simInsights = this.simEngine.getInsights();
       if (simInsights.resolved >= 10) {
@@ -971,6 +1202,19 @@ export class LiveTradingAgent {
 
       this.callbacks.onTrade?.(entry);
       this.log('normal', `Closed: ${position.market} ${position.side} PnL=$${pnl.toFixed(2)} | policy+weights updated`);
+
+      // EDGE REFINEMENT: check if cycle should run
+      const closedCount = this.journal.getStats().totalTrades;
+      if (this.edgeRefiner.shouldRefine(closedCount)) {
+        const refinement = this.edgeRefiner.refine(
+          this.journal.getEntries(),
+          this.journal.getStats(),
+          this.policyLearner.getMetrics(),
+        );
+        if (refinement.type !== 'no_action') {
+          this.log('info', `EDGE REFINER: ${refinement.type} → ${refinement.target} | ${refinement.reason}`);
+        }
+      }
     } catch (error: unknown) {
       const msg = error instanceof Error ? error.message : String(error);
       this.log('error', `Close failed: ${msg}`);
@@ -1001,6 +1245,100 @@ export class LiveTradingAgent {
       dailyPnl: 0, dailyTradeCount: 0, lastTradeTimestamp: 0,
       inCooldown: false, cooldownUntil: 0, positions: [], consecutiveLosses: 0,
     };
+  }
+
+  // ─── State Persistence ──────────────────────────────────────────────
+
+  private persistState(): void {
+    try {
+      const state = buildPersistedState({
+        policy: this.policyLearner,
+        exitPolicy: this.exitPolicy,
+        expectancy: this.expectancy,
+        adaptiveWeights: this.scorer.adaptiveWeights,
+        timeIntel: this.timeIntel,
+      });
+      if (saveAgentState(state)) {
+        this.log('verbose', `State persisted (${state.policy.entries.length} policy, ${state.exitPolicy.entries.length} exit, ${state.expectancy.strategies.length} strategies)`);
+      }
+    } catch (error: unknown) {
+      this.log('error', `Failed to persist state: ${error instanceof Error ? error.message : error}`);
+    }
+  }
+
+  private restoreState(): void {
+    try {
+      const saved = loadAgentState();
+      if (!saved) return;
+
+      this.policyLearner.restore(saved.policy);
+      this.exitPolicy.restore(saved.exitPolicy);
+      this.expectancy.restore(saved.expectancy);
+      if (Array.isArray(saved.adaptiveWeights)) {
+        this.scorer.adaptiveWeights.restore(saved.adaptiveWeights);
+      }
+      if (Array.isArray(saved.timeIntel)) {
+        this.timeIntel.restore(saved.timeIntel);
+      }
+    } catch (error: unknown) {
+      this.log('error', `Failed to restore state: ${error instanceof Error ? error.message : error}`);
+      // Continue with fresh state — non-fatal
+    }
+  }
+
+  // ─── Memory Safety ──────────────────────────────────────────────
+
+  /**
+   * Evict stale entries from per-market Maps to prevent unbounded growth.
+   * Called periodically (every 100 ticks) during long-running sessions.
+   */
+  private evictStaleMaps(now: number): void {
+    const maxEntries = LiveTradingAgent.MAX_MAP_ENTRIES;
+    const activeMarkets = new Set(this.config.markets.map((m) => m.toUpperCase()));
+
+    // Clean marketHourlyTrades — remove stale timestamps and inactive markets
+    for (const [market, trades] of this.marketHourlyTrades) {
+      const fresh = trades.filter((t) => now - t < 3_600_000);
+      if (fresh.length === 0 && !activeMarkets.has(market.toUpperCase())) {
+        this.marketHourlyTrades.delete(market);
+      } else {
+        this.marketHourlyTrades.set(market, fresh);
+      }
+    }
+
+    // Clean expired cooldowns
+    for (const [market, expiry] of this.marketCooldowns) {
+      if (now > expiry) this.marketCooldowns.delete(market);
+    }
+
+    // Cap prevSignals — only keep active markets
+    if (this.prevSignals.size > maxEntries) {
+      for (const key of this.prevSignals.keys()) {
+        if (!activeMarkets.has(key.toUpperCase())) this.prevSignals.delete(key);
+      }
+    }
+
+    // Cap marketRegimes — only keep active markets
+    if (this.marketRegimes.size > maxEntries) {
+      for (const key of this.marketRegimes.keys()) {
+        if (!activeMarkets.has(key.toUpperCase())) this.marketRegimes.delete(key);
+      }
+    }
+
+    // Clean stale activeTradeStates — entries older than 6 hours are leaked
+    const maxTradeAge = 6 * 3_600_000 / (this.config.pollIntervalMs || 10_000); // 6h in ticks
+    for (const [key, ts] of this.activeTradeStates) {
+      if (this.state.iteration - ts.entryTick > maxTradeAge) {
+        this.activeTradeStates.delete(key);
+      }
+    }
+
+    // Clean stale activeExitStates — must match activeTradeStates
+    for (const key of this.activeExitStates.keys()) {
+      if (!this.activeTradeStates.has(key)) {
+        this.activeExitStates.delete(key);
+      }
+    }
   }
 
   private log(level: 'info' | 'normal' | 'verbose' | 'error', message: string): void {

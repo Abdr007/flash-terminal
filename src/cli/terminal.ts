@@ -37,6 +37,8 @@ import { shutdownUltraTxEngine } from '../core/ultra-tx-engine.js';
 import { shutdownTpuClient } from '../network/tpu-client.js';
 
 import { loadPlugins, shutdownPlugins } from '../plugins/plugin-loader.js';
+import { initHealth, shutdownHealth, getHealth } from '../system/health.js';
+import { CommandThrottle } from '../system/backpressure.js';
 import { StatusBar } from './status-bar.js';
 import { runDoctor } from '../tools/doctor.js';
 // watch.ts removed — monitor command replaces watch functionality
@@ -208,6 +210,10 @@ export class FlashTerminal {
   private rpcManager!: RpcManager;
   /** Background maintenance handle */
   private maintenance: { stop(): void } | null = null;
+  /** Degraded mode check interval — cleaned up on shutdown */
+  private degradedCheckTimer: ReturnType<typeof setInterval> | null = null;
+  /** Command throttle — prevents rapid-fire input from overwhelming the system */
+  private commandThrottle = new CommandThrottle();
   /** Live status bar */
   private statusBar: StatusBar | null = null;
   /** Last executed command text (for context line) */
@@ -503,7 +509,7 @@ export class FlashTerminal {
       setTimeout(() => {
         this.rpcManager.startMonitoring();
         // Periodic degraded mode sync (piggyback on monitor interval)
-        const degradedCheck = setInterval(() => {
+        this.degradedCheckTimer = setInterval(() => {
           const wasDown = this.degradedMode;
           this.degradedMode = this.rpcManager.allEndpointsDown;
           if (this.degradedMode && !wasDown) {
@@ -511,7 +517,7 @@ export class FlashTerminal {
             console.log(chalk.dim('  Trading commands disabled until connectivity is restored.\n'));
           }
         }, 30_000);
-        degradedCheck.unref();
+        this.degradedCheckTimer.unref();
       }, 5_000).unref();
 
       // Metrics HTTP server — enable via METRICS_PORT env var
@@ -560,6 +566,9 @@ export class FlashTerminal {
         // Maintenance is non-critical
       }
     }, 10_000).unref();
+
+    // System health monitor — event loop lag, memory, error rate
+    initHealth();
 
     // RPC connection warmup — pre-establish HTTP connections to backup endpoints (12s)
     setTimeout(() => {
@@ -1441,12 +1450,21 @@ export class FlashTerminal {
       // Best-effort cleanup
     }
     try {
+      if (this.degradedCheckTimer) {
+        clearInterval(this.degradedCheckTimer);
+        this.degradedCheckTimer = null;
+      }
       this.rpcManager?.stopMonitoring();
     } catch {
       // Best-effort cleanup
     }
     try {
       if (this.maintenance) this.maintenance.stop();
+    } catch {
+      // Best-effort cleanup
+    }
+    try {
+      shutdownHealth();
     } catch {
       // Best-effort cleanup
     }
@@ -1471,6 +1489,13 @@ export class FlashTerminal {
   // ─── Command Handler ──────────────────────────────────────────────
 
   private async handleInput(rawInput: string): Promise<void> {
+    // ── Backpressure: throttle rapid-fire commands ──
+    const throttle = this.commandThrottle.check();
+    if (!throttle.allowed) {
+      console.log(chalk.dim(`  ${throttle.reason}`));
+      return;
+    }
+
     // ── Extract global flags (--format json, --key <wallet>) ──
     const flags = extractFlags(rawInput);
     const input = normalizeInput(flags.cleanInput);
@@ -1507,6 +1532,14 @@ export class FlashTerminal {
       this.handleAgentAudit();
       return;
     }
+    if (lower === 'agent edge' || lower === 'agent validate' || lower === 'agent edge report') {
+      await this.handleAgentEdge();
+      return;
+    }
+    if (lower === 'agent refiner' || lower === 'agent refinements') {
+      this.handleAgentRefiner();
+      return;
+    }
 
     // ─── Doctor Diagnostic Intercept ───────────────────────────────
     // ─── Session Metrics ──────────────────────────────────────
@@ -1537,6 +1570,75 @@ export class FlashTerminal {
         console.log('');
       } catch {
         console.log(chalk.dim('  Metrics not available.'));
+      }
+      return;
+    }
+
+    if (lower === 'system health' || lower === 'sys health' || lower === 'runtime' || lower === 'system health --history') {
+      const h = getHealth();
+      if (!h) {
+        console.log(chalk.dim('  Health monitor not initialized.'));
+      } else {
+        const snap = h.snapshot();
+        const stateColor = snap.state === 'HEALTHY' ? chalk.green : snap.state === 'DEGRADED' ? chalk.yellow : chalk.red;
+        console.log('');
+        console.log(`  ${theme.accentBold('System Health')}`);
+        console.log(`  ${theme.separator(45)}`);
+        console.log(`  State:          ${stateColor(snap.state)} (${snap.stateAge}s in this state)`);
+        console.log(`  Event Loop Lag: ${snap.eventLoopLagMs}ms`);
+        console.log(`  Memory RSS:     ${snap.memoryRssMB}MB`);
+        console.log(`  Heap Used:      ${snap.heapUsedMB}MB`);
+        console.log(`  Error Rate:     ${snap.errorRate}/min`);
+        console.log(`  RPC Latency:    ${snap.rpcLatencyMs}ms`);
+        console.log(`  Uptime:         ${Math.floor(snap.uptimeSeconds / 60)}m ${snap.uptimeSeconds % 60}s`);
+
+        // Root cause
+        if (snap.primaryCause !== 'none') {
+          console.log('');
+          console.log(`  ${theme.accentBold('Root Cause')}`);
+          console.log(`  Primary:        ${chalk.yellow(snap.primaryCause.replace(/_/g, ' '))}`);
+          for (const c of snap.causes) {
+            const icon = c.severity === 'critical' ? chalk.red('●') : chalk.yellow('▲');
+            console.log(`  ${icon} ${c.label}`);
+          }
+        }
+
+        // Degradation params
+        const params = h.getDegradationParams();
+        if (snap.state !== 'HEALTHY') {
+          console.log('');
+          console.log(`  ${theme.accentBold('Adaptive Response')}`);
+          console.log(`  Scan Freq:      ${params.scanIntervalMultiplier}x slower`);
+          console.log(`  Concurrency:    max ${params.maxConcurrency}`);
+          console.log(`  Trade Threshold: ${params.tradeThresholdMultiplier}x stricter`);
+          console.log(`  Retry Delay:    ${params.retryDelayMultiplier}x slower`);
+          if (params.tradesBlocked) console.log(`  Trades:         ${chalk.red('BLOCKED')}`);
+        }
+
+        // Retry budget
+        const { getRetryBudgetUsage } = await import('../utils/retry.js');
+        const budget = getRetryBudgetUsage();
+        console.log('');
+        console.log(`  Retry Budget:   ${budget.used}/${budget.max}${budget.exhausted ? chalk.red(' EXHAUSTED') : ''}`);
+
+        // History (if --history flag or always show trends)
+        const history = h.getHistory();
+        if (history.sampleCount > 0) {
+          const trendIcon = (t: string) => t === 'rising' ? chalk.red('↑') : t === 'falling' ? chalk.green('↓') : chalk.dim('→');
+          console.log('');
+          console.log(`  ${theme.accentBold('Trends')}  (${history.sampleCount} samples)`);
+          console.log(`  Lag:    ${trendIcon(history.trends.lag)} ${history.trends.lag}  (5m: ${history.avg5m.lagMs}ms → 15m: ${history.avg15m.lagMs}ms)`);
+          console.log(`  Memory: ${trendIcon(history.trends.memory)} ${history.trends.memory}  (5m: ${history.avg5m.rssMB}MB → 15m: ${history.avg15m.rssMB}MB)`);
+          console.log(`  Errors: ${trendIcon(history.trends.errors)} ${history.trends.errors}  (5m: ${history.avg5m.errorRate}/min → 15m: ${history.avg15m.errorRate}/min)`);
+
+          // Show 60m averages if we have enough data
+          if (lower.includes('--history') && history.sampleCount >= 20) {
+            console.log('');
+            console.log(`  ${theme.accentBold('60m Averages')}`);
+            console.log(`  Lag: ${history.avg60m.lagMs}ms | RSS: ${history.avg60m.rssMB}MB | Errors: ${history.avg60m.errorRate}/min | RPC: ${history.avg60m.rpcLatencyMs}ms`);
+          }
+        }
+        console.log('');
       }
       return;
     }
@@ -2357,6 +2459,23 @@ export class FlashTerminal {
       return;
     }
 
+    // Health gate — block trades when system is CRITICAL
+    const health = getHealth();
+    if (health?.isTradeBlocked() && TRADE_ACTIONS.has(intent.action)) {
+      const snap = health.snapshot();
+      if (flags.jsonOutput) {
+        console.log(jsonStringify(jsonError(intent.action, ErrorCode.DEGRADED_MODE, `System health CRITICAL: ${snap.reasons.join(', ')}`, { blocked_action: intent.action })));
+      } else {
+        console.log('');
+        console.log(chalk.red(`  System health CRITICAL — trades blocked`));
+        console.log(chalk.dim(`  Reasons: ${snap.reasons.join(', ')}`));
+        console.log(chalk.dim('  System will auto-recover when conditions improve.'));
+        console.log('');
+      }
+      this.restoreWallet(walletRestoreData);
+      return;
+    }
+
     // Execute tool — no animated ticker (conflicts with sendTx progress output)
 
     // Enable structured output during dispatch so tools return JSON in message
@@ -2369,6 +2488,8 @@ export class FlashTerminal {
       if (flags.jsonOutput) restoreOutputMode();
     } catch (error: unknown) {
       if (flags.jsonOutput) restoreOutputMode();
+      // Record error for health monitoring
+      getHealth()?.recordError();
       if (flags.jsonOutput) {
         const errMsg = getErrorMessage(error);
         const code = errMsg.toLowerCase().includes('timeout') ? ErrorCode.COMMAND_TIMEOUT : ErrorCode.UNKNOWN_ERROR;
@@ -2820,6 +2941,68 @@ export class FlashTerminal {
       console.log(`  [${icon}] T${e.tick} ${e.market} ${e.action} score=${e.score}${pnlStr}`);
       console.log(chalk.dim(`       ${e.reasoning.slice(0, 80)}`));
     }
+    console.log('');
+  }
+
+  private handleAgentRefiner(): void {
+    if (!this.liveAgent) {
+      console.log(chalk.dim('  No agent session.'));
+      return;
+    }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- LiveTradingAgent internal field access for diagnostics
+    const refiner = (this.liveAgent as any).edgeRefiner;
+    if (!refiner) {
+      console.log(chalk.dim('  Edge refiner not available.'));
+      return;
+    }
+    const summary = refiner.getSummary();
+    const log = refiner.getLog();
+
+    console.log('');
+    console.log(`  ${theme.accentBold('Edge Refiner V2')}`);
+    console.log(`  ${theme.separator(45)}`);
+    console.log(`  Refinement cycles: ${summary.refinementCount}`);
+    console.log(`  Size multiplier:   ${(summary.sizeMultiplier * 100).toFixed(0)}%`);
+    console.log(`  Status:            ${summary.frozen ? chalk.red('FROZEN') : chalk.green('ACTIVE')}`);
+    if (summary.consecutiveNegative > 0) {
+      console.log(`  Negative cycles:   ${summary.consecutiveNegative}/${2}`);
+    }
+    if (summary.scaledRegimes.length > 0) {
+      console.log(`  Scaled regimes:    ${summary.scaledRegimes.map((r: { regime: string; multiplier: number }) => `${r.regime}→${(r.multiplier * 100).toFixed(0)}%`).join(', ')}`);
+    }
+    if (summary.disabledStrategies.length > 0) {
+      console.log(`  Disabled strats:   ${summary.disabledStrategies.join(', ')}`);
+    }
+    if (log.length > 0) {
+      console.log('');
+      console.log(`  ${theme.accentBold('Recent Actions')}`);
+      for (const entry of log.slice(-10)) {
+        const icon = entry.action.type === 'no_action' ? chalk.dim('—') :
+          entry.action.type === 'revert' ? chalk.magenta('↩') :
+          entry.action.type === 'freeze' ? chalk.red('⊘') :
+          entry.action.type === 'tune_exits' ? chalk.cyan('↕') :
+          entry.action.type === 'advisory' ? chalk.yellow('!') : chalk.red('*');
+        console.log(`  ${icon} [${entry.tradeCount}t] ${entry.action.type}: ${entry.action.reason.slice(0, 70)}`);
+      }
+    }
+    console.log('');
+  }
+
+  private async handleAgentEdge(): Promise<void> {
+    if (!this.liveAgent) {
+      console.log(chalk.dim('  No agent session. Start with: agent start'));
+      return;
+    }
+    const { EdgeAnalyzer } = await import('../agent-builder/edge-analyzer.js');
+    const analyzer = new EdgeAnalyzer();
+    const journal = this.liveAgent.getJournal();
+    const stats = journal.getStats();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- LiveTradingAgent internal field access for diagnostics
+    const policyMetrics = (this.liveAgent as any).policyLearner?.getMetrics?.();
+
+    const report = analyzer.analyze(journal.getEntries(), stats, policyMetrics);
+    console.log('');
+    console.log('  ' + analyzer.formatReport(report).split('\n').join('\n  '));
     console.log('');
   }
 

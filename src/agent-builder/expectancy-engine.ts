@@ -155,6 +155,29 @@ export class ExpectancyEngine {
     return this.strategies.get(strategyName)?.weight ?? 1.0;
   }
 
+  // ─── Serialization ──────────────────────────────────────────────────
+
+  serialize(): { strategies: StrategyStats[]; globalTrades: number } {
+    return {
+      strategies: Array.from(this.strategies.values()).map(s => ({ ...s, recentPnl: [...s.recentPnl] })),
+      globalTrades: this.globalTrades,
+    };
+  }
+
+  restore(data: { strategies: StrategyStats[]; globalTrades: number }): void {
+    if (!data || !Array.isArray(data.strategies)) return;
+    this.strategies.clear();
+    for (const s of data.strategies) {
+      if (s.name && typeof s.trades === 'number') {
+        this.strategies.set(s.name, {
+          ...s,
+          recentPnl: Array.isArray(s.recentPnl) ? s.recentPnl.filter(Number.isFinite).slice(-ROLLING_WINDOW) : [],
+        });
+      }
+    }
+    if (Number.isFinite(data.globalTrades)) this.globalTrades = data.globalTrades;
+  }
+
   reset(): void {
     this.strategies.clear();
     this.globalTrades = 0;

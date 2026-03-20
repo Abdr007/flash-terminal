@@ -92,6 +92,27 @@ export class TimeIntelligence {
     return result.sort((a, b) => a.hour - b.hour);
   }
 
+  // ─── Serialization ──────────────────────────────────────────────────
+
+  serialize(): Array<{ hour: number; trades: number; wins: number; totalPnl: number }> {
+    const result: Array<{ hour: number; trades: number; wins: number; totalPnl: number }> = [];
+    for (const [hour, perf] of this.hourlyPerf) {
+      result.push({ hour, trades: perf.trades, wins: perf.wins, totalPnl: perf.totalPnl });
+    }
+    return result;
+  }
+
+  restore(data: Array<{ hour: number; trades: number; wins: number; totalPnl: number }>): void {
+    if (!Array.isArray(data)) return;
+    this.hourlyPerf.clear();
+    for (const item of data) {
+      if (typeof item.hour === 'number' && item.hour >= 0 && item.hour <= 23 &&
+          Number.isFinite(item.trades) && Number.isFinite(item.wins) && Number.isFinite(item.totalPnl)) {
+        this.hourlyPerf.set(item.hour, { trades: item.trades, wins: item.wins, totalPnl: item.totalPnl });
+      }
+    }
+  }
+
   reset(): void {
     this.hourlyPerf.clear();
   }

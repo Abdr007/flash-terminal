@@ -23,7 +23,20 @@ import { computeSimulationLiquidationPrice } from '../utils/protocol-liq.js';
 
 const MAX_TRADE_HISTORY = 500;
 const MAX_LIVE_PRICE_ENTRIES = 100;
-const SIMULATION_SLIPPAGE_BPS = 8; // 0.08% default slippage (matches typical Flash Trade fill)
+const DEFAULT_SLIPPAGE_BPS = 8; // 0.08% default slippage
+
+/** Per-market slippage based on typical liquidity — higher for memes/low-liq */
+const MARKET_SLIPPAGE_BPS: Record<string, number> = {
+  BTC: 3, ETH: 4, SOL: 6,
+  BNB: 8, JUP: 10, RAY: 12, PYTH: 12, JTO: 12,
+  BONK: 15, WIF: 15, PENGU: 18, PUMP: 18, FARTCOIN: 20,
+  XAU: 5, XAG: 8, CRUDEOIL: 10,
+  SPY: 4, NVDA: 6, TSLA: 8, AAPL: 5, AMD: 8, AMZN: 6, PLTR: 10,
+};
+
+function getSlippageBps(market: string): number {
+  return MARKET_SLIPPAGE_BPS[market.toUpperCase()] ?? DEFAULT_SLIPPAGE_BPS;
+}
 
 // Feed IDs are centralized in PriceService (src/data/prices.ts).
 // Simulation delegates all price fetching to PriceService (Pyth Hermes).
@@ -199,7 +212,7 @@ export class SimulatedFlashClient implements IFlashClient {
     const price = this.getPrice(market);
     // Simulated slippage: shift entry price against the trader (worse fill)
     const slippageMult =
-      side === TradeSide.Long ? 1 + SIMULATION_SLIPPAGE_BPS / 10_000 : 1 - SIMULATION_SLIPPAGE_BPS / 10_000;
+      side === TradeSide.Long ? 1 + getSlippageBps(market) / 10_000 : 1 - getSlippageBps(market) / 10_000;
     const fillPrice = price * slippageMult;
     const sizeUsd = collateralAmount * leverage;
 
@@ -474,8 +487,68 @@ export class SimulatedFlashClient implements IFlashClient {
     return { txSignature: `SIM_RM_${pos.id}`, newLeverage: pos.leverage };
   }
 
+  /**
+   * Set TP/SL on a simulated position.
+   */
+  async setTpSl(market: string, side: TradeSide, tp?: number, sl?: number): Promise<{ success: boolean; message: string }> {
+    const pos = this.state.positions.find((p) => p.market === market.toUpperCase() && p.side === side);
+    if (!pos) return { success: false, message: `No open ${side} position on ${market}` };
+    if (tp !== undefined) pos.takeProfit = tp;
+    if (sl !== undefined) pos.stopLoss = sl;
+    return { success: true, message: `TP/SL set: TP=${tp ?? 'none'} SL=${sl ?? 'none'}` };
+  }
+
+  /**
+   * Remove TP/SL from a simulated position.
+   */
+  async removeTpSl(market: string, side: TradeSide): Promise<{ success: boolean; message: string }> {
+    const pos = this.state.positions.find((p) => p.market === market.toUpperCase() && p.side === side);
+    if (!pos) return { success: false, message: `No open ${side} position on ${market}` };
+    delete pos.takeProfit;
+    delete pos.stopLoss;
+    return { success: true, message: 'TP/SL removed' };
+  }
+
+  /**
+   * Check and execute TP/SL triggers on all positions.
+   * Called during getPositions() — fires automatically.
+   */
+  private async checkTpSlTriggers(): Promise<void> {
+    const logger = getLogger();
+    // Iterate in reverse since closePosition removes from array
+    for (let i = this.state.positions.length - 1; i >= 0; i--) {
+      const pos = this.state.positions[i];
+      const currentPrice = this.livePrices.get(pos.market);
+      if (!currentPrice || !Number.isFinite(currentPrice)) continue;
+
+      const isLong = pos.side === TradeSide.Long;
+
+      // Check take-profit
+      if (pos.takeProfit !== undefined) {
+        const tpHit = isLong ? currentPrice >= pos.takeProfit : currentPrice <= pos.takeProfit;
+        if (tpHit) {
+          logger.info('SIM', `TP triggered: ${pos.market} ${pos.side} at $${currentPrice.toFixed(2)} (TP=$${pos.takeProfit.toFixed(2)})`);
+          await this._closePosition(pos.market, pos.side);
+          continue;
+        }
+      }
+
+      // Check stop-loss
+      if (pos.stopLoss !== undefined) {
+        const slHit = isLong ? currentPrice <= pos.stopLoss : currentPrice >= pos.stopLoss;
+        if (slHit) {
+          logger.info('SIM', `SL triggered: ${pos.market} ${pos.side} at $${currentPrice.toFixed(2)} (SL=$${pos.stopLoss.toFixed(2)})`);
+          await this._closePosition(pos.market, pos.side);
+          continue;
+        }
+      }
+    }
+  }
+
   async getPositions(): Promise<Position[]> {
     await this.refreshPrices();
+    // Check TP/SL triggers before returning positions
+    await this.checkTpSlTriggers();
     return this.state.positions.map((p) => {
       const currentPrice = this.livePrices.get(p.market) ?? p.entryPrice;
       const priceDelta = currentPrice - p.entryPrice;

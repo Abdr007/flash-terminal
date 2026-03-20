@@ -1157,6 +1157,10 @@ export interface SimulatedPosition {
   maintenanceMarginRate: number;
   /** Close fee rate from protocol. Stored at open time. */
   closeFeeRate: number;
+  /** Take-profit price (simulation TP/SL) */
+  takeProfit?: number;
+  /** Stop-loss price (simulation TP/SL) */
+  stopLoss?: number;
 }
 
 export interface SimulationState {

@@ -42,6 +42,12 @@ export class Logger {
   private showInCli: boolean;
   private format: LogFormat;
 
+  /** Consecutive file write failures — triggers console fallback */
+  private writeFailures = 0;
+  private static readonly MAX_WRITE_FAILURES = 5;
+  /** Whether we've already warned about file write issues */
+  private writeFailureWarned = false;
+
   /** Correlation ID for the current request/command. */
   private static _requestId: string | null = null;
 
@@ -139,9 +145,12 @@ export class Logger {
       data,
     };
 
-    // Write to file
-    if (this.logFilePath) {
+    // Write to file (or fallback to console if file writes are failing)
+    if (this.logFilePath && this.writeFailures < Logger.MAX_WRITE_FAILURES) {
       this.writeToFile(entry);
+    } else if (this.logFilePath && this.writeFailures >= Logger.MAX_WRITE_FAILURES && level >= LogLevel.Warn) {
+      // File broken — fallback important messages to console
+      this.writeToConsole(entry);
     }
 
     // Show in CLI only if explicitly enabled (showInCli) or for errors
@@ -210,8 +219,24 @@ export class Logger {
       }
     }
 
-    appendFile(this.logFilePath, line, () => {
-      // Fire-and-forget — silently ignore write errors to avoid crashing the CLI
+    appendFile(this.logFilePath, line, (err) => {
+      if (err) {
+        this.writeFailures++;
+        if (!this.writeFailureWarned && this.writeFailures >= Logger.MAX_WRITE_FAILURES) {
+          this.writeFailureWarned = true;
+          // Fallback: write to stderr so the user knows logs are broken
+          console.error(chalk.yellow(`  [WARN] Log file write failed ${this.writeFailures} times: ${err.code ?? err.message}. Falling back to console.`));
+        }
+      } else {
+        // Reset failure counter on successful write
+        if (this.writeFailures > 0) {
+          this.writeFailures = 0;
+          if (this.writeFailureWarned) {
+            this.writeFailureWarned = false;
+            console.error(chalk.green('  [INFO] Log file writes restored.'));
+          }
+        }
+      }
     });
   }
 
