@@ -124,8 +124,12 @@ export class LiveTradingAgent {
   /** V18: Event-triggered trade count for validation */
   private eventTradeCount = 0;
   private eventTradeWins = 0;
+  private eventTradePnls: number[] = [];     // V19: rolling event PnLs for EV tracking
+  private normalTradePnls: number[] = [];    // V19: rolling normal PnLs for comparison
   /** V18: Global event cap — max event trades per minute */
   private eventTradeTimestamps: number[] = [];
+  /** V19: Adaptive event sizing tier (0.5 → 0.7 → 1.0) */
+  private eventSizeTier = 0.5;
   /** Current regime per market (for exit policy) */
   private marketRegimes: Map<string, string> = new Map();
 
@@ -301,6 +305,9 @@ export class LiveTradingAgent {
     this.eventTradeTimestamps = [];
     this.eventTradeCount = 0;
     this.eventTradeWins = 0;
+    this.eventTradePnls = [];
+    this.normalTradePnls = [];
+    this.eventSizeTier = 0.5;
     this.activeTradeStates.clear();
     this.activeExitStates.clear();
     this.marketRegimes.clear();
@@ -1323,9 +1330,14 @@ export class LiveTradingAgent {
       this.recentTradeEVs.push(pnl);
       if (this.recentTradeEVs.length > 20) this.recentTradeEVs.shift();
 
-      // V18: Track event-triggered trade outcomes for validation
-      if (decision.strategy === 'event_trigger' && pnl > 0) {
-        this.eventTradeWins++;
+      // V19: Track event vs normal trade outcomes separately
+      if (decision.strategy === 'event_trigger') {
+        this.eventTradePnls.push(pnl);
+        if (this.eventTradePnls.length > 20) this.eventTradePnls.shift();
+        if (pnl > 0) this.eventTradeWins++;
+      } else {
+        this.normalTradePnls.push(pnl);
+        if (this.normalTradePnls.length > 20) this.normalTradePnls.shift();
       }
 
       // V17: Learning protection — log rapid trading warning for awareness
@@ -1457,9 +1469,9 @@ export class LiveTradingAgent {
   }
 
   /**
-   * V18: Run partial pipeline for event-triggered markets.
-   * Only: signal fusion → EV check → confidence gate → execute.
-   * Skips: full scan, heavy regime recomputation, scanner ranking.
+   * V18+V19: Run partial pipeline for event-triggered markets.
+   * V19 additions: overextension filter, momentum decay check, EV-based validation,
+   * event vs normal comparison, adaptive sizing.
    */
   private async handleEventTriggers(
     events: Array<{ market: string; snapshot: MarketSnapshot; changePct: number; type: string }>,
@@ -1468,22 +1480,53 @@ export class LiveTradingAgent {
     const stats = this.journal.getStats();
     const now = Date.now();
 
-    // Gate: don't event-trade during cold start (need baseline data first)
+    // Gate: don't event-trade during cold start
     if (stats.totalTrades < 5) return;
 
     // Gate: respect position limits
     if (positions.length >= (this.config.risk.maxPositions || 2)) return;
 
-    // V18 event validation: if event trades are performing poorly, skip
-    if (this.eventTradeCount >= 10 && this.eventTradeWins / this.eventTradeCount < 0.3) {
-      this.log('verbose', 'V18: Event trades underperforming — skipping events');
-      return;
+    // V19 Phase 3: EV-based validation (replaces simple win rate check)
+    if (this.eventTradePnls.length >= 10) {
+      const eventEV = this.eventTradePnls.reduce((a, b) => a + b, 0) / this.eventTradePnls.length;
+      if (eventEV <= 0) {
+        this.log('verbose', `V19: Event EV $${eventEV.toFixed(2)} ≤ 0 after ${this.eventTradePnls.length} trades — events paused`);
+        return;
+      }
+    }
+
+    // V19 Phase 4: If event EV worse than normal, reduce usage
+    if (this.eventTradePnls.length >= 15 && this.normalTradePnls.length >= 15) {
+      const eventEV = this.eventTradePnls.reduce((a, b) => a + b, 0) / this.eventTradePnls.length;
+      const normalEV = this.normalTradePnls.reduce((a, b) => a + b, 0) / this.normalTradePnls.length;
+      if (eventEV < normalEV * 0.5) {
+        this.log('verbose', `V19: Event EV $${eventEV.toFixed(2)} < 50% of normal EV $${normalEV.toFixed(2)} — events reduced`);
+        return;
+      }
     }
 
     for (const event of events) {
       const { market, snapshot, changePct } = event;
 
-      // Quick signal fusion (lightweight — already have prices recorded)
+      // V19 Phase 2: Momentum decay check — is the move still accelerating?
+      const momentum = this.exitPolicy.getMomentumState(market, changePct > 0 ? 'long' : 'short');
+      if (momentum === 'decaying' || momentum === 'reversing') {
+        this.log('verbose', `V19: ${market} event rejected — momentum ${momentum}`);
+        continue;
+      }
+
+      // V19 Phase 1: Overextension filter — reject if price too far from recent mean
+      const priceHistory = this.technicals.getHistory(market);
+      if (priceHistory && priceHistory.length >= 10) {
+        const recentMean = priceHistory.slice(-10).reduce((a, b) => a + b, 0) / 10;
+        const extensionPct = Math.abs((snapshot.price - recentMean) / recentMean) * 100;
+        if (extensionPct > 3.0) {
+          this.log('verbose', `V19: ${market} event rejected — overextended ${extensionPct.toFixed(1)}% from mean`);
+          continue;
+        }
+      }
+
+      // Signal fusion
       const composite = this.fusion.fuse(snapshot, snapshot.fundingRate);
       if (!composite.confirmed || composite.confidence < 0.5) continue;
 
@@ -1499,8 +1542,9 @@ export class LiveTradingAgent {
       // Confidence gate: events need higher bar (≥60%)
       if (composite.confidence < 0.60) continue;
 
-      // Sizing: conservative for events (half normal size)
-      const collateral = Math.max(1, this.state.currentCapital * this.config.risk.positionSizePct * 0.5);
+      // V19 Phase 5: Adaptive sizing based on event track record
+      this.updateEventSizeTier();
+      const collateral = Math.max(1, this.state.currentCapital * this.config.risk.positionSizePct * this.eventSizeTier);
       const leverage = Math.min(3, this.config.risk.maxLeverage);
 
       // Quick TP/SL
@@ -1514,18 +1558,34 @@ export class LiveTradingAgent {
         market, side, leverage, collateral, tp, sl,
         strategy: 'event_trigger',
         confidence: composite.confidence,
-        reasoning: `EVENT ${event.type} ${changePct > 0 ? '+' : ''}${changePct.toFixed(2)}% | fusion=${composite.direction} conf=${(composite.confidence * 100).toFixed(0)}%`,
+        reasoning: `EVENT ${event.type} ${changePct > 0 ? '+' : ''}${changePct.toFixed(2)}% | momentum=${momentum} | size=${(this.eventSizeTier * 100).toFixed(0)}%`,
         signals: composite.factors.map((f) => ({ source: f.name, direction: f.direction, strength: f.confidence, confidence: f.confidence, reason: f.name })),
         riskLevel: 'safe',
       };
 
-      this.log('normal', `EVENT EXECUTE: ${market} ${side} | ${changePct > 0 ? '+' : ''}${changePct.toFixed(1)}% move | conf=${(composite.confidence * 100).toFixed(0)}%`);
+      this.log('normal', `EVENT EXECUTE: ${market} ${side} | ${changePct > 0 ? '+' : ''}${changePct.toFixed(1)}% | momentum=${momentum} | size=${(this.eventSizeTier * 100).toFixed(0)}%`);
       this.eventCooldowns.set(market, now);
       this.eventTradeTimestamps.push(now);
       this.eventTradeCount++;
 
       await this.executeTrade(decision, snapshot);
       break; // Max 1 event trade per tick
+    }
+  }
+
+  /** V19: Adjust event size tier based on rolling event EV */
+  private updateEventSizeTier(): void {
+    if (this.eventTradePnls.length < 5) {
+      this.eventSizeTier = 0.5; // Default: conservative
+      return;
+    }
+    const ev = this.eventTradePnls.reduce((a, b) => a + b, 0) / this.eventTradePnls.length;
+    if (ev > 1.0 && this.eventTradePnls.length >= 15) {
+      this.eventSizeTier = Math.min(1.0, this.eventSizeTier + 0.1); // Ramp up
+    } else if (ev > 0) {
+      this.eventSizeTier = Math.min(0.7, Math.max(0.5, this.eventSizeTier)); // Mid tier
+    } else {
+      this.eventSizeTier = Math.max(0.3, this.eventSizeTier - 0.1); // Ramp down
     }
   }
 

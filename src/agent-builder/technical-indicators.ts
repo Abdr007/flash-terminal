@@ -258,6 +258,12 @@ export class TechnicalAnalyzer {
     return this.history.get(market)?.length ?? 0;
   }
 
+  /** Get raw price history for a market (read-only copy) */
+  getHistory(market: string): number[] | null {
+    const h = this.history.get(market);
+    return h && h.length > 0 ? [...h] : null;
+  }
+
   reset(): void {
     this.history.clear();
   }
