@@ -993,7 +993,7 @@ export class LiveTradingAgent {
           }
 
           // EXIT POLICY DECISION — only trusted recommendations override position manager
-          if (!exitRec.isExploration && exitRec.confidence > 0.5) {
+          if (!exitRec.isExploration && exitRec.confidence > 0.7) {
             if (exitRec.action === 'full_close') {
               this.log('normal', `Exit policy: CLOSE ${pos.market} ${pos.side} (conf=${(exitRec.confidence * 100).toFixed(0)}%, PnL=${pnlPct.toFixed(1)}%, momentum=${momentum})`);
               await this.closeWithReason(pos, 'exit_policy', `Learned exit: conf=${(exitRec.confidence * 100).toFixed(0)}%`);
@@ -1048,7 +1048,7 @@ export class LiveTradingAgent {
       const ddState = this.drawdown.getState();
       const exitRec = this.exitPolicy.recommend(exitState, ddState.drawdownPct > 0.05);
 
-      if (!exitRec.isExploration && exitRec.confidence > 0.5 && exitRec.action !== 'hold') {
+      if (!exitRec.isExploration && exitRec.confidence > 0.7 && exitRec.action !== 'hold') {
         this.log('normal', `Exit policy (untracked): ${exitRec.action} ${pos.market} ${pos.side} (conf=${(exitRec.confidence * 100).toFixed(0)}%)`);
         const closePct = exitRec.action === 'partial_close' ? 50 : undefined;
         await this.closeWithReason(pos, 'exit_policy', `Learned exit`, closePct);
