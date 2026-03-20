@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- core agent orchestrator; V12-V18 intelligence layers require cohesive class */
 /**
  * LiveTradingAgent — Runs inside the interactive terminal session.
  *
@@ -116,6 +117,15 @@ export class LiveTradingAgent {
   /** V17: Fast-path vs full-pipeline trade counter for ratio tracking */
   private fastPathCount = 0;
   private fullPipelineCount = 0;
+  /** V18: Previous prices for event detection */
+  private prevPrices: Map<string, number> = new Map();
+  /** V18: Per-market event cooldown (market → timestamp of last event trade) */
+  private eventCooldowns: Map<string, number> = new Map();
+  /** V18: Event-triggered trade count for validation */
+  private eventTradeCount = 0;
+  private eventTradeWins = 0;
+  /** V18: Global event cap — max event trades per minute */
+  private eventTradeTimestamps: number[] = [];
   /** Current regime per market (for exit policy) */
   private marketRegimes: Map<string, string> = new Map();
 
@@ -286,6 +296,11 @@ export class LiveTradingAgent {
     this.fastPathCount = 0;
     this.fullPipelineCount = 0;
     this.cachedSnapshots = [];
+    this.prevPrices.clear();
+    this.eventCooldowns.clear();
+    this.eventTradeTimestamps = [];
+    this.eventTradeCount = 0;
+    this.eventTradeWins = 0;
     this.activeTradeStates.clear();
     this.activeExitStates.clear();
     this.marketRegimes.clear();
@@ -390,9 +405,17 @@ export class LiveTradingAgent {
       this.correlationGuard.recordPrice(snapshot.market, snapshot.price);
     }
 
-    // V17: Cached ticks only monitor positions — no new entries from stale data
+    // V18: EVENT DETECTION — detect significant moves even on cached ticks
+    const events = this.detectEvents(snapshots);
+
+    // V17/V18: Cached ticks monitor positions + check for events
     if (!isFreshData) {
-      this.log('verbose', `Fast tick (cache age ${Math.round(cacheAge / 1000)}s) — monitoring only`);
+      if (events.length > 0) {
+        // Event detected on cached tick — run partial pipeline for event markets only
+        await this.handleEventTriggers(events, positions);
+      } else {
+        this.log('verbose', `Fast tick (cache age ${Math.round(cacheAge / 1000)}s) — monitoring only`);
+      }
       return;
     }
 
@@ -1300,6 +1323,11 @@ export class LiveTradingAgent {
       this.recentTradeEVs.push(pnl);
       if (this.recentTradeEVs.length > 20) this.recentTradeEVs.shift();
 
+      // V18: Track event-triggered trade outcomes for validation
+      if (decision.strategy === 'event_trigger' && pnl > 0) {
+        this.eventTradeWins++;
+      }
+
       // V17: Learning protection — log rapid trading warning for awareness
       if (this.hourlyTrades.length > 4) {
         this.log('verbose', `V17: Rapid trading (${this.hourlyTrades.length} trades/hr) — meta-agent handles aggression`);
@@ -1390,6 +1418,117 @@ export class LiveTradingAgent {
 
   // ─── Memory Safety ──────────────────────────────────────────────
 
+  // ─── V18: Event-Driven Execution ──────────────────────────────────
+
+  private static readonly EVENT_PRICE_THRESHOLD_PCT = 0.8;  // ≥0.8% move triggers event
+  private static readonly EVENT_COOLDOWN_MS = 180_000;       // 3 min per-market cooldown
+  private static readonly EVENT_GLOBAL_CAP_PER_MIN = 3;      // Max 3 event trades/min
+
+  /**
+   * Detect significant market events from price changes between ticks.
+   */
+  private detectEvents(snapshots: MarketSnapshot[]): Array<{ market: string; snapshot: MarketSnapshot; changePct: number; type: string }> {
+    const events: Array<{ market: string; snapshot: MarketSnapshot; changePct: number; type: string }> = [];
+    const now = Date.now();
+
+    for (const snap of snapshots) {
+      const prev = this.prevPrices.get(snap.market);
+      this.prevPrices.set(snap.market, snap.price);
+      if (!prev || prev <= 0) continue;
+
+      const changePct = ((snap.price - prev) / prev) * 100;
+      const absChange = Math.abs(changePct);
+
+      // Price spike event
+      if (absChange >= LiveTradingAgent.EVENT_PRICE_THRESHOLD_PCT) {
+        // Check per-market cooldown
+        const lastEvent = this.eventCooldowns.get(snap.market) ?? 0;
+        if (now - lastEvent < LiveTradingAgent.EVENT_COOLDOWN_MS) continue;
+
+        // Check global cap
+        this.eventTradeTimestamps = this.eventTradeTimestamps.filter((t) => now - t < 60_000);
+        if (this.eventTradeTimestamps.length >= LiveTradingAgent.EVENT_GLOBAL_CAP_PER_MIN) continue;
+
+        events.push({ market: snap.market, snapshot: snap, changePct, type: 'price_spike' });
+      }
+    }
+
+    return events;
+  }
+
+  /**
+   * V18: Run partial pipeline for event-triggered markets.
+   * Only: signal fusion → EV check → confidence gate → execute.
+   * Skips: full scan, heavy regime recomputation, scanner ranking.
+   */
+  private async handleEventTriggers(
+    events: Array<{ market: string; snapshot: MarketSnapshot; changePct: number; type: string }>,
+    positions: Position[],
+  ): Promise<void> {
+    const stats = this.journal.getStats();
+    const now = Date.now();
+
+    // Gate: don't event-trade during cold start (need baseline data first)
+    if (stats.totalTrades < 5) return;
+
+    // Gate: respect position limits
+    if (positions.length >= (this.config.risk.maxPositions || 2)) return;
+
+    // V18 event validation: if event trades are performing poorly, skip
+    if (this.eventTradeCount >= 10 && this.eventTradeWins / this.eventTradeCount < 0.3) {
+      this.log('verbose', 'V18: Event trades underperforming — skipping events');
+      return;
+    }
+
+    for (const event of events) {
+      const { market, snapshot, changePct } = event;
+
+      // Quick signal fusion (lightweight — already have prices recorded)
+      const composite = this.fusion.fuse(snapshot, snapshot.fundingRate);
+      if (!composite.confirmed || composite.confidence < 0.5) continue;
+
+      // Direction must agree with the move
+      const side = changePct > 0 ? 'long' : 'short';
+      if (composite.direction === 'bullish' && side !== 'long') continue;
+      if (composite.direction === 'bearish' && side !== 'short') continue;
+
+      // EV check
+      const evCheck = this.expectancy.checkEV('event_trigger', composite.confidence);
+      if (!evCheck.allowed && stats.totalTrades > 15) continue;
+
+      // Confidence gate: events need higher bar (≥60%)
+      if (composite.confidence < 0.60) continue;
+
+      // Sizing: conservative for events (half normal size)
+      const collateral = Math.max(1, this.state.currentCapital * this.config.risk.positionSizePct * 0.5);
+      const leverage = Math.min(3, this.config.risk.maxLeverage);
+
+      // Quick TP/SL
+      const slDistance = snapshot.price * 0.02;
+      const tpDistance = slDistance * 2.0;
+      const tp = side === 'long' ? snapshot.price + tpDistance : snapshot.price - tpDistance;
+      const sl = side === 'long' ? snapshot.price - slDistance : snapshot.price + slDistance;
+
+      const decision: TradeDecision = {
+        action: 'open' as DecisionAction,
+        market, side, leverage, collateral, tp, sl,
+        strategy: 'event_trigger',
+        confidence: composite.confidence,
+        reasoning: `EVENT ${event.type} ${changePct > 0 ? '+' : ''}${changePct.toFixed(2)}% | fusion=${composite.direction} conf=${(composite.confidence * 100).toFixed(0)}%`,
+        signals: composite.factors.map((f) => ({ source: f.name, direction: f.direction, strength: f.confidence, confidence: f.confidence, reason: f.name })),
+        riskLevel: 'safe',
+      };
+
+      this.log('normal', `EVENT EXECUTE: ${market} ${side} | ${changePct > 0 ? '+' : ''}${changePct.toFixed(1)}% move | conf=${(composite.confidence * 100).toFixed(0)}%`);
+      this.eventCooldowns.set(market, now);
+      this.eventTradeTimestamps.push(now);
+      this.eventTradeCount++;
+
+      await this.executeTrade(decision, snapshot);
+      break; // Max 1 event trade per tick
+    }
+  }
+
   /**
    * Evict stale entries from per-market Maps to prevent unbounded growth.
    * Called periodically (every 100 ticks) during long-running sessions.
@@ -1439,6 +1578,19 @@ export class LiveTradingAgent {
     for (const key of this.activeExitStates.keys()) {
       if (!this.activeTradeStates.has(key)) {
         this.activeExitStates.delete(key);
+      }
+    }
+
+    // V18: Clean expired event cooldowns
+    for (const [market, ts] of this.eventCooldowns) {
+      if (now > ts + LiveTradingAgent.EVENT_COOLDOWN_MS) {
+        this.eventCooldowns.delete(market);
+      }
+    }
+    // Cap prevPrices to active markets only
+    if (this.prevPrices.size > maxEntries) {
+      for (const key of this.prevPrices.keys()) {
+        if (!activeMarkets.has(key)) this.prevPrices.delete(key);
       }
     }
   }
