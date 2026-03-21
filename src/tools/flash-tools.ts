@@ -393,7 +393,7 @@ export const flashOpenPosition: ToolDefinition = {
             if (!context.simulationMode) {
               try {
                 const freshPositions = await context.flashClient.getPositions();
-                const pos = freshPositions.find((p) => p.market === market && p.side === side);
+                const pos = freshPositions.find((p) => (p.market ?? '').toUpperCase() === market.toUpperCase() && p.side === side);
                 if (pos) {
                   actualSize = pos.sizeUsd;
                   actualCollateral = pos.collateralUsd;
@@ -736,7 +736,7 @@ export const flashClosePosition: ToolDefinition = {
               result: 'failed',
               reason: getErrorMessage(error),
             });
-            return { success: false, message: `  Failed to close position: ${getErrorMessage(error)}` };
+            return { success: false, message: `  Failed to close position: ${humanizeSdkError(getErrorMessage(error))}` };
           }
         },
       },
@@ -909,7 +909,7 @@ export const flashAddCollateral: ToolDefinition = {
               result: 'failed',
               reason: getErrorMessage(error),
             });
-            return { success: false, message: `  Failed: ${getErrorMessage(error)}` };
+            return { success: false, message: `  Failed to add collateral: ${humanizeSdkError(getErrorMessage(error), amount)}` };
           }
         },
       },
@@ -1092,7 +1092,7 @@ export const flashRemoveCollateral: ToolDefinition = {
               result: 'failed',
               reason: getErrorMessage(error),
             });
-            return { success: false, message: `  Failed: ${getErrorMessage(error)}` };
+            return { success: false, message: `  Failed to remove collateral: ${humanizeSdkError(getErrorMessage(error), amount)}` };
           }
         },
       },

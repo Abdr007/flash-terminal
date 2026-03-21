@@ -123,8 +123,14 @@ function extractFlags(input: string): CommandFlags {
     clean = clean.replace(formatMatch[0], ' ');
   }
 
-  // Extract --key <name-or-path> (or --key=<name>)
-  const keyMatch = clean.match(/\s+--key[\s=]+(\S+)/) || clean.match(/^--key[\s=]+(\S+)\s*/);
+  // Extract --key <name-or-path> (or --key=<name>) — supports quoted paths with spaces
+  const keyMatch =
+    clean.match(/\s+--key[\s=]+"([^"]+)"/) ||
+    clean.match(/^--key[\s=]+"([^"]+)"\s*/) ||
+    clean.match(/\s+--key[\s=]+'([^']+)'/) ||
+    clean.match(/^--key[\s=]+'([^']+)'\s*/) ||
+    clean.match(/\s+--key[\s=]+(\S+)/) ||
+    clean.match(/^--key[\s=]+(\S+)\s*/);
   if (keyMatch) {
     keyOverride = keyMatch[1];
     clean = clean.replace(keyMatch[0], ' ');
@@ -204,6 +210,8 @@ export class FlashTerminal {
   private processingWarnShown = false;
   /** Prevent trade execution during wallet rebuild */
   private walletRebuilding = false;
+  /** Active stdin listener for readHidden — ensures only one at a time */
+  private hiddenInputListener: ((buf: Buffer) => void) | null = null;
   /** Buffer for input received while processing (e.g. pre-typed "y" for confirmation) */
   private bufferedLine: string | null = null;
   /** RPC manager for failover support */
@@ -548,13 +556,17 @@ export class FlashTerminal {
       // State reconciliation — start after 8s (after recovery finishes)
       setTimeout(() => {
         const reconciler = initReconciler(this.flashClient);
-        reconciler.reconcile().catch(() => {});
+        reconciler.reconcile().catch((e) => {
+          getLogger().warn('reconciliation', `Failed: ${e instanceof Error ? e.message : String(e)}`);
+        });
         reconciler.startPeriodicSync();
       }, 8_000).unref();
     } else {
       // Sim mode: just init reconciler without periodic sync
       const reconciler = initReconciler(this.flashClient);
-      reconciler.reconcile().catch(() => {});
+      reconciler.reconcile().catch((e) => {
+        getLogger().warn('reconciliation', `Failed: ${e instanceof Error ? e.message : String(e)}`);
+      });
     }
 
     // Start background maintenance after 10s
@@ -1272,22 +1284,42 @@ export class FlashTerminal {
     return new Promise((resolve) => {
       this.rl.pause();
 
+      // Remove any prior hidden-input listener to prevent accumulation
+      if (this.hiddenInputListener) {
+        process.stdin.removeListener('data', this.hiddenInputListener);
+        this.hiddenInputListener = null;
+      }
+
       process.stdout.write(prompt);
 
       // Read raw keystrokes — avoids readline race conditions with stdin ownership.
       // Accumulates characters until Enter, handles Backspace and Ctrl+C.
       const chunks: string[] = [];
       const wasRaw = process.stdin.isRaw;
+      let resolved = false;
 
       if (process.stdin.isTTY) {
         process.stdin.setRawMode(true);
       }
       process.stdin.resume();
 
+      const cleanup = () => {
+        if (this.hiddenInputListener) {
+          process.stdin.removeListener('data', this.hiddenInputListener);
+          this.hiddenInputListener = null;
+        }
+        if (process.stdin.isTTY) {
+          process.stdin.setRawMode(wasRaw ?? false);
+        }
+        this.rl.resume();
+      };
+
       const onData = (buf: Buffer) => {
+        if (resolved) return;
         for (const byte of buf) {
           if (byte === 0x0d || byte === 0x0a) {
             // Enter — done
+            resolved = true;
             cleanup();
             process.stdout.write('\n');
             resolve(chunks.join('').trim());
@@ -1295,6 +1327,7 @@ export class FlashTerminal {
           }
           if (byte === 0x03) {
             // Ctrl+C — cancel
+            resolved = true;
             cleanup();
             process.stdout.write('\n');
             resolve('');
@@ -1309,14 +1342,7 @@ export class FlashTerminal {
         }
       };
 
-      const cleanup = () => {
-        process.stdin.removeListener('data', onData);
-        if (process.stdin.isTTY) {
-          process.stdin.setRawMode(wasRaw ?? false);
-        }
-        this.rl.resume();
-      };
-
+      this.hiddenInputListener = onData;
       process.stdin.on('data', onData);
     });
   }
@@ -2601,9 +2627,16 @@ export class FlashTerminal {
     if (result.requiresConfirmation && result.data?.executeAction) {
       const confirmed = await this.confirm(result.confirmationPrompt ?? 'Confirm?');
       if (confirmed) {
-        // Prevent trade execution during wallet rebuild
+        // Prevent trade execution during wallet rebuild — check atomically before submission
         if (this.walletRebuilding) {
           console.log(chalk.red('  Wallet switch in progress — trade cancelled for safety.'));
+          this.restoreWallet(walletRestoreData);
+          return;
+        }
+        // Double-check: yield to event loop so any pending wallet rebuild can settle
+        await new Promise((r) => setImmediate(r));
+        if (this.walletRebuilding) {
+          console.log(chalk.red('  Wallet switch detected — trade cancelled for safety.'));
           this.restoreWallet(walletRestoreData);
           return;
         }
@@ -2630,8 +2663,8 @@ export class FlashTerminal {
                     console.log(chalk.yellow('  ⚠ Position not yet found on-chain. It may take a moment to settle.'));
                   }
                 })
-                .catch(() => {
-                  /* non-critical background check */
+                .catch((e) => {
+                  getLogger().warn('trade-verify', `Post-trade verification failed: ${e instanceof Error ? e.message : String(e)}`);
                 });
             }
           }
@@ -2656,8 +2689,10 @@ export class FlashTerminal {
         const walletPath = walletStore.getWalletPath(restoreData.name);
         this.walletManager.loadFromFile(walletPath);
       }
-    } catch {
-      /* best-effort restore */
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.log(chalk.yellow(`  Warning: wallet restore failed for "${restoreData.name}": ${msg}`));
+      getLogger().warn('wallet', `Wallet restore failed: ${msg}`);
     }
     this.context.walletAddress = restoreData.address;
     this.context.walletName = restoreData.name;
@@ -2847,16 +2882,22 @@ export class FlashTerminal {
     console.log('');
 
     // Run in background — don't block the REPL
-    this.liveAgent.start().then(() => {
-      console.log('');
-      console.log(chalk.dim('  Agent finished.'));
-      this.handleAgentReport();
-      console.log('');
+    try {
+      this.liveAgent.start().then(() => {
+        console.log('');
+        console.log(chalk.dim('  Agent finished.'));
+        this.handleAgentReport();
+        console.log('');
+        this.rl.prompt();
+      }).catch((err: Error) => {
+        console.log(chalk.red(`  Agent error: ${err.message}`));
+        this.rl.prompt();
+      });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.log(chalk.red(`  Agent failed to start: ${msg}`));
       this.rl.prompt();
-    }).catch((err: Error) => {
-      console.log(chalk.red(`  Agent error: ${err.message}`));
-      this.rl.prompt();
-    });
+    }
   }
 
   private handleAgentStop(): void {
@@ -3059,14 +3100,22 @@ export class FlashTerminal {
         this.bufferedLine = null;
       }
 
+      // Atomic guard: prevent both timeout and callback from resolving
+      let settled = false;
+
       const timeout = setTimeout(() => {
+        if (settled) return;
+        settled = true;
         this.pendingConfirmation = null;
         process.stdout.write(`\n  ${chalk.yellow('Confirmation timed out — trade cancelled.')}\n`);
         resolve(false);
       }, FlashTerminal.CONFIRM_TIMEOUT_MS);
       timeout.unref();
       this.pendingConfirmation = (answer) => {
+        if (settled) return;
+        settled = true;
         clearTimeout(timeout);
+        this.pendingConfirmation = null;
         resolve(answer.toLowerCase() === 'yes' || answer.toLowerCase() === 'y');
       };
     });

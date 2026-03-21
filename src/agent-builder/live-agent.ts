@@ -38,6 +38,9 @@ import { SimulationEngine } from './simulation-engine.js';
 import { PerformanceDashboard } from './performance-dashboard.js';
 import { MacroRegimeDetector } from './macro-regime.js';
 import { EdgeRefiner } from './edge-refiner.js';
+import { MarketEventBus, MarketEventType } from './event-bus.js';
+import { DecisionCache } from './decision-cache.js';
+import { PerfMetrics } from './perf-metrics.js';
 import { saveAgentState, loadAgentState, buildPersistedState } from './state-persistence.js';
 import type { CompositeSignal } from './signal-fusion.js';
 
@@ -84,6 +87,22 @@ export class LiveTradingAgent {
   private readonly dashboard: PerformanceDashboard;
   private readonly macroRegime: MacroRegimeDetector;
   private readonly edgeRefiner: EdgeRefiner;
+  /** V_SUPREME: Event-driven market event bus */
+  private readonly eventBus: MarketEventBus;
+  /** V_SUPREME: Decision cache for fast-path evaluation */
+  private readonly decisionCache: DecisionCache;
+  /** V_SUPREME: Performance metrics tracker */
+  private readonly perf: PerfMetrics;
+  /** V_SUPREME: Execution queue — decouples signal from execution */
+  private executionQueue: Array<{ decision: TradeDecision; snapshot: MarketSnapshot }> = [];
+  /** V_SUPREME: Pre-computed macro state (updated async every N ticks) */
+  private precomputedMacro: { regime: string; tradesBlocked: boolean; sizeMultiplier: number; strategyBias: string; btcTrend: string; avgVolatility: number; correlationStrength: number } | null = null;
+  /** V_SUPREME: Pre-computed regime states per market */
+  private precomputedRegimes: Map<string, { regime: string; params: import('./regime-adapter.js').RegimeParams }> = new Map();
+  /** V_SUPREME: Last precompute timestamp */
+  private lastPrecomputeAt = 0;
+  /** V_SUPREME: Previous snapshots for event detection */
+  private prevSnapshots: MarketSnapshot[] = [];
   /** Track entry state for policy reward computation */
   private activeTradeStates: Map<string, { state: import('./policy-learner.js').MarketState; action: import('./policy-learner.js').PolicyAction; entryTick: number }> = new Map();
   /** Track exit state for exit policy learning */
@@ -156,9 +175,9 @@ export class LiveTradingAgent {
       atrMultiplier: 2.0,
       scaleOutLevels: [1, 2, 3],
       scaleOutPercents: [30, 30, 40],
-      maxFlatTicks: 30,           // ~5 min flat → close
-      flatThresholdPct: 0.3,      // ±0.3% counts as flat
-      maxHoldTicks: 120,          // ~20 min max hold — give trades time to develop
+      maxFlatTicks: 20,           // ~3 min flat → close
+      flatThresholdPct: 0.5,      // ±0.5% counts as flat
+      maxHoldTicks: 60,           // ~10 min max hold — balance development vs throughput
       maxRiskPct: this.config.risk.positionSizePct,
       kellyFraction: 0.25,
     });
@@ -185,6 +204,9 @@ export class LiveTradingAgent {
     this.dashboard = new PerformanceDashboard();
     this.macroRegime = new MacroRegimeDetector();
     this.edgeRefiner = new EdgeRefiner();
+    this.eventBus = new MarketEventBus();
+    this.decisionCache = new DecisionCache();
+    this.perf = new PerfMetrics();
     this.state = this.createInitialState();
 
     // Restore persisted learning state
@@ -204,7 +226,11 @@ export class LiveTradingAgent {
     this.log('info', `Scanning: ${this.config.markets.length} markets → score + rank → top trades only`);
     this.log('info', `Strategies: ${this.strategies.map((s) => s.name).join(', ')}`);
     this.log('info', `Engines: meta-agent, opportunity scorer, exit-policy, correlation-guard, EV, Bayesian fusion`);
-    this.log('info', `Mode: persistent learning | correlation-aware | exit intelligence`);
+    this.log('info', `Mode: V_SUPREME event-driven | parallel scoring | decision cache`);
+    // Subscribe to high-priority events for fast-path execution
+    this.eventBus.subscribe(MarketEventType.PRICE_SPIKE, (event) => {
+      this.log('verbose', `EVENT BUS: ${event.type} ${event.market} ${event.magnitude > 0 ? '+' : ''}${event.magnitude.toFixed(2)}% [${event.priority}]`);
+    });
     const pm = this.policyLearner.getMetrics();
     if (pm.policySize > 0) this.log('info', `Restored: ${pm.policySize} policy states, ${pm.totalUpdates} prior updates`);
     if (this.config.dryRun) this.log('info', 'DRY RUN — decisions logged but not executed');
@@ -247,15 +273,22 @@ export class LiveTradingAgent {
       }
 
       if (this.running && !this.stopRequested) {
-        // V16 ADAPTIVE POLLING: fast when volatile, slow when quiet
+        // V_SUPREME: SMART THROTTLING — dynamic 2s-30s based on activity
         let pollMs = this.config.pollIntervalMs;
 
-        // Volatility-adaptive: if recent snapshots show big moves, poll faster
         if (this.cachedSnapshots.length > 0) {
           const avgAbsChange = this.cachedSnapshots.reduce((s, snap) => s + Math.abs(snap.priceChange24h), 0) / this.cachedSnapshots.length;
-          if (avgAbsChange > 5) pollMs = Math.round(pollMs * 0.5);        // High vol → 2x faster
+          // V_SUPREME: Aggressive scaling — 2s during spikes, 30s during dead markets
+          if (avgAbsChange > 8) pollMs = 2_000;           // Extreme vol → 2s
+          else if (avgAbsChange > 5) pollMs = Math.round(pollMs * 0.4);  // High vol → 40%
+          else if (avgAbsChange > 2) pollMs = pollMs;     // Normal
+          else if (avgAbsChange < 0.5) pollMs = Math.min(30_000, Math.round(pollMs * 2.0)); // Dead → 2x slower, cap 30s
           else if (avgAbsChange < 1) pollMs = Math.round(pollMs * 1.5);   // Low vol → 1.5x slower
         }
+
+        // Also accelerate if event bus has recent events
+        const recentEvents = this.eventBus.getHistory().filter(e => Date.now() - e.timestamp < 60_000);
+        if (recentEvents.length >= 2) pollMs = Math.min(pollMs, 3_000); // Active events → max 3s
 
         // Health degradation override
         try {
@@ -296,6 +329,16 @@ export class LiveTradingAgent {
     this.simEngine.reset();
     this.macroRegime.reset();
     this.edgeRefiner.reset();
+    // V_SUPREME: Log final performance metrics before cleanup
+    const perfReport = this.perf.formatReport();
+    if (perfReport) this.log('info', `PERF REPORT:\n${perfReport}`);
+    this.eventBus.clear();
+    this.decisionCache.reset();
+    this.perf.reset();
+    this.executionQueue = [];
+    this.precomputedMacro = null;
+    this.precomputedRegimes.clear();
+    this.prevSnapshots = [];
     this.recentTradeEVs = [];
     this.fastPathCount = 0;
     this.fullPipelineCount = 0;
@@ -318,11 +361,15 @@ export class LiveTradingAgent {
   getJournal(): TradeJournal { return this.journal; }
   getRiskManager(): RiskManager { return this.risk; }
   getDashboard(): PerformanceDashboard { return this.dashboard; }
+  getPerf(): PerfMetrics { return this.perf; }
+  getEventBus(): MarketEventBus { return this.eventBus; }
+  getDecisionCacheStats() { return this.decisionCache.getStats(); }
   get isRunning(): boolean { return this.running; }
 
   // ─── Core Loop ─────────────────────────────────────────────────────
 
   private async tick(): Promise<void> {
+    const tickTimer = this.perf.startTimer('tick');
     this.state.iteration++;
     this.callbacks.onTick?.(this.state, this.state.iteration);
 
@@ -348,28 +395,33 @@ export class LiveTradingAgent {
       return;
     }
 
-    // V17: OBSERVE — TTL-aware caching with quality-gated fast path
-    // Price data TTL: 15s (must be fresh for trading decisions)
-    // Full scan on first tick, then only when cache expires
+    // V_SUPREME: OBSERVE — TTL-aware caching + event bus detection
     const PRICE_TTL_MS = 15_000;
     const cacheAge = Date.now() - this.lastFullScanAt;
     const needsFullScan = this.cachedSnapshots.length === 0 || cacheAge > PRICE_TTL_MS;
 
+    const fetchTimer = this.perf.startTimer('market_fetch');
     const [positions, snapshots] = await Promise.all([
       this.fetchPositions(),
       needsFullScan ? this.fetchMarketSnapshots() : Promise.resolve(this.cachedSnapshots),
     ]);
+    this.perf.endTimer('market_fetch', fetchTimer);
 
     if (needsFullScan && snapshots.length > 0) {
+      // V_SUPREME: Detect events via event bus before updating cache
+      if (this.prevSnapshots.length > 0) {
+        this.eventBus.detectAll(snapshots, this.prevSnapshots);
+      }
+      this.prevSnapshots = snapshots;
       this.cachedSnapshots = snapshots;
       this.lastFullScanAt = Date.now();
     }
 
-    // V17: On cached ticks, only monitor positions (no new entries from stale data)
-    const isFreshData = needsFullScan || cacheAge < 5_000; // <5s = fresh enough for entries
+    const isFreshData = needsFullScan || cacheAge < 5_000;
 
     if (!snapshots.length) {
       this.log('verbose', 'No market data available');
+      this.perf.endTimer('tick', tickTimer);
       return;
     }
 
@@ -412,34 +464,62 @@ export class LiveTradingAgent {
       this.correlationGuard.recordPrice(snapshot.market, snapshot.price);
     }
 
-    // V18: EVENT DETECTION — detect significant moves even on cached ticks
+    // V_SUPREME: EVENT DETECTION — event bus + legacy detector for cached ticks
     const events = this.detectEvents(snapshots);
 
-    // V17/V18: Cached ticks monitor positions + check for events
+    // V_SUPREME: Cached ticks — fast-path event handling
     if (!isFreshData) {
       if (events.length > 0) {
-        // Event detected on cached tick — run partial pipeline for event markets only
+        const eventTimer = this.perf.startTimer('event_path');
         await this.handleEventTriggers(events, positions);
+        this.perf.endTimer('event_path', eventTimer);
       } else {
         this.log('verbose', `Fast tick (cache age ${Math.round(cacheAge / 1000)}s) — monitoring only`);
       }
+      this.perf.endTimer('tick', tickTimer);
       return;
     }
 
-    // MACRO REGIME: cross-asset environment detection (only on fresh data)
-    const macro = this.macroRegime.update(snapshots);
+    // V_SUPREME: PRE-COMPUTED MACRO STATE — update every 5 ticks or when stale
+    const PRECOMPUTE_INTERVAL = 5;
+    const needsPrecompute = !this.precomputedMacro || this.state.iteration % PRECOMPUTE_INTERVAL === 0 || Date.now() - this.lastPrecomputeAt > 30_000;
+    if (needsPrecompute) {
+      const macro = this.macroRegime.update(snapshots);
+      this.precomputedMacro = macro;
+      // Pre-compute regimes for all markets
+      for (const snap of snapshots) {
+        const regime = this.regimeAdapter.detectRegime(snap.market, snap.price, snap.priceChange24h);
+        const params = this.regimeAdapter.getParams(regime.regime);
+        this.precomputedRegimes.set(snap.market, { regime: regime.regime, params });
+        this.marketRegimes.set(snap.market, regime.regime);
+      }
+      this.lastPrecomputeAt = Date.now();
+    }
+    const macro = this.precomputedMacro!;
+
     if (macro.tradesBlocked) {
       this.log('normal', `MACRO RISK-OFF: ${macro.regime} (BTC ${macro.btcTrend}, vol ${macro.avgVolatility.toFixed(1)}%, corr ${(macro.correlationStrength * 100).toFixed(0)}%) — trades blocked`);
+      this.perf.endTimer('tick', tickTimer);
       return;
     }
     if (macro.regime !== 'NEUTRAL') {
       this.log('verbose', `MACRO: ${macro.regime} (BTC ${macro.btcTrend}, size ${(macro.sizeMultiplier * 100).toFixed(0)}%, bias ${macro.strategyBias})`);
     }
 
+    // V_SUPREME: PARALLEL SIGNAL FUSION with decision cache
+    const fusionTimer = this.perf.startTimer('signal_fusion');
     const compositeMap = new Map<string, CompositeSignal>();
-    for (const snapshot of snapshots) {
-      compositeMap.set(snapshot.market, this.fusion.fuse(snapshot, snapshot.fundingRate));
-    }
+    await Promise.all(snapshots.map(async (snapshot) => {
+      const cached = this.decisionCache.get(snapshot.market, 'signal') as CompositeSignal | null;
+      if (cached && this.decisionCache.isDelta(snapshot.market, snapshot)) {
+        compositeMap.set(snapshot.market, cached);
+      } else {
+        const result = this.fusion.fuse(snapshot, snapshot.fundingRate);
+        compositeMap.set(snapshot.market, result);
+        this.decisionCache.set(snapshot.market, 'signal', result);
+      }
+    }));
+    this.perf.endTimer('signal_fusion', fusionTimer);
 
     const rankedMarkets = this.scanner.rank(snapshots, compositeMap);
     const tradeableMarkets = new Set(rankedMarkets.map((r) => r.market));
@@ -478,6 +558,7 @@ export class LiveTradingAgent {
     const timeCheck = this.timeIntel.check();
     if (!timeCheck.allowed) {
       this.log('verbose', `Time filter: ${timeCheck.reason}`);
+      this.perf.endTimer('tick', tickTimer);
       return;
     }
 
@@ -499,6 +580,7 @@ export class LiveTradingAgent {
 
     if (metaDecision.mode === 'HALT') {
       this.log('normal', `META: HALT — ${metaDecision.reason}`);
+      this.perf.endTimer('tick', tickTimer);
       return;
     }
 
@@ -535,7 +617,7 @@ export class LiveTradingAgent {
     this.dashboard.recordTick(this.state.iteration, this.state.currentCapital, metaDecision.mode, policyMetrics.explorationRate);
 
     // Hard guards (kept as safety net)
-    if (this.hourlyTrades.length >= 8) return;
+    if (this.hourlyTrades.length >= 8) { this.perf.endTimer('tick', tickTimer); return; }
     // Loss streak pause: skip 3 ticks (~30s cooldown), then resume
     if (this.state.consecutiveLosses >= 6) {
       const ticksSinceLastTrade = this.state.lastTradeTimestamp > 0
@@ -553,196 +635,33 @@ export class LiveTradingAgent {
     let tickCapitalAllocated = this.state.positions.reduce((sum, p) => sum + (p.collateralUsd ?? 0), 0);
     const maxCapital = this.state.currentCapital * 0.15;
 
-    // Score ALL opportunities, then execute only the best
+    // V_SUPREME: PARALLEL OPPORTUNITY SCORING — evaluate ALL markets concurrently
+    const decisionTimer = this.perf.startTimer('decision');
     const opportunities: Array<{ snapshot: typeof snapshots[0]; score: number; decision: TradeDecision }> = [];
 
-    for (const snapshot of snapshots) {
-      if (!tradeableMarkets.has(snapshot.market)) continue;
-
-      // Hard guards (can't soft-gate these)
+    // Phase 4: Pre-filter with short-circuit gates (zero-cost eliminations)
+    const candidates = snapshots.filter((snapshot) => {
+      if (!tradeableMarkets.has(snapshot.market)) return false;
       const marketCooldown = this.marketCooldowns.get(snapshot.market) ?? 0;
-      if (now < marketCooldown) continue;
+      if (now < marketCooldown) return false;
       const mktTrades = (this.marketHourlyTrades.get(snapshot.market) ?? []).filter((t) => now - t < 3_600_000);
       this.marketHourlyTrades.set(snapshot.market, mktTrades);
-      if (mktTrades.length >= 2) continue;
+      if (mktTrades.length >= 2) return false;
+      // Short-circuit: skip if signal is weak (avoids full pipeline)
+      const composite = compositeMap.get(snapshot.market);
+      if (!composite || composite.confidence < 0.30 || !composite.confirmed) return false;
+      return true;
+    });
 
-      const regime = this.regimeAdapter.detectRegime(snapshot.market, snapshot.price, snapshot.priceChange24h);
-      const regimeParams = this.regimeAdapter.getParams(regime.regime);
-      this.marketRegimes.set(snapshot.market, regime.regime);
+    // Phase 2: Parallel scoring of all candidates (Promise.all)
+    const scoringResults = await Promise.all(candidates.map(async (snapshot) => {
+      return this.scoreOpportunity(snapshot, compositeMap, stats, metaDecision, macro, now, COLD_START_TRADES);
+    }));
 
-      // EDGE REFINER V2: scale down (not block) regimes with negative EV
-      const regimeRefinerMult = this.edgeRefiner.getRegimeMultiplier(regime.regime);
-
-      const composite = compositeMap.get(snapshot.market)!;
-      const marketSignals = this.signals.detect(snapshot);
-
-      // 2-tick confirmation (hard — prevents noise entries)
-      const prevDir = this.prevSignals.get(snapshot.market);
-      this.prevSignals.set(snapshot.market, composite.direction);
-      if (composite.direction !== 'neutral' && prevDir !== composite.direction) continue;
-      if (composite.confidence < 0.30 || !composite.confirmed) continue;
-
-      // POLICY LEARNER: ask learned policy what to do in this state
-      const policyState = this.policyLearner.buildState(
-        regime.regime,
-        composite.direction,
-        composite.confidence,
-        Math.abs(snapshot.priceChange24h),
-        stats.winRate,
-      );
-      const policyRec = this.policyLearner.recommend(policyState);
-
-      // COLD-START OVERRIDE: ignore policy SKIP during first 15 trades — need data to learn from
-      const ignorePolicySkip = stats.totalTrades < COLD_START_TRADES;
-      if (!policyRec.action.startsWith('trade') && !policyRec.isExploration && !ignorePolicySkip) {
-        this.log('verbose', `${snapshot.market}: policy recommends SKIP (conf=${(policyRec.confidence * 100).toFixed(0)}%)`);
-        // Still simulate for learning
-        this.simEngine.simulate(snapshot.market, composite.direction === 'bearish' ? 'short' : 'long', snapshot.price, 0, 'policy_skip', regime.regime, composite.confidence);
-        continue;
-      }
-
-      // Apply policy parameters to confidence floor
-      const policyParams = this.policyLearner.actionToParams(policyRec.action);
-
-      // Strategy ensemble
-      const ed = this.ensemble.evaluate(snapshot, marketSignals, composite);
-      if (!ed.shouldTrade) continue;
-
-      // Regime-strategy check (soft — feeds into score)
-      const votingStrategies = ed.votes.filter((v) => v.result.shouldTrade && !v.shadow).map((v) => v.strategy);
-      const allowedInRegime = this.regimeAdapter.filterStrategies(regime.regime, votingStrategies);
-      const regimeAllowed = allowedInRegime.length > 0;
-
-      // EV check (soft — feeds into score)
-      const primaryStrategy = allowedInRegime[0] || votingStrategies[0] || 'ensemble';
-      const evCheck = this.expectancy.checkEV(primaryStrategy, ed.confidence);
-
-      // Technical signal (soft — feeds into score with reduced weight)
-      const techSignal = this.technicals.signal(snapshot.market, snapshot.price);
-      const techDataAvailable = this.technicals.dataPoints(snapshot.market) >= 30;
-      const side = ed.side ?? 'long';
-
-      // Build trade parameters — ensure minimum SL/TP distance for viable R:R
-      const leverage = this.risk.clampLeverage(Math.min(3, regimeParams.maxLeverage ?? 3));
-      const minSlPct = 0.015; // Minimum 1.5% stop distance
-      const slDistance = Math.max(snapshot.price * minSlPct, snapshot.price * 0.02 * (regimeParams.stopAtrMultiplier ?? 2.0) / 2.0);
-      const tpDistance = slDistance * Math.max(2.0, regimeParams.takeProfitR ?? 2.0); // Always at least 2:1
-      const defaultTp = side === 'long' ? snapshot.price + tpDistance : snapshot.price - tpDistance;
-      const defaultSl = side === 'long' ? snapshot.price - slDistance : snapshot.price + slDistance;
-      // Use strategy suggestion if it gives BETTER R:R, otherwise use defaults
-      const sugTp = ed.bestResult?.suggestedTp;
-      const sugSl = ed.bestResult?.suggestedSl;
-      const sugRR = sugTp && sugSl ? Math.abs(sugTp - snapshot.price) / Math.abs(snapshot.price - sugSl) : 0;
-      const defRR = tpDistance / slDistance;
-      const tp = (sugTp && sugRR >= defRR) ? sugTp : defaultTp;
-      const sl = (sugSl && sugRR >= defRR) ? sugSl : defaultSl;
-      const riskDist = Math.abs(snapshot.price - sl);
-      const rewardDist = Math.abs(tp - snapshot.price);
-      const rrRatio = riskDist > 0 ? rewardDist / riskDist : 0;
-
-      // Dynamic sizing (meta-adjusted) — compute before scoring for execution cost model
-      // UNCERTAINTY: reduce size when signals are unstable (many factors, low confidence)
-      let uncertaintyMultiplier = 1.0;
-      if (composite.totalFactors >= 3 && composite.confidence < 0.4) {
-        uncertaintyMultiplier = 0.5; // High uncertainty → half size
-      } else if (composite.totalFactors >= 2 && composite.confidence < 0.5) {
-        uncertaintyMultiplier = 0.75; // Moderate uncertainty → 75% size
-      }
-      const sizing = this.sizer.calculate(this.state.currentCapital, ed.confidence, stats, ddState, regimeParams.sizeMultiplier * metaDecision.sizeMultiplier * uncertaintyMultiplier * macro.sizeMultiplier * regimeRefinerMult, this.state.consecutiveLosses);
-
-      // ─── OPPORTUNITY SCORING (adaptive weights + execution costs) ──
-      const totalOi = snapshot.longOi + snapshot.shortOi;
-      const posSize = sizing.collateral * leverage;
-      const oppScore = this.scorer.score(
-        composite, ed.confidence, ed.agreeing, ed.totalVoters,
-        evCheck, techSignal, techDataAvailable,
-        regimeAllowed, rrRatio, metaDecision.scoreThreshold,
-        posSize, totalOi, snapshot.price, sl,
-      );
-
-      if (!oppScore.passes) {
-        this.log('verbose', `${snapshot.market}: score ${oppScore.summary} < threshold ${metaDecision.scoreThreshold}`);
-        // COUNTERFACTUAL: record this skip to learn from later
-        this.counterfactual.recordSkip(snapshot.market, side, snapshot.price, oppScore.total, `score<${metaDecision.scoreThreshold}`, primaryStrategy);
-        continue;
-      }
-
-      const strategyName = (allowedInRegime.length > 0 ? allowedInRegime : votingStrategies).join('+') || 'ensemble';
-
-      // EDGE REFINER: skip strategies that have been disabled due to negative EV
-      if (this.edgeRefiner.isStrategyDisabled(strategyName)) {
-        this.log('verbose', `${snapshot.market}: strategy '${strategyName}' disabled by edge refiner`);
-        this.counterfactual.recordSkip(snapshot.market, side, snapshot.price, oppScore.total, 'refiner_disabled', strategyName);
-        continue;
-      }
-
-      // Compute base collateral (further adjustments applied after all gates pass)
-      const baseCollateral = Math.max(1, Math.min(sizing.collateral, Math.max(1, maxCapital - tickCapitalAllocated)) * this.edgeRefiner.getSizeMultiplier());
-
-      const decision: TradeDecision = {
-        action: 'open' as DecisionAction,
-        market: snapshot.market, side, leverage, collateral: baseCollateral, tp, sl,
-        strategy: strategyName,
-        confidence: ed.confidence,
-        reasoning: `SCORE=${oppScore.total} ${oppScore.summary} | ${metaDecision.mode} | ${regime.regime}`,
-        signals: ed.bestResult?.signals ?? [],
-        riskLevel: 'safe',
-      };
-
-      const riskCheck = this.risk.assessRisk(decision, this.state);
-      decision.riskLevel = riskCheck.riskLevel;
-      decision.blockReason = riskCheck.blockReason;
-
-      // Portfolio intelligence — prevent correlated trades
-      const portfolioCheck = this.portfolioIntel.check(this.state.positions, snapshot.market, side, baseCollateral * leverage, this.state.currentCapital);
-      if (!portfolioCheck.allowed) {
-        this.log('verbose', `${snapshot.market}: portfolio blocked — ${portfolioCheck.reason}`);
-        this.counterfactual.recordSkip(snapshot.market, side, snapshot.price, oppScore.total, 'portfolio', primaryStrategy);
-        continue;
-      }
-
-      // CORRELATION GUARD — prevent hidden leverage in correlated assets
-      const corrCheck = this.correlationGuard.check(this.state.positions, snapshot.market, side, baseCollateral * leverage, this.state.currentCapital);
-      if (!corrCheck.allowed) {
-        this.log('verbose', `${snapshot.market}: correlation blocked — ${corrCheck.reason}`);
-        this.counterfactual.recordSkip(snapshot.market, side, snapshot.price, oppScore.total, 'correlation', primaryStrategy);
-        continue;
-      }
-      // MICRO-ENTRY: check if current price is good for entry
-      const microCheck = this.microEntry.check(snapshot.market, side, snapshot.price);
-      if (!microCheck.enterNow) {
-        this.log('verbose', `${snapshot.market}: micro-entry poor — ${microCheck.reason}`);
-        this.counterfactual.recordSkip(snapshot.market, side, snapshot.price, oppScore.total, 'micro_entry', primaryStrategy);
-        continue;
-      }
-
-      // Apply all remaining size adjustments (correlation, time, policy)
-      let finalCollateral = baseCollateral;
-      if (corrCheck.sizeMultiplier < 1.0) finalCollateral = Math.max(1, finalCollateral * corrCheck.sizeMultiplier);
-      if (timeCheck.sizeMultiplier !== 1.0) finalCollateral = Math.max(1, finalCollateral * timeCheck.sizeMultiplier);
-
-      // Apply micro-entry quality to score (excellent = bonus, poor already filtered)
-      const microBonus = microCheck.quality === 'excellent' ? 5 : microCheck.quality === 'good' ? 2 : 0;
-      const finalScore = oppScore.total + microBonus;
-
-      // Apply policy size multiplier and set final collateral on decision
-      if (policyParams.sizeMultiplier !== 1.0) finalCollateral = Math.max(1, finalCollateral * policyParams.sizeMultiplier);
-      decision.collateral = finalCollateral;
-
-      // SIMULATION: record every scored opportunity for parallel learning
-      this.simEngine.simulate(
-        snapshot.market, side, snapshot.price, finalScore,
-        decision.strategy, regime.regime, ed.confidence,
-      );
-
-      if (decision.riskLevel !== 'blocked') {
-        // Store policy state for reward computation on close
-        this.activeTradeStates.set(`${snapshot.market}:${side}`, {
-          state: policyState, action: policyRec.action, entryTick: this.state.iteration,
-        });
-        opportunities.push({ snapshot, score: finalScore, decision });
-      }
+    for (const result of scoringResults) {
+      if (result) opportunities.push(result);
     }
+    this.perf.endTimer('decision', decisionTimer);
 
     // Execute ONLY the best opportunities (sorted by score, up to max positions)
     opportunities.sort((a, b) => b.score - a.score);
@@ -761,12 +680,13 @@ export class LiveTradingAgent {
     } catch { /* health module may not be loaded */ }
 
     // V17: TRADE QUALITY FILTER — if recent EV is negative, raise thresholds
+    // Disabled during cold-start: system needs trades to learn from
     let qualityMult = 1.0;
-    if (this.recentTradeEVs.length >= 10) {
+    if (this.recentTradeEVs.length >= 10 && stats.totalTrades >= COLD_START_TRADES) {
       const rollingEV = this.recentTradeEVs.reduce((a, b) => a + b, 0) / this.recentTradeEVs.length;
       if (rollingEV < 0) {
-        qualityMult = 1.3; // Raise threshold 30% when recent trades are negative EV
-        this.log('verbose', `V17: Rolling EV $${rollingEV.toFixed(2)} < 0 — threshold raised 30%`);
+        qualityMult = 1.15; // Raise threshold 15% (was 30% — too aggressive)
+        this.log('verbose', `V17: Rolling EV $${rollingEV.toFixed(2)} < 0 — threshold raised 15%`);
       }
     }
 
@@ -784,6 +704,10 @@ export class LiveTradingAgent {
       this.log('verbose', `Best opportunity ${opportunities[0].decision.market} scored ${opportunities[0].score} < floor ${effectiveFloor} — no trades this tick`);
       opportunities.length = 0; // Clear all
     }
+
+    // V_SUPREME: PARALLEL EXECUTION — execute top N opportunities (up to 3)
+    const execTimer = this.perf.startTimer('execution');
+    const executionPromises: Promise<void>[] = [];
 
     for (const opp of opportunities) {
       if (tickPositionCount >= metaDecision.maxPositions) break;
@@ -811,7 +735,8 @@ export class LiveTradingAgent {
         reasoning: opp.decision.reasoning,
       });
 
-      await this.executeTrade(opp.decision, opp.snapshot);
+      // V_SUPREME: Queue execution — serial for now (tx mutex), but decoupled from scoring
+      executionPromises.push(this.executeTrade(opp.decision, opp.snapshot));
       tickPositionCount++;
       tickCapitalAllocated += opp.decision.collateral ?? 0;
       this.hourlyTrades.push(now);
@@ -819,6 +744,179 @@ export class LiveTradingAgent {
       mt.push(now);
       this.marketHourlyTrades.set(opp.snapshot.market, mt);
     }
+
+    // Await all executions (serial due to tx mutex, but ready for parallel when safe)
+    for (const p of executionPromises) await p;
+    this.perf.endTimer('execution', execTimer);
+
+    // V_SUPREME: End tick timer and log perf on verbose
+    this.perf.endTimer('tick', tickTimer);
+    if (this.state.iteration % 10 === 0) {
+      const tickStats = this.perf.getStats('tick');
+      const decStats = this.perf.getStats('decision');
+      if (tickStats && decStats) {
+        this.log('verbose', `PERF: tick p50=${tickStats.p50.toFixed(0)}ms p99=${tickStats.p99.toFixed(0)}ms | decision p50=${decStats.p50.toFixed(0)}ms p99=${decStats.p99.toFixed(0)}ms | cache ${JSON.stringify(this.decisionCache.getStats())}`);
+      }
+    }
+  }
+
+  // ─── V_SUPREME: Parallel Opportunity Scorer ──────────────────────────
+  // Extracted from tick() for parallel execution. Returns null if opportunity doesn't pass gates.
+  private scoreOpportunity(
+    snapshot: MarketSnapshot,
+    compositeMap: Map<string, CompositeSignal>,
+    stats: import('./types.js').JournalStats,
+    metaDecision: { mode: string; scoreThreshold: number; sizeMultiplier: number; maxPositions: number },
+    macro: { sizeMultiplier: number; strategyBias: string },
+    now: number,
+    COLD_START_TRADES: number,
+  ): { snapshot: MarketSnapshot; score: number; decision: TradeDecision } | null {
+    // Use pre-computed regime (Phase 6)
+    const precomputed = this.precomputedRegimes.get(snapshot.market);
+    const regime = precomputed ?? (() => {
+      const detected = this.regimeAdapter.detectRegime(snapshot.market, snapshot.price, snapshot.priceChange24h);
+      return { regime: detected.regime, params: this.regimeAdapter.getParams(detected.regime) };
+    })();
+    const regimeParams = regime.params;
+    this.marketRegimes.set(snapshot.market, regime.regime);
+
+    // EDGE REFINER V2: scale down regimes with negative EV
+    const regimeRefinerMult = this.edgeRefiner.getRegimeMultiplier(regime.regime);
+
+    const composite = compositeMap.get(snapshot.market)!;
+    const marketSignals = this.signals.detect(snapshot);
+
+    // Phase 4: SHORT-CIRCUIT — skip if signal direction not confirmed (2-tick)
+    const prevDir = this.prevSignals.get(snapshot.market);
+    this.prevSignals.set(snapshot.market, composite.direction);
+    if (composite.direction !== 'neutral' && prevDir !== composite.direction) return null;
+
+    // POLICY LEARNER
+    const policyState = this.policyLearner.buildState(
+      regime.regime, composite.direction, composite.confidence,
+      Math.abs(snapshot.priceChange24h), stats.winRate,
+    );
+    const policyRec = this.policyLearner.recommend(policyState);
+    const ignorePolicySkip = stats.totalTrades < COLD_START_TRADES;
+    if (!policyRec.action.startsWith('trade') && !policyRec.isExploration && !ignorePolicySkip) {
+      this.simEngine.simulate(snapshot.market, composite.direction === 'bearish' ? 'short' : 'long', snapshot.price, 0, 'policy_skip', regime.regime, composite.confidence);
+      return null;
+    }
+    const policyParams = this.policyLearner.actionToParams(policyRec.action);
+
+    // Strategy ensemble
+    const ed = this.ensemble.evaluate(snapshot, marketSignals, composite);
+    if (!ed.shouldTrade) return null;
+
+    // Phase 4: SHORT-CIRCUIT — EV ≤ 0 immediate skip (after cold-start)
+    const votingStrategies = ed.votes.filter((v) => v.result.shouldTrade && !v.shadow).map((v) => v.strategy);
+    const allowedInRegime = this.regimeAdapter.filterStrategies(regime.regime as import('./regime-adapter.js').RegimeType, votingStrategies);
+    const regimeAllowed = allowedInRegime.length > 0;
+    const primaryStrategy = allowedInRegime[0] || votingStrategies[0] || 'ensemble';
+    const evCheck = this.expectancy.checkEV(primaryStrategy, ed.confidence);
+    if (!evCheck.allowed && stats.totalTrades >= COLD_START_TRADES && !evCheck.reason?.includes('new')) return null;
+
+    // Technical signal
+    const techSignal = this.technicals.signal(snapshot.market, snapshot.price);
+    const techDataAvailable = this.technicals.dataPoints(snapshot.market) >= 30;
+    const side = ed.side ?? 'long';
+
+    // Build trade parameters
+    const leverage = this.risk.clampLeverage(Math.min(3, regimeParams.maxLeverage ?? 3));
+    const minSlPct = 0.015;
+    const slDistance = Math.max(snapshot.price * minSlPct, snapshot.price * 0.02 * (regimeParams.stopAtrMultiplier ?? 2.0) / 2.0);
+    const tpDistance = slDistance * Math.max(2.0, regimeParams.takeProfitR ?? 2.0);
+    const defaultTp = side === 'long' ? snapshot.price + tpDistance : snapshot.price - tpDistance;
+    const defaultSl = side === 'long' ? snapshot.price - slDistance : snapshot.price + slDistance;
+    const sugTp = ed.bestResult?.suggestedTp;
+    const sugSl = ed.bestResult?.suggestedSl;
+    const sugRR = sugTp && sugSl ? Math.abs(sugTp - snapshot.price) / Math.abs(snapshot.price - sugSl) : 0;
+    const defRR = tpDistance / slDistance;
+    const tp = (sugTp && sugRR >= defRR) ? sugTp : defaultTp;
+    const sl = (sugSl && sugRR >= defRR) ? sugSl : defaultSl;
+    const riskDist = Math.abs(snapshot.price - sl);
+    const rewardDist = Math.abs(tp - snapshot.price);
+    const rrRatio = riskDist > 0 ? rewardDist / riskDist : 0;
+
+    // Phase 4: SHORT-CIRCUIT — R:R < 1.5 not worth the pipeline cost
+    if (rrRatio < 1.5) return null;
+
+    // Dynamic sizing
+    let uncertaintyMultiplier = 1.0;
+    if (composite.totalFactors >= 3 && composite.confidence < 0.4) uncertaintyMultiplier = 0.5;
+    else if (composite.totalFactors >= 2 && composite.confidence < 0.5) uncertaintyMultiplier = 0.75;
+
+    const ddState = this.drawdown.getState();
+    const maxCapital = this.state.currentCapital * 0.15;
+    const sizing = this.sizer.calculate(this.state.currentCapital, ed.confidence, stats, ddState, regimeParams.sizeMultiplier * metaDecision.sizeMultiplier * uncertaintyMultiplier * macro.sizeMultiplier * regimeRefinerMult, this.state.consecutiveLosses);
+
+    // Opportunity scoring
+    const totalOi = snapshot.longOi + snapshot.shortOi;
+    const posSize = sizing.collateral * leverage;
+    const oppScore = this.scorer.score(
+      composite, ed.confidence, ed.agreeing, ed.totalVoters,
+      evCheck, techSignal, techDataAvailable,
+      regimeAllowed, rrRatio, metaDecision.scoreThreshold,
+      posSize, totalOi, snapshot.price, sl,
+    );
+
+    if (!oppScore.passes) {
+      this.counterfactual.recordSkip(snapshot.market, side, snapshot.price, oppScore.total, `score<${metaDecision.scoreThreshold}`, primaryStrategy);
+      return null;
+    }
+
+    const strategyName = (allowedInRegime.length > 0 ? allowedInRegime : votingStrategies).join('+') || 'ensemble';
+    if (this.edgeRefiner.isStrategyDisabled(strategyName)) {
+      this.counterfactual.recordSkip(snapshot.market, side, snapshot.price, oppScore.total, 'refiner_disabled', strategyName);
+      return null;
+    }
+
+    // Portfolio + correlation + micro-entry checks
+    let baseCollateral = Math.max(1, Math.min(sizing.collateral, Math.max(1, maxCapital)) * this.edgeRefiner.getSizeMultiplier());
+    const portfolioCheck = this.portfolioIntel.check(this.state.positions, snapshot.market, side, baseCollateral * leverage, this.state.currentCapital);
+    if (!portfolioCheck.allowed) return null;
+    const corrCheck = this.correlationGuard.check(this.state.positions, snapshot.market, side, baseCollateral * leverage, this.state.currentCapital);
+    if (!corrCheck.allowed) return null;
+    const microCheck = this.microEntry.check(snapshot.market, side, snapshot.price);
+    if (!microCheck.enterNow) return null;
+
+    // Apply size adjustments
+    let finalCollateral = baseCollateral;
+    if (corrCheck.sizeMultiplier < 1.0) finalCollateral = Math.max(1, finalCollateral * corrCheck.sizeMultiplier);
+    const timeCheck = this.timeIntel.check();
+    if (timeCheck.sizeMultiplier !== 1.0) finalCollateral = Math.max(1, finalCollateral * timeCheck.sizeMultiplier);
+    const microBonus = microCheck.quality === 'excellent' ? 5 : microCheck.quality === 'good' ? 2 : 0;
+    const finalScore = oppScore.total + microBonus;
+    if (policyParams.sizeMultiplier !== 1.0) finalCollateral = Math.max(1, finalCollateral * policyParams.sizeMultiplier);
+
+    const decision: TradeDecision = {
+      action: 'open' as DecisionAction,
+      market: snapshot.market, side, leverage, collateral: finalCollateral, tp, sl,
+      strategy: strategyName,
+      confidence: ed.confidence,
+      reasoning: `SCORE=${oppScore.total} ${oppScore.summary} | ${metaDecision.mode} | ${regime.regime}`,
+      signals: ed.bestResult?.signals ?? [],
+      riskLevel: 'safe',
+    };
+
+    const riskCheck = this.risk.assessRisk(decision, this.state);
+    decision.riskLevel = riskCheck.riskLevel;
+    decision.blockReason = riskCheck.blockReason;
+
+    if (decision.riskLevel === 'blocked') return null;
+
+    // Store policy state for reward computation
+    this.activeTradeStates.set(`${snapshot.market}:${side}`, {
+      state: policyState, action: policyRec.action, entryTick: this.state.iteration,
+    });
+
+    // Cache decision for fast-path reuse
+    this.decisionCache.set(snapshot.market, 'opportunityScore', { score: finalScore, passes: true });
+
+    // Simulate for learning
+    this.simEngine.simulate(snapshot.market, side, snapshot.price, finalScore, decision.strategy, regime.regime, ed.confidence);
+
+    return { snapshot, score: finalScore, decision };
   }
 
   // ─── Data Access (Live Context) ────────────────────────────────────

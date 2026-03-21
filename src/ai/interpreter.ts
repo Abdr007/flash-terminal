@@ -5,7 +5,7 @@ import { ParsedIntent, ParsedIntentSchema, ActionType, TradeSide } from '../type
 import { getAllMarkets } from '../config/index.js';
 import { getLogger } from '../utils/logger.js';
 import { getErrorMessage } from '../utils/retry.js';
-import { resolveMarket, normalizeAssetText } from '../utils/market-resolver.js';
+import { resolveMarket, normalizeAssetText, getMarketAliases } from '../utils/market-resolver.js';
 import { expandLearnedAlias } from '../cli/learned-aliases.js';
 import { expandTemplate } from '../cli/trade-templates.js';
 import { recordTradeCommand, getPreferredLeverage } from '../cli/trade-predictor.js';
@@ -268,10 +268,10 @@ function fuzzyMarket(token: string): string | null {
     const maxDist = m.length <= 3 ? 1 : 2;
     if (editDistance(token, m.toLowerCase()) <= maxDist) return m;
   }
-  // Try against asset aliases (longer names → distance 2 allowed)
-  const aliasKeys = Object.keys(ASSET_ALIASES);
-  for (const alias of aliasKeys) {
-    if (editDistance(token, alias) <= 2) return ASSET_ALIASES[alias];
+  // Try against market aliases (longer names → distance 2 allowed)
+  const aliases = getMarketAliases();
+  for (const [alias, symbol] of aliases) {
+    if (editDistance(token, alias) <= 2) return symbol;
   }
   return null;
 }
@@ -536,42 +536,6 @@ function normalizeNumberWords(text: string): string {
   }
   return result;
 }
-
-// ─── Asset Alias Dictionary ───────────────────────────────────────────────
-
-const ASSET_ALIASES: Record<string, string> = {
-  solana: 'SOL',
-  bitcoin: 'BTC',
-  ethereum: 'ETH',
-  ether: 'ETH',
-  binance: 'BNB',
-  jupiter: 'JUP',
-  raydium: 'RAY',
-  dogwifhat: 'WIF',
-  bonk: 'BONK',
-  pyth: 'PYTH',
-  gold: 'XAU',
-  silver: 'XAG',
-  crude: 'CRUDEOIL',
-  oil: 'CRUDEOIL',
-  jito: 'JTO',
-  kamino: 'KMNO',
-  metaplex: 'MET',
-  pengu: 'PENGU',
-  penguin: 'PENGU',
-  fartcoin: 'FARTCOIN',
-  hype: 'HYPE',
-  hyperliquid: 'HYPE',
-  ore: 'ORE',
-  zcash: 'ZEC',
-  euro: 'EUR',
-  pound: 'GBP',
-  sterling: 'GBP',
-  yen: 'USDJPY',
-  yuan: 'USDCNH',
-  pump: 'PUMP',
-  pumpfun: 'PUMP',
-};
 
 /** Normalize asset aliases: "solana" → "SOL", "crude oil" → "crudeoil" */
 function normalizeAssetAliases(text: string): string {

@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import chalk from 'chalk';
-import { ToolDefinition, ToolResult, ToolContext, MarketAnalysis, RawActivityRecord } from '../types/index.js';
+import { ToolDefinition, ToolResult, ToolContext, MarketAnalysis, RawActivityRecord, MarketData, Position, MarketOI } from '../types/index.js';
 import { SolanaInspector } from './solana-inspector.js';
 import { resolveMarket } from '../utils/market-resolver.js';
 import { assessAllPositions } from '../risk/liquidation-risk.js';
@@ -147,8 +147,8 @@ export const aiAnalyze: ToolDefinition = {
     // Open Interest
     lines.push(chalk.bold('  Open Interest'));
     if (oi && totalOi > 0) {
-      const rawLongPct = (oi.longOi / totalOi) * 100;
-      const rawShortPct = (oi.shortOi / totalOi) * 100;
+      const rawLongPct = Number.isFinite(oi.longOi) ? (oi.longOi / totalOi) * 100 : 0;
+      const rawShortPct = Number.isFinite(oi.shortOi) ? (oi.shortOi / totalOi) * 100 : 0;
       // Use 1 decimal when < 1% to avoid rounding small values to 0%
       const longPct = rawLongPct < 1 && rawLongPct > 0 ? rawLongPct.toFixed(1) : rawLongPct.toFixed(0);
       const shortPct = rawShortPct < 1 && rawShortPct > 0 ? rawShortPct.toFixed(1) : rawShortPct.toFixed(0);
@@ -333,7 +333,30 @@ export const aiDashboard: ToolDefinition = {
     // ─── Parallel data fetch ─────────────────────────────────────────
     // All sources fetched concurrently. Each has independent error handling.
     const [snapshot, rpcInfo] = await Promise.all([
-      inspector.getFullSnapshot(),
+      inspector.getFullSnapshot().catch((err) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error(chalk.dim(`  [dashboard] snapshot fetch failed: ${msg}`));
+        // Return minimal safe fallback so dashboard can render partial data
+        return {
+          markets: [] as MarketData[],
+          positions: [] as Position[],
+          portfolio: {
+            walletAddress: '',
+            balance: 0,
+            balanceLabel: '$0.00',
+            totalCollateralUsd: 0,
+            totalPositionValue: 0,
+            usdcBalance: 0,
+            totalUnrealizedPnl: 0,
+            totalRealizedPnl: 0,
+            totalFees: 0,
+            positions: [] as Position[],
+          },
+          openInterest: { markets: [] as MarketOI[] },
+          volume: { dailyVolumes: [] },
+          overviewStats: { volumeUsd: 0, trades: 0, fees: 0, users: 0 },
+        };
+      }),
       (async () => {
         try {
           const { getRpcManagerInstance } = await import('../network/rpc-manager.js');
@@ -611,12 +634,15 @@ export const aiWhaleActivity: ToolDefinition = {
       items: RawActivityRecord[],
     ): { market: string; side: string; sizeUsd: number; price: number }[] =>
       items
-        .map((a) => ({
-          market: String(a.market_symbol ?? a.market ?? 'UNKNOWN'),
-          side: String(a.side ?? 'long'),
-          sizeUsd: Number(a.size_usd ?? 0),
-          price: Number(a.entry_price ?? a.mark_price ?? 0),
-        }))
+        .map((a) => {
+          const price = Number(a.entry_price ?? a.mark_price ?? 0);
+          return {
+            market: String(a.market_symbol ?? a.market ?? 'UNKNOWN'),
+            side: String(a.side ?? 'long').toLowerCase(),
+            sizeUsd: Number(a.size_usd ?? 0),
+            price: Number.isFinite(price) ? price : 0,
+          };
+        })
         .filter((a) => a.sizeUsd >= WHALE_THRESHOLD)
         .filter((a) => !marketFilter || a.market.toUpperCase() === marketFilter);
 
@@ -647,7 +673,7 @@ export const aiWhaleActivity: ToolDefinition = {
     const headers = ['Market', 'Side', 'Size', 'Price'];
     const rows = top.map((w) => [
       w.market,
-      w.side === 'long' ? chalk.green('LONG') : chalk.red('SHORT'),
+      (w.side ?? '').toLowerCase() === 'long' ? chalk.green('LONG') : chalk.red('SHORT'),
       formatUsd(w.sizeUsd),
       formatPrice(w.price),
     ]);
@@ -685,7 +711,8 @@ export const portfolioStateTool: ToolDefinition = {
     const pm = getPortfolioManager();
 
     const [positions, portfolio] = await Promise.all([inspector.getPositions(), inspector.getPortfolio()]);
-    const balance = portfolio.usdcBalance ?? context.flashClient.getBalance();
+    const rawBalance = portfolio.usdcBalance ?? await context.flashClient.getBalance();
+    const balance = Number.isFinite(rawBalance) ? rawBalance : 0;
     const state = pm.getState(positions, balance);
 
     const lines = [
@@ -749,7 +776,8 @@ export const portfolioExposureTool: ToolDefinition = {
     const pm = getPortfolioManager();
 
     const [positions, portfolio] = await Promise.all([inspector.getPositions(), inspector.getPortfolio()]);
-    const balance = portfolio.usdcBalance ?? context.flashClient.getBalance();
+    const rawBalance = portfolio.usdcBalance ?? await context.flashClient.getBalance();
+    const balance = Number.isFinite(rawBalance) ? rawBalance : 0;
     const state = pm.getState(positions, balance);
     const exposure = computeExposure(portfolio);
 
@@ -802,7 +830,8 @@ export const portfolioRebalanceTool: ToolDefinition = {
     const pm = getPortfolioManager();
 
     const [positions, rbPortfolio] = await Promise.all([inspector.getPositions(), inspector.getPortfolio()]);
-    const balance = rbPortfolio.usdcBalance ?? context.flashClient.getBalance();
+    const rawBalance = rbPortfolio.usdcBalance ?? await context.flashClient.getBalance();
+    const balance = Number.isFinite(rawBalance) ? rawBalance : 0;
 
     if (positions.length === 0) {
       return {
