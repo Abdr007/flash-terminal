@@ -73,6 +73,9 @@ const MODE_PARAMS: Record<AggressionMode, Omit<MetaDecision, 'reason'>> = {
 export class MetaAgent {
   private recentDecisions: AggressionMode[] = [];
   private readonly maxHistory = 20;
+  /** Consecutive HALT ticks — force resume after limit */
+  private consecutiveHalts = 0;
+  private static readonly MAX_HALT_TICKS = 10;
 
   /**
    * Evaluate global conditions and decide aggression level.
@@ -151,6 +154,17 @@ export class MetaAgent {
     else if (score >= 45) mode = 'NORMAL';
     else if (score >= 25) mode = 'CONSERVATIVE';
     else mode = 'HALT';
+
+    // HALT time limit — don't stay halted forever, force back to CONSERVATIVE
+    if (mode === 'HALT') {
+      this.consecutiveHalts++;
+      if (this.consecutiveHalts >= MetaAgent.MAX_HALT_TICKS) {
+        mode = 'CONSERVATIVE';
+        reasons.push('HALT-timeout→CONSERVATIVE');
+      }
+    } else {
+      this.consecutiveHalts = 0;
+    }
 
     // Hysteresis — don't flip modes every tick
     this.recentDecisions.push(mode);

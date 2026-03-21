@@ -2811,12 +2811,12 @@ export class FlashTerminal {
         dryRun,
         logLevel: 'verbose',
         risk: {
-          maxPositions: 2,
+          maxPositions: 3,
           maxLeverage: 3,
-          positionSizePct: 0.02,
-          maxDailyLossPct: 0.05,
-          cooldownAfterLossMs: 60_000,
-          minConfidence: 0.45,
+          positionSizePct: 0.05,   // 5% of capital — meaningful PnL vs fees
+          maxDailyLossPct: 0.08,
+          cooldownAfterLossMs: 30_000,
+          minConfidence: 0.40,
           allowedMarkets: [],
         },
       },

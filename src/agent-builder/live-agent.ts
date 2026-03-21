@@ -535,18 +535,17 @@ export class LiveTradingAgent {
     this.dashboard.recordTick(this.state.iteration, this.state.currentCapital, metaDecision.mode, policyMetrics.explorationRate);
 
     // Hard guards (kept as safety net)
-    if (this.hourlyTrades.length >= 6) return;
-    // Loss streak pause: skip 5 ticks (~50s cooldown), then resume with reduced size
-    if (this.state.consecutiveLosses >= 4) {
+    if (this.hourlyTrades.length >= 8) return;
+    // Loss streak pause: skip 3 ticks (~30s cooldown), then resume
+    if (this.state.consecutiveLosses >= 6) {
       const ticksSinceLastTrade = this.state.lastTradeTimestamp > 0
         ? Math.floor((Date.now() - this.state.lastTradeTimestamp) / (this.config.pollIntervalMs || 10_000))
         : 999;
-      if (ticksSinceLastTrade < 5) {
-        this.log('normal', `Loss streak ${this.state.consecutiveLosses} — cooling down (${5 - ticksSinceLastTrade} ticks remaining)`);
+      if (ticksSinceLastTrade < 3) {
+        this.log('normal', `Loss streak ${this.state.consecutiveLosses} — cooling down (${3 - ticksSinceLastTrade} ticks remaining)`);
         return;
       }
-      // After cooldown, reset streak so agent can try again (meta-agent already reduces aggression)
-      this.log('normal', `Loss streak cooldown expired — resuming with conservative mode`);
+      this.log('normal', `Loss streak cooldown expired — resuming`);
       this.state.consecutiveLosses = 0;
     }
 
