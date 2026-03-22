@@ -145,6 +145,8 @@ export class LiveTradingAgent {
   private activeExitStates: Map<string, { state: import('./exit-policy-learner.js').ExitState; lastPnlPct: number }> = new Map();
   /** Signal confirmation: track previous tick's direction per market */
   private prevSignals: Map<string, string> = new Map();
+  /** V_SIGNAL_CALIBRATION: Track last 10 trade directions for diversity guard */
+  private recentTradeDirections: string[] = [];
   /** Per-market cooldown after trade close */
   private marketCooldowns: Map<string, number> = new Map();
   /** Hourly trade counter for frequency limiting */
@@ -815,7 +817,16 @@ export class LiveTradingAgent {
     this.perf.endTimer('decision', decisionTimer);
 
     // Execute ONLY the best opportunities (sorted by score, up to max positions)
-    opportunities.sort((a, b) => b.score - a.score);
+    // V_SCORE_AMPLIFICATION Phase 6: Rank by (confidence × EV-proxy) blended with score
+    // This prevents high-confidence trades from being suppressed by scoring compression
+    opportunities.sort((a, b) => {
+      const aEVProxy = a.decision.confidence * a.score;
+      const bEVProxy = b.decision.confidence * b.score;
+      // 70% score + 30% confidence-weighted score
+      const aRank = a.score * 0.7 + aEVProxy * 0.003;
+      const bRank = b.score * 0.7 + bEVProxy * 0.003;
+      return bRank - aRank;
+    });
 
     // SYSTEM HEALTH GATE: block or raise thresholds when runtime is degraded
     // Skip in simulation mode — health monitor tracks RPC/network which doesn't apply
@@ -1260,22 +1271,57 @@ export class LiveTradingAgent {
       posSize, totalOi, snapshot.price, sl,
     );
 
-    // V_PRODUCTION_STABLE: Use relaxed score threshold during cold start
-    const effectiveScoreThreshold = inColdStart ? 35 : metaDecision.scoreThreshold;
-    const scorePassesRaw = oppScore.total >= effectiveScoreThreshold;
+    // ── V_SCORE_AMPLIFICATION: Boost valid signals without lowering standards ──
+
+    let amplifiedScore = oppScore.total;
+
+    // Phase 1: High-quality signal amplification (+15% for confident, EV+, regime-aligned)
+    if (composite.confidence >= 0.65 && (evCheck.ev ?? 0) > 0 && regimeAllowed) {
+      amplifiedScore = Math.round(amplifiedScore * 1.15);
+    }
+
+    // Phase 3: Penalty clamping — cap total penalty at 30% of raw base
+    // The scorer applies penalties internally; if the score is suppressed >30%, restore floor
+    const rawBase = (composite.confidence * 100); // approximate pre-penalty score
+    if (rawBase > 0 && amplifiedScore < rawBase * 0.7) {
+      amplifiedScore = Math.max(amplifiedScore, Math.round(rawBase * 0.7));
+    }
+
+    // Phase 4: Regime confidence override — ignore minor penalties when regime strongly aligned
+    if (regimeAllowed && composite.confidence >= 0.70 && composite.confirmedFactors >= 2) {
+      amplifiedScore = Math.max(amplifiedScore, oppScore.total + 3); // recover at least 3 points from penalties
+    }
+
+    // Phase 5: Adaptive threshold — if recent scores cluster near threshold with few trades, temporarily lower
+    const effectiveBaseThreshold = inColdStart ? 35 : metaDecision.scoreThreshold;
+    let effectiveScoreThreshold = effectiveBaseThreshold;
+    const pressureSummary = this.signalPressure.getSummary();
+    if (pressureSummary.signalsGenerated >= 20 && pressureSummary.avgScore >= (effectiveBaseThreshold - 10) && pressureSummary.signalsExecuted < 3) {
+      effectiveScoreThreshold = effectiveBaseThreshold - 5;
+    }
+
+    // Phase 2: Near-threshold boost — convert "almost trades" into valid trades
+    if (amplifiedScore >= (effectiveScoreThreshold - 5) && amplifiedScore < effectiveScoreThreshold) {
+      // Only boost if signal is clean (no directional conflicts, good clarity)
+      const noConflicts = composite.confirmedFactors >= 1 && composite.confidence >= 0.50;
+      if (noConflicts) {
+        amplifiedScore += 5;
+      }
+    }
+
+    const scorePassesRaw = amplifiedScore >= effectiveScoreThreshold;
 
     if (!scorePassesRaw) {
-      this.signalPressure.recordSignal(snapshot.market, oppScore.total, composite.confidence, true, 'other');
-      // V_PRODUCTION_STABLE: Near-miss detection (score within 5 of threshold)
-      if (oppScore.total >= effectiveScoreThreshold - 5) {
-        this.signalPressure.recordNearMiss(snapshot.market, oppScore.total, effectiveScoreThreshold, 'other', composite.confidence);
+      this.signalPressure.recordSignal(snapshot.market, amplifiedScore, composite.confidence, true, 'other');
+      if (amplifiedScore >= effectiveScoreThreshold - 5) {
+        this.signalPressure.recordNearMiss(snapshot.market, amplifiedScore, effectiveScoreThreshold, 'other', composite.confidence);
       }
-      this.counterfactual.recordSkip(snapshot.market, side, snapshot.price, oppScore.total, `score<${effectiveScoreThreshold}`, primaryStrategy);
+      this.counterfactual.recordSkip(snapshot.market, side, snapshot.price, amplifiedScore, `score<${effectiveScoreThreshold}`, primaryStrategy);
       return null;
     }
 
-    // V_EDGE + V_CONTROL: Trade quality gate with signal stability buffer
-    const adjustedScore = oppScore.total - signalStability.extraScoreBuffer;
+    // V_EDGE + V_CONTROL: Trade quality gate with signal stability buffer (uses amplified score)
+    const adjustedScore = amplifiedScore - signalStability.extraScoreBuffer;
     const qualityCheck = this.edgeProfiler.shouldTrade(adjustedScore, evCheck.ev ?? 0, slippagePred.expectedBps / 100);
     if (!qualityCheck.allowed) {
       this.signalPressure.recordSignal(snapshot.market, oppScore.total, composite.confidence, true, 'quality_gate');
@@ -1317,20 +1363,82 @@ export class LiveTradingAgent {
     const timeCheck = this.timeIntel.check();
     if (timeCheck.sizeMultiplier !== 1.0) finalCollateral = Math.max(1, finalCollateral * timeCheck.sizeMultiplier);
     const microBonus = microCheck.quality === 'excellent' ? 5 : microCheck.quality === 'good' ? 2 : 0;
-    const finalScore = oppScore.total + microBonus;
+    const finalScore = amplifiedScore + microBonus;
     if (policyParams.sizeMultiplier !== 1.0) finalCollateral = Math.max(1, finalCollateral * policyParams.sizeMultiplier);
     // V_PRODUCTION_STABLE: Apply cold start size reduction (0.7x during first 10 trades)
     if (inColdStart) finalCollateral = Math.max(1, finalCollateral * coldStartSizeMult);
 
-    // V_PRODUCTION_STABLE: Record successful signal
+    // V_SIGNAL_BALANCE_V2 Phase 2: Directional frequency control (last 20 trades)
+    let dirScoreMult = 1.0;
+    let dirBlocked = false;
+    if (this.recentTradeDirections.length >= 5) {
+      const sameCount = this.recentTradeDirections.filter(d => d === side).length;
+      const samePct = sameCount / this.recentTradeDirections.length;
+      if (samePct >= 0.85) {
+        // ≥85% same direction → BLOCK that direction for diversity
+        dirBlocked = true;
+        this.log('verbose', `DIRECTION BLOCK: ${(samePct * 100).toFixed(0)}% ${side} — blocked for diversity`);
+      } else if (samePct >= 0.70) {
+        // ≥70% same direction → heavy penalty
+        dirScoreMult = 0.6;
+        finalCollateral = Math.max(1, finalCollateral * 0.7);
+        this.log('verbose', `DIRECTION PENALTY: ${(samePct * 100).toFixed(0)}% ${side} — score×0.6, size×0.7`);
+      }
+    }
+    if (dirBlocked) {
+      this.signalPressure.recordSignal(snapshot.market, oppScore.total, composite.confidence, true, 'other');
+      return null;
+    }
+
+    // V_SIGNAL_BALANCE_V2 Phase 5: Regime-sensitive direction multipliers
+    let regimeDirMult = 1.0;
+    const regimeName = regime.regime.toUpperCase();
+    if (regimeName.includes('TRENDING_UP') || regimeName === 'TRENDING') {
+      regimeDirMult = side === 'long' ? 1.2 : 0.8; // Bull: favor longs
+    } else if (regimeName.includes('TRENDING_DOWN')) {
+      regimeDirMult = side === 'short' ? 1.2 : 0.8; // Bear: favor shorts
+    }
+    // RANGING: no directional bias (both sides need edge confirmation)
+
+    // V_SIGNAL_BALANCE_V2 Phase 3: Long opportunity boost in non-bear regimes
+    // Corrects natural short bias in perp markets (funding/OI structurally favor shorts)
+    if (side === 'long' && !regimeName.includes('DOWN') && composite.confidence >= 0.60 && (evCheck.ev ?? 0) > 0) {
+      regimeDirMult *= 1.1; // +10% long boost
+    }
+
+    // V_SIGNAL_BALANCE_V2 Phase 6: Post-trade direction feedback
+    if (this.recentTradeDirections.length >= 10) {
+      const recentEntries = this.journal.getRecent(20);
+      const longTrades = recentEntries.filter(e => e.side === 'long' && e.pnl !== undefined);
+      const shortTrades = recentEntries.filter(e => e.side === 'short' && e.pnl !== undefined);
+      const longWR = longTrades.length >= 3 ? longTrades.filter(e => (e.pnl ?? 0) > 0).length / longTrades.length : 0.5;
+      const shortWR = shortTrades.length >= 3 ? shortTrades.filter(e => (e.pnl ?? 0) > 0).length / shortTrades.length : 0.5;
+      if (side === 'long' && longWR < 0.30 && longTrades.length >= 5) {
+        regimeDirMult *= 0.8; // Reduce losing direction
+      } else if (side === 'long' && longWR > 0.55 && longTrades.length >= 5) {
+        regimeDirMult *= 1.1; // Boost winning direction
+      }
+      if (side === 'short' && shortWR < 0.30 && shortTrades.length >= 5) {
+        regimeDirMult *= 0.8;
+      } else if (side === 'short' && shortWR > 0.55 && shortTrades.length >= 5) {
+        regimeDirMult *= 1.1;
+      }
+    }
+
+    // Apply all directional multipliers to collateral
+    finalCollateral = Math.max(1, finalCollateral * dirScoreMult * regimeDirMult);
+
+    // Record successful signal + direction
     this.signalPressure.recordSignal(snapshot.market, oppScore.total, composite.confidence, false);
+    this.recentTradeDirections.push(side);
+    if (this.recentTradeDirections.length > 20) this.recentTradeDirections.shift();
 
     const decision: TradeDecision = {
       action: 'open' as DecisionAction,
       market: snapshot.market, side, leverage, collateral: finalCollateral, tp, sl,
       strategy: strategyName,
       confidence: ed.confidence,
-      reasoning: `SCORE=${oppScore.total} ${oppScore.summary} | ${metaDecision.mode} | ${regime.regime}`,
+      reasoning: `SCORE=${oppScore.total} ${oppScore.summary} | ${metaDecision.mode} | ${regime.regime} | dir=${side}(×${regimeDirMult.toFixed(2)})`,
       signals: ed.bestResult?.signals ?? [],
       riskLevel: 'safe',
     };

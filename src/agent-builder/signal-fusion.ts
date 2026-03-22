@@ -180,9 +180,30 @@ export class SignalFusionEngine {
     const skew = longRatio - 0.5; // -0.5 to +0.5
     const zScore = this.zScoreNormalize(`oi_${snapshot.market}`, skew);
 
-    // Heavy longs = bearish (fade crowd), heavy shorts = bullish
-    const direction: SignalDirection = Math.abs(skew) < 0.1 ? 'neutral' : skew > 0 ? 'bearish' : 'bullish';
-    const confidence = Math.min(0.9, Math.abs(skew) * 2);
+    // V_SIGNAL_CALIBRATION: OI skew MUST use price context — never OI alone
+    // OI ↑ + Price ↑ = bullish continuation (new longs entering with conviction)
+    // OI ↑ + Price ↓ = bearish continuation (new shorts entering with conviction)
+    // OI ↓ = weak trend / potential reversal → neutral
+    // Widen neutral dead zone: |skew| < 0.15 is too close to call
+    const priceUp = snapshot.priceChange24h > 0.5;
+    const priceDown = snapshot.priceChange24h < -0.5;
+    const extremeSkew = Math.abs(skew) > 0.15; // Only act on significant imbalance
+
+    let direction: SignalDirection = 'neutral';
+    if (extremeSkew) {
+      if (priceUp && skew > 0) {
+        direction = 'bullish'; // Longs dominant + price rising = continuation
+      } else if (priceDown && skew < 0) {
+        direction = 'bearish'; // Shorts dominant + price falling = continuation
+      } else if (priceDown && skew > 0) {
+        direction = 'bearish'; // Longs dominant but price falling = longs trapped
+      } else if (priceUp && skew < 0) {
+        direction = 'bullish'; // Shorts dominant but price rising = shorts squeezed
+      }
+      // If price is flat, stay neutral regardless of OI
+    }
+
+    const confidence = direction === 'neutral' ? 0 : Math.min(0.8, Math.abs(skew) * 1.5);
 
     return {
       name: 'oi_skew',
@@ -200,14 +221,18 @@ export class SignalFusionEngine {
 
     const zScore = this.zScoreNormalize(`funding_${market}`, fundingRate);
 
-    // High positive funding = longs paying shorts = bearish pressure
-    // High negative funding = shorts paying longs = bullish pressure
+    // V_SIGNAL_CALIBRATION Phase 3: Funding needs context — only act on extreme values
+    // Slightly positive funding is NORMAL in crypto (longs pay shorts as cost of leverage)
+    // Only signal when funding is extreme (crowded trade)
     let direction: SignalDirection = 'neutral';
-    if (Math.abs(fundingRate) > 0.001) { // >0.1% significant
+    if (Math.abs(fundingRate) > 0.003) { // >0.3% = extreme = crowded trade
+      // Positive funding + extreme = crowded longs → bearish
+      // Negative funding + extreme = crowded shorts → bullish
       direction = fundingRate > 0 ? 'bearish' : 'bullish';
     }
+    // Neutral for normal funding range (-0.3% to +0.3%)
 
-    const confidence = Math.min(0.8, Math.abs(fundingRate) * 100);
+    const confidence = direction === 'neutral' ? 0 : Math.min(0.7, (Math.abs(fundingRate) - 0.003) * 50);
 
     return {
       name: 'funding_rate',
@@ -280,22 +305,28 @@ export class SignalFusionEngine {
   }
 
   private computeLiquidationFactor(snapshot: MarketSnapshot, now: number): SignalFactor | null {
-    // Estimate liquidation pressure from OI concentration
-    // If most OI is leveraged longs and price is near their entry, liq cascade risk is high
+    // V_SIGNAL_CALIBRATION: Liquidation risk only matters with price context
+    // Liq cascade risk is high ONLY when price moves AGAINST the dominant side
     const total = snapshot.longOi + snapshot.shortOi;
     if (total === 0) return null;
 
     const longRatio = snapshot.longOi / total;
-    const dominantSide = longRatio > 0.6 ? 'long' : longRatio < 0.4 ? 'short' : null;
-    if (!dominantSide) return null;
+    const dominantSide = longRatio > 0.65 ? 'long' : longRatio < 0.35 ? 'short' : null;
+    if (!dominantSide) return null; // Wider dead zone: 35-65% is balanced
 
-    // Higher OI concentration = higher cascade risk against the dominant side
-    const concentration = Math.abs(longRatio - 0.5) * 2; // 0 to 1
+    const concentration = Math.abs(longRatio - 0.5) * 2;
     const zScore = this.zScoreNormalize(`liq_${snapshot.market}`, concentration);
 
-    // Liquidation cascades hurt the dominant side
+    // Only signal liquidation risk when price is moving against dominant side
+    const priceAgainstLongs = dominantSide === 'long' && snapshot.priceChange24h < -1.0;
+    const priceAgainstShorts = dominantSide === 'short' && snapshot.priceChange24h > 1.0;
+
+    if (!priceAgainstLongs && !priceAgainstShorts) {
+      return null; // Price not threatening dominant side — no liq signal
+    }
+
     const direction: SignalDirection = dominantSide === 'long' ? 'bearish' : 'bullish';
-    const confidence = Math.min(0.75, concentration * 0.8);
+    const confidence = Math.min(0.65, concentration * 0.6);
 
     return {
       name: 'liquidation',
@@ -444,13 +475,29 @@ export class SignalFusionEngine {
     const strength = Math.min(1, Math.abs(compositeScore));
 
     const directionalFactors = factors.filter((f) => f.direction !== 'neutral');
-    const dominantDir: SignalDirection = compositeScore > 0.05 ? 'bullish' : compositeScore < -0.05 ? 'bearish' : 'neutral';
+
+    // V_SIGNAL_CALIBRATION Phase 1+5: Directional balance check
+    // If bullish and bearish scores are within 0.15, classify as NEUTRAL — no edge
+    const bullishFactors = directionalFactors.filter(f => f.direction === 'bullish');
+    const bearishFactors = directionalFactors.filter(f => f.direction === 'bearish');
+    const bullishWeight = bullishFactors.reduce((s, f) => s + f.confidence * f.weight, 0);
+    const bearishWeight = bearishFactors.reduce((s, f) => s + f.confidence * f.weight, 0);
+    const directionalGap = Math.abs(bullishWeight - bearishWeight);
+    const totalDirWeight = bullishWeight + bearishWeight;
+    // V_SIGNAL_BALANCE_V2 Phase 1: Stricter neutral enforcement (0.20 gap required)
+    const isAmbiguous = totalDirWeight > 0 && (directionalGap / totalDirWeight) < 0.20;
+
+    // Widen neutral zone from ±0.05 to ±0.10 for cleaner signals
+    const dominantDir: SignalDirection = isAmbiguous ? 'neutral'
+      : compositeScore > 0.10 ? 'bullish'
+      : compositeScore < -0.10 ? 'bearish'
+      : 'neutral';
     const confirmedFactors = directionalFactors.filter((f) => f.direction === dominantDir).length;
 
     // Confidence from Bayesian posterior
     const confidence = Math.min(0.95, Math.abs(combinedProb - 0.5) * 2);
     const confirmationBoost = confirmedFactors >= 3 ? 0.1 : confirmedFactors >= 2 ? 0.05 : 0;
-    const finalConfidence = Math.min(0.95, confidence + confirmationBoost);
+    const finalConfidence = dominantDir === 'neutral' ? 0 : Math.min(0.95, confidence + confirmationBoost);
 
     return {
       market,
