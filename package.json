@@ -1,6 +1,6 @@
 {
   "name": "flash-terminal",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Professional CLI trading terminal for Flash Trade on Solana",
   "type": "module",
   "main": "dist/index.js",
