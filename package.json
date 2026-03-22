@@ -55,6 +55,7 @@
     "commander": "^13.1.0",
     "dotenv": "^16.4.7",
     "flash-sdk": "^15.9.0",
+    "flash-terminal": "^1.0.2",
     "openai": "^6.29.0",
     "ora": "^8.2.0",
     "zod": "^3.24.2"

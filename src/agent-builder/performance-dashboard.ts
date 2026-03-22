@@ -82,7 +82,7 @@ const SHARPE_CRITICAL = -0.5;
 const DRAWDOWN_WARNING = 0.08;
 const DRAWDOWN_CRITICAL = 0.15;
 const WIN_RATE_WARNING = 0.35;
-const EV_WARNING = -1;
+const _EV_WARNING = -1;
 
 // ─── Performance Dashboard ───────────────────────────────────────────────────
 
@@ -106,7 +106,7 @@ export class PerformanceDashboard {
   /**
    * Record an equity snapshot. Call every tick.
    */
-  recordTick(tick: number, equity: number, mode: string, explorationRate: number): void {
+  recordTick(tick: number, equity: number, mode: string, _explorationRate: number): void {
     // Equity curve
     this.equityHistory.push({ tick, equity });
     if (this.equityHistory.length > this.maxHistory) this.equityHistory.shift();
@@ -201,7 +201,7 @@ export class PerformanceDashboard {
 
     // Trades per hour
     const hourMs = 3_600_000;
-    const recentTrades = this.tradeTimestamps.filter((t) => Date.now() - t < hourMs);
+    const _recentTrades = this.tradeTimestamps.filter((t) => Date.now() - t < hourMs);
     const hoursTracked = Math.max(1, this.tradeTimestamps.length > 0 ? (Date.now() - this.tradeTimestamps[0]) / hourMs : 1);
     const avgTradesPerHour = this.tradeTimestamps.length / hoursTracked;
 

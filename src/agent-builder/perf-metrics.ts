@@ -16,7 +16,7 @@ const BUILT_IN_METRICS = [
   'event_path',
 ] as const;
 
-type BuiltInMetric = (typeof BUILT_IN_METRICS)[number];
+type _BuiltInMetric = (typeof BUILT_IN_METRICS)[number];
 
 /** Thresholds in ms for missed-opportunity detection. */
 const MISSED_OPPORTUNITY_THRESHOLDS: Record<string, number> = {

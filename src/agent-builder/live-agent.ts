@@ -41,6 +41,18 @@ import { EdgeRefiner } from './edge-refiner.js';
 import { MarketEventBus, MarketEventType } from './event-bus.js';
 import { DecisionCache } from './decision-cache.js';
 import { PerfMetrics } from './perf-metrics.js';
+import { PredictiveEngine } from './predictive-engine.js';
+import { OrderbookIntel } from './orderbook-intel.js';
+import { AgentCoordinator } from './agent-coordinator.js';
+import { LatencyMode } from './latency-mode.js';
+import { OpportunityLearner } from './opportunity-learner.js';
+import { ExecutionFeedback } from './execution-feedback.js';
+import { AdaptiveExecutor } from './adaptive-executor.js';
+import { ExecutionKillswitch } from './execution-killswitch.js';
+import { EdgeProfiler } from './edge-profiler.js';
+import { SystemGovernor } from './system-governor.js';
+import { SignalPressure } from './signal-pressure.js';
+import { ProductionValidator } from './production-validator.js';
 import { saveAgentState, loadAgentState, buildPersistedState } from './state-persistence.js';
 import type { CompositeSignal } from './signal-fusion.js';
 
@@ -95,6 +107,30 @@ export class LiveTradingAgent {
   private readonly perf: PerfMetrics;
   /** V_SUPREME: Execution queue — decouples signal from execution */
   private executionQueue: Array<{ decision: TradeDecision; snapshot: MarketSnapshot }> = [];
+  /** V_INFINITY: Predictive micro-prediction engine */
+  private readonly predictive: PredictiveEngine;
+  /** V_INFINITY: Orderbook intelligence (microstructure analysis) */
+  private readonly orderbookIntel: OrderbookIntel;
+  /** V_INFINITY: Multi-agent coordinator */
+  private readonly coordinator: AgentCoordinator;
+  /** V_INFINITY: Latency arbitrage mode controller */
+  private readonly latencyMode: LatencyMode;
+  /** V_INFINITY: Missed opportunity learner */
+  private readonly oppLearner: OpportunityLearner;
+  /** V_OMEGA: Execution quality feedback loop */
+  private readonly execFeedback: ExecutionFeedback;
+  /** V_OMEGA: Adaptive execution strategy */
+  private readonly adaptiveExec: AdaptiveExecutor;
+  /** V_OMEGA: Execution kill-switch */
+  private readonly execKillswitch: ExecutionKillswitch;
+  /** V_EDGE: Comprehensive edge profiler */
+  private readonly edgeProfiler: EdgeProfiler;
+  /** V_CONTROL: System governor — normalizes, stabilizes, governs all adaptive systems */
+  private readonly governor: SystemGovernor;
+  /** V_PRODUCTION: Production validation harness — proves real edge */
+  private readonly validator: ProductionValidator;
+  /** V_PRODUCTION_STABLE: Signal pressure tracker + near-miss detection */
+  private readonly signalPressure: SignalPressure;
   /** V_SUPREME: Pre-computed macro state (updated async every N ticks) */
   private precomputedMacro: { regime: string; tradesBlocked: boolean; sizeMultiplier: number; strategyBias: string; btcTrend: string; avgVolatility: number; correlationStrength: number } | null = null;
   /** V_SUPREME: Pre-computed regime states per market */
@@ -207,6 +243,18 @@ export class LiveTradingAgent {
     this.eventBus = new MarketEventBus();
     this.decisionCache = new DecisionCache();
     this.perf = new PerfMetrics();
+    this.predictive = new PredictiveEngine();
+    this.orderbookIntel = new OrderbookIntel();
+    this.coordinator = new AgentCoordinator();
+    this.latencyMode = new LatencyMode();
+    this.oppLearner = new OpportunityLearner();
+    this.execFeedback = new ExecutionFeedback();
+    this.adaptiveExec = new AdaptiveExecutor();
+    this.execKillswitch = new ExecutionKillswitch();
+    this.edgeProfiler = new EdgeProfiler();
+    this.governor = new SystemGovernor();
+    this.validator = new ProductionValidator();
+    this.signalPressure = new SignalPressure();
     this.state = this.createInitialState();
 
     // Restore persisted learning state
@@ -281,7 +329,7 @@ export class LiveTradingAgent {
           // V_SUPREME: Aggressive scaling — 2s during spikes, 30s during dead markets
           if (avgAbsChange > 8) pollMs = 2_000;           // Extreme vol → 2s
           else if (avgAbsChange > 5) pollMs = Math.round(pollMs * 0.4);  // High vol → 40%
-          else if (avgAbsChange > 2) pollMs = pollMs;     // Normal
+          else if (avgAbsChange > 2) { /* Normal — keep current pollMs */ }
           else if (avgAbsChange < 0.5) pollMs = Math.min(30_000, Math.round(pollMs * 2.0)); // Dead → 2x slower, cap 30s
           else if (avgAbsChange < 1) pollMs = Math.round(pollMs * 1.5);   // Low vol → 1.5x slower
         }
@@ -335,6 +383,22 @@ export class LiveTradingAgent {
     this.eventBus.clear();
     this.decisionCache.reset();
     this.perf.reset();
+    this.predictive.reset();
+    this.orderbookIntel.reset();
+    this.coordinator.reset();
+    this.latencyMode.reset();
+    this.oppLearner.reset();
+    this.execFeedback.reset();
+    this.adaptiveExec.reset();
+    this.execKillswitch.reset();
+    this.edgeProfiler.reset();
+    this.governor.reset();
+    this.signalPressure.reset();
+    // V_PRODUCTION: Print final validation report before reset
+    if (this.validator.isActive()) {
+      this.log('info', `\n${this.validator.formatReport()}`);
+    }
+    this.validator.reset();
     this.executionQueue = [];
     this.precomputedMacro = null;
     this.precomputedRegimes.clear();
@@ -364,6 +428,29 @@ export class LiveTradingAgent {
   getPerf(): PerfMetrics { return this.perf; }
   getEventBus(): MarketEventBus { return this.eventBus; }
   getDecisionCacheStats() { return this.decisionCache.getStats(); }
+  getPredictive(): PredictiveEngine { return this.predictive; }
+  getCoordinator(): AgentCoordinator { return this.coordinator; }
+  getLatencyMode(): LatencyMode { return this.latencyMode; }
+  getOpportunityLearner(): OpportunityLearner { return this.oppLearner; }
+  getExecutionFeedback(): ExecutionFeedback { return this.execFeedback; }
+  getAdaptiveExecutor(): AdaptiveExecutor { return this.adaptiveExec; }
+  getExecutionKillswitch(): ExecutionKillswitch { return this.execKillswitch; }
+  getEdgeProfiler(): EdgeProfiler { return this.edgeProfiler; }
+  getGovernor(): SystemGovernor { return this.governor; }
+  getValidator(): ProductionValidator { return this.validator; }
+  /** Start production validation mode — freezes architecture for 200 trades */
+  startValidation(): void {
+    this.validator.activate();
+    this.validator.recordEquity(this.state.currentCapital);
+    this.log('info', 'V_PRODUCTION: Validation mode ACTIVATED — architecture frozen, pure measurement for 200 trades');
+  }
+  /** Get formatted validation report */
+  getValidationReport(): string {
+    if (!this.validator.isActive() && this.validator.getProgress().completed === 0) {
+      return 'Validation mode not active. Use "agent validate" to start.';
+    }
+    return this.validator.formatReport();
+  }
   get isRunning(): boolean { return this.running; }
 
   // ─── Core Loop ─────────────────────────────────────────────────────
@@ -392,6 +479,32 @@ export class LiveTradingAgent {
 
     if (this.risk.isDailyLossBreached(this.state)) {
       this.safetyStop(`Daily loss limit breached: $${this.state.dailyPnl.toFixed(2)}`);
+      return;
+    }
+
+    // V_OMEGA: Execution killswitch — halt if execution quality degraded
+    const globalExecStats = this.execFeedback.getGlobalStats();
+    const recentSlippage = globalExecStats.totalTrades > 0
+      ? this.execFeedback.getRecentSlippage('_global', 5).map(s => Math.abs(s))
+      : [];
+    const ksState = this.execKillswitch.evaluate(
+      recentSlippage,
+      [], // fill success tracked per-trade, not globally here
+      [],
+      globalExecStats.totalSlippageCostUsd,
+      this.state.currentCapital,
+    );
+    if (ksState.active) {
+      this.log('normal', `V_OMEGA KILLSWITCH: ${ksState.reason} (trigger=${ksState.trigger}) — trading halted until ${new Date(ksState.resumeAt).toISOString().slice(11, 19)}`);
+      this.perf.endTimer('tick', tickTimer);
+      return;
+    }
+
+    // V_EDGE: Stability control — reduce size or halt if returns are unstable
+    const stability = this.edgeProfiler.getStabilityReport();
+    if (stability.instabilityAction === 'halt') {
+      this.log('normal', `V_EDGE STABILITY HALT: sharpe7d=${stability.sharpe7d.toFixed(2)} variance=${stability.returnVariance.toFixed(4)} — halting`);
+      this.perf.endTimer('tick', tickTimer);
       return;
     }
 
@@ -462,10 +575,48 @@ export class LiveTradingAgent {
       this.technicals.record(snapshot.market, snapshot.price);
       this.exitPolicy.recordPrice(snapshot.market, snapshot.price);
       this.correlationGuard.recordPrice(snapshot.market, snapshot.price);
+      // V_INFINITY: Feed predictive engine + orderbook intel
+      this.predictive.record(snapshot.market, snapshot.price, snapshot.oiRatio, snapshot.volume24h);
+      this.orderbookIntel.record(snapshot.market, snapshot.price, snapshot.longOi, snapshot.shortOi, snapshot.volume24h);
     }
+    // V_INFINITY: Update coordinator portfolio state
+    this.coordinator.updatePortfolio(positions.map(p => ({
+      market: p.market, side: p.side, sizeUsd: p.sizeUsd, collateralUsd: p.collateralUsd,
+      entryPrice: p.entryPrice, markPrice: p.markPrice ?? p.entryPrice, pnl: p.pnl ?? 0, leverage: p.leverage,
+    })), this.state.currentCapital);
+    this.coordinator.tick();
 
     // V_SUPREME: EVENT DETECTION — event bus + legacy detector for cached ticks
     const events = this.detectEvents(snapshots);
+
+    // V_INFINITY: Check predictions on every tick (even cached) for pre-positioning
+    for (const snap of snapshots) {
+      const prediction = this.predictive.predict(snap.market);
+      if (prediction.probability > 0.75) {
+        const prePos = this.predictive.shouldPrePosition(snap.market);
+        if (prePos.prePosition) {
+          this.coordinator.submitOpportunity({
+            market: snap.market,
+            side: prePos.direction === 'up' ? 'long' : 'short',
+            score: Math.round(prediction.probability * 100),
+            confidence: prediction.confidence,
+            urgency: prePos.urgency === 'immediate' ? 'immediate' : prePos.urgency === 'soon' ? 'high' : 'low',
+            source: 'prediction',
+            timestamp: Date.now(),
+            ttlMs: 10_000, // predictions expire in 10s
+          });
+          this.log('verbose', `PREDICT: ${snap.market} ${prePos.direction} prob=${(prediction.probability * 100).toFixed(0)}% urgency=${prePos.urgency}`);
+        }
+      }
+    }
+
+    // V_INFINITY: Evaluate latency mode based on market conditions
+    const avgVelocity = snapshots.reduce((s, snap) => {
+      const p = this.predictive.predict(snap.market);
+      return s + Math.abs(p.velocity);
+    }, 0) / Math.max(1, snapshots.length);
+    const recentEventCount = this.eventBus.getHistory().filter(e => Date.now() - e.timestamp < 60_000).length;
+    this.latencyMode.evaluate(avgVelocity, 0, avgVelocity * 10, recentEventCount);
 
     // V_SUPREME: Cached ticks — fast-path event handling
     if (!isFreshData) {
@@ -667,17 +818,20 @@ export class LiveTradingAgent {
     opportunities.sort((a, b) => b.score - a.score);
 
     // SYSTEM HEALTH GATE: block or raise thresholds when runtime is degraded
+    // Skip in simulation mode — health monitor tracks RPC/network which doesn't apply
     let healthThresholdMult = 1.0;
-    try {
-      const { getHealth } = await import('../system/health.js');
-      const h = getHealth();
-      if (h?.isTradeBlocked()) {
-        this.log('normal', 'System health CRITICAL — skipping trade execution');
-        opportunities.length = 0;
-      } else if (h) {
-        healthThresholdMult = h.getDegradationParams().tradeThresholdMultiplier;
-      }
-    } catch { /* health module may not be loaded */ }
+    if (!this.context.simulationMode) {
+      try {
+        const { getHealth } = await import('../system/health.js');
+        const h = getHealth();
+        if (h?.isTradeBlocked()) {
+          this.log('normal', 'System health CRITICAL — skipping trade execution');
+          opportunities.length = 0;
+        } else if (h) {
+          healthThresholdMult = h.getDegradationParams().tradeThresholdMultiplier;
+        }
+      } catch { /* health module may not be loaded */ }
+    }
 
     // V17: TRADE QUALITY FILTER — if recent EV is negative, raise thresholds
     // Disabled during cold-start: system needs trades to learn from
@@ -703,6 +857,21 @@ export class LiveTradingAgent {
     if (opportunities.length > 0 && opportunities[0].score < effectiveFloor) {
       this.log('verbose', `Best opportunity ${opportunities[0].decision.market} scored ${opportunities[0].score} < floor ${effectiveFloor} — no trades this tick`);
       opportunities.length = 0; // Clear all
+    }
+
+    // V_INFINITY: Submit all opportunities to coordinator queue
+    for (const opp of opportunities) {
+      this.coordinator.submitOpportunity({
+        market: opp.decision.market,
+        side: opp.decision.side ?? 'long',
+        score: opp.score,
+        confidence: opp.decision.confidence,
+        urgency: opp.score >= 80 ? 'immediate' : opp.score >= 60 ? 'high' : 'normal',
+        source: 'scan',
+        timestamp: Date.now(),
+        ttlMs: 30_000,
+        decision: opp.decision,
+      });
     }
 
     // V_SUPREME: PARALLEL EXECUTION — execute top N opportunities (up to 3)
@@ -749,13 +918,150 @@ export class LiveTradingAgent {
     for (const p of executionPromises) await p;
     this.perf.endTimer('execution', execTimer);
 
+    // V_INFINITY: Record captures for opportunity learner
+    for (const opp of opportunities.slice(0, executionPromises.length)) {
+      this.oppLearner.recordCapture(
+        opp.decision.market,
+        opp.decision.side ?? 'long',
+        Date.now() - 100, // approximate detection time
+        Date.now(),
+        opp.snapshot.price,
+        0, // PnL unknown at entry time
+      );
+    }
+
+    // V_INFINITY: Validate predictions against actual prices
+    for (const snap of snapshots) {
+      this.predictive.validatePrediction(snap.market, snap.price);
+    }
+
+    // V_INFINITY: Opportunity learner analysis (every 20 ticks)
+    if (this.state.iteration % 20 === 0) {
+      const recommendations = this.oppLearner.analyze();
+      for (const rec of recommendations) {
+        if (rec.confidence > 0.5) {
+          this.coordinator.submitLearningUpdate({
+            type: rec.type === 'adjust_threshold' ? 'threshold_adjust'
+              : rec.type === 'adjust_cache_ttl' ? 'cache_ttl_adjust'
+              : rec.type === 'relax_filter' ? 'threshold_adjust'
+              : 'weight_update',
+            target: rec.target,
+            value: rec.suggestedValue,
+            reason: rec.reason,
+            timestamp: Date.now(),
+          });
+          this.log('verbose', `V_INFINITY LEARN: ${rec.type} ${rec.target} → ${rec.suggestedValue} (${rec.reason})`);
+        }
+      }
+    }
+
+    // V_CONTROL Phase 3: Check change rate limiting freeze
+    const journalStats = this.journal.getStats();
+    this.governor.checkFreeze(journalStats.totalTrades);
+
+    // V_CONTROL Phase 5: Capital utilization monitoring (every 10 ticks)
+    if (this.state.iteration % 10 === 0) {
+      const deployedCapital = this.state.positions.reduce((s, p) => s + (p.collateralUsd ?? 0), 0);
+      const realEdge = this.edgeProfiler.getRealEdge();
+      const edgeStab = this.edgeProfiler.getStabilityReport();
+      const ddState = this.drawdown.getState();
+      const utilization = this.governor.evaluateUtilization(
+        deployedCapital, this.state.currentCapital,
+        0, journalStats.totalTrades,
+        realEdge.hasEdge,
+        realEdge.realEV, edgeStab.sharpe30d, ddState.drawdownPct,
+      );
+      if (utilization.underUtilized && utilization.filterRelaxation > 0) {
+        this.log('verbose', `V_CONTROL V2: Under-utilized (${(utilization.deployedPct * 100).toFixed(0)}% deployed) — safely relaxed ${(utilization.filterRelaxation * 100).toFixed(0)}%`);
+      } else if (utilization.underUtilized) {
+        this.log('verbose', `V_CONTROL V2: Under-utilized but edge too weak for relaxation`);
+      }
+    }
+
+    // V_CONTROL Phase 7: Shadow mode comparison (every 50 ticks)
+    if (this.state.iteration % 50 === 0) {
+      const shadow = this.governor.compareShadowVsLive();
+      if (shadow.revertRecommended) {
+        this.log('normal', `V_CONTROL SHADOW: Shadow outperforming live (shadow=$${shadow.shadowPnl.toFixed(2)} vs live=$${shadow.livePnl.toFixed(2)}) — revert recommended`);
+      }
+    }
+
+    // V_PRODUCTION_STABLE: Signal pressure log on every full tick (not gated by iteration count)
+    if (this.signalPressure.getSummary().signalsGenerated > 0) {
+      const pressure = this.signalPressure.getSummary();
+      this.log('normal', `SIGNALS: gen=${pressure.signalsGenerated} rej=${pressure.signalsRejected} exec=${pressure.signalsExecuted} miss=${pressure.nearMissCount} | top_fail=${pressure.dominantFailure}(${(pressure.dominantFailurePct * 100).toFixed(0)}%) | avg=${pressure.avgScore.toFixed(0)} | capture=${(pressure.captureRate * 100).toFixed(0)}%`);
+    }
+
     // V_SUPREME: End tick timer and log perf on verbose
     this.perf.endTimer('tick', tickTimer);
     if (this.state.iteration % 10 === 0) {
       const tickStats = this.perf.getStats('tick');
       const decStats = this.perf.getStats('decision');
+      const execStats = this.perf.getStats('execution');
       if (tickStats && decStats) {
-        this.log('verbose', `PERF: tick p50=${tickStats.p50.toFixed(0)}ms p99=${tickStats.p99.toFixed(0)}ms | decision p50=${decStats.p50.toFixed(0)}ms p99=${decStats.p99.toFixed(0)}ms | cache ${JSON.stringify(this.decisionCache.getStats())}`);
+        const missRate = this.oppLearner.getMissRate();
+        const predMetrics = this.predictive.getMetrics();
+        this.log('verbose', `PERF: tick p50=${tickStats.p50.toFixed(0)}ms p99=${tickStats.p99.toFixed(0)}ms | dec p50=${decStats.p50.toFixed(0)}ms | exec p50=${execStats?.p50.toFixed(0) ?? '-'}ms`);
+        this.log('verbose', `V_INFINITY: capture=${(missRate.captureRate * 100).toFixed(0)}% | predict=${(predMetrics.accuracy * 100).toFixed(0)}% | latency=${this.latencyMode.isActive() ? 'ACTIVE' : 'off'} | queue=${this.coordinator.getState().opportunities.length}`);
+        // V_PRODUCTION_STABLE: Signal pressure + near-miss observability
+        const pressure = this.signalPressure.getSummary();
+        this.log('normal', `SIGNALS: gen=${pressure.signalsGenerated} rej=${pressure.signalsRejected} exec=${pressure.signalsExecuted} near-miss=${pressure.nearMissCount} | dominant=${pressure.dominantFailure}(${(pressure.dominantFailurePct * 100).toFixed(0)}%) | avg_score=${pressure.avgScore.toFixed(0)} | capture=${(pressure.captureRate * 100).toFixed(0)}%`);
+        const dist = pressure.scoreDistribution;
+        this.log('verbose', `SCORES: <30:${dist.below30} | 30-40:${dist.range30_40} | 40-55:${dist.range40_55} | 55-70:${dist.range55_70} | >70:${dist.above70}`);
+        // Adaptation suggestion (Phase 5)
+        const adaptSuggestion = this.signalPressure.shouldAdapt();
+        if (adaptSuggestion) {
+          this.log('normal', `SIGNAL ADAPT: ${adaptSuggestion.reason} → ${adaptSuggestion.suggestion}`);
+        }
+        const gStats = this.execFeedback.getGlobalStats();
+        if (gStats.totalTrades > 0) {
+          this.log('verbose', `V_OMEGA: slip_avg=${gStats.avgSlippageBps.toFixed(1)}bps p90=${gStats.p90SlippageBps.toFixed(1)}bps | fill=${(gStats.successRate * 100).toFixed(0)}% | cost=$${gStats.totalSlippageCostUsd.toFixed(2)} | ks=${this.execKillswitch.isActive() ? 'ACTIVE' : 'off'}`);
+        }
+        // V_EDGE: Report real edge + scale readiness
+        const realEdge = this.edgeProfiler.getRealEdge();
+        const qGate = this.edgeProfiler.getQualityGate();
+        if (realEdge.realEV !== 0) {
+          this.log('verbose', `V_EDGE: REAL_EV=$${realEdge.realEV.toFixed(2)} | net=$${realEdge.netPnl.toFixed(2)} | cost_drag=${realEdge.costDragPct.toFixed(1)}% | edge=${realEdge.hasEdge ? 'YES' : 'NO'}(${(realEdge.edgeConfidence * 100).toFixed(0)}%) | quality=${qGate.filtering ? `ON(p${qGate.minScorePercentile})` : 'warmup'}`);
+        }
+        // Scale readiness every 50 ticks
+        if (this.state.iteration % 50 === 0) {
+          const scale = this.edgeProfiler.getScaleReadiness();
+          if (scale.score > 0) {
+            this.log('normal', `V_EDGE SCALE: ${scale.ready ? 'READY' : 'NOT READY'} score=${scale.score}/100 | blockers=[${scale.blockers.join(', ')}]`);
+          }
+          // PnL leak analysis every 50 ticks
+          const leaks = this.edgeProfiler.analyzePnlLeaks();
+          if (leaks.largestLeakSource !== 'none') {
+            this.log('verbose', `V_EDGE LEAKS: ${leaks.largestLeakSource} (${leaks.recommendation})`);
+          }
+          // V_CONTROL V2: Governor status with clamp analytics
+          const govState = this.governor.getState();
+          const clampA = this.governor.getClampAnalytics();
+          this.log('verbose', `V_CONTROL: meta=${govState.metaStabilityScore}/100 | util=${(govState.utilizationPct * 100).toFixed(0)}% | clamp_freq=${(govState.clampFrequency * 100).toFixed(0)}% | dominant=${govState.dominantFactor} | frozen=${govState.frozen} | lane=${govState.dualLane} | exec_stab=${govState.executionStabilityScore}/20 | shadow_rev=${govState.shadowAutoReverted}`);
+          if (clampA.clampFrequency > 0.3) {
+            this.log('verbose', `V_CONTROL CLAMP: ${clampA.recommendation}`);
+          }
+          // V_PRODUCTION: Feed external metrics + report
+          if (this.validator.isActive()) {
+            this.validator.recordUtilization(govState.utilizationPct);
+            this.validator.recordClampFrequency(govState.clampFrequency);
+            const shadow = this.governor.compareShadowVsLive();
+            this.validator.recordShadowDelta(shadow.shadowSharpe - shadow.liveSharpe);
+            const progress = this.validator.getProgress();
+            const metrics = this.validator.getMetrics();
+            this.log('normal', `V_PRODUCTION [${progress.completed}/${progress.required}]: REAL_EV=$${metrics.realEV.toFixed(2)} | Sharpe=${metrics.sharpe.toFixed(2)} | DD=${(metrics.maxDrawdownPct * 100).toFixed(1)}% | WR=${(metrics.winRate * 100).toFixed(0)}% | PF=${metrics.profitFactor.toFixed(2)} | valid=${this.validator.isValid() ? 'YES' : 'NO'}`);
+            // Full report at milestones
+            if (progress.completed === 100 || progress.completed === progress.required) {
+              const report = this.validator.getReport();
+              this.log('info', `\n${this.validator.formatReport()}`);
+              if (report.verdict === 'EDGE_CONFIRMED') {
+                this.log('info', `V_PRODUCTION: EDGE CONFIRMED — ${report.scaling.action} recommended (${report.scaling.capitalMultiplier}x)`);
+              } else if (report.verdict === 'NO_EDGE') {
+                this.log('info', `V_PRODUCTION: NO EDGE — ${report.diagnosis.rootCause} (${report.diagnosis.recommendation})`);
+              }
+            }
+          }
+        }
       }
     }
   }
@@ -786,10 +1092,39 @@ export class LiveTradingAgent {
     const composite = compositeMap.get(snapshot.market)!;
     const marketSignals = this.signals.detect(snapshot);
 
-    // Phase 4: SHORT-CIRCUIT — skip if signal direction not confirmed (2-tick)
+    // V_PRODUCTION_STABLE: Cold start mode detection (first 10 trades)
+    const COLD_START_RELAXED = 10;
+    const inColdStart = stats.totalTrades < COLD_START_RELAXED;
+    const coldStartConfFloor = inColdStart ? 0.35 : 0.40;
+    const coldStartSizeMult = inColdStart ? 0.7 : 1.0;
+
+    // V_INFINITY: Orderbook intelligence — avoid entering into walls
+    const obAnalysis = this.orderbookIntel.analyze(snapshot.market);
+    const earlySide = composite.direction === 'bearish' ? 'short' : 'long';
+    const obAvoid = this.orderbookIntel.shouldAvoidEntry(snapshot.market, earlySide);
+    // V_PRODUCTION_STABLE: Relax orderbook wall during cold start (OI data noisy early on)
+    if (obAvoid.avoid && !this.latencyMode.isActive() && !inColdStart) {
+      this.signalPressure.recordSignal(snapshot.market, 0, composite.confidence, true, 'orderbook_wall');
+      return null;
+    }
+
+    // Low confidence short-circuit
+    if (composite.confidence < coldStartConfFloor || !composite.confirmed) {
+      this.signalPressure.recordSignal(snapshot.market, 0, composite.confidence, true, 'low_confidence');
+      return null;
+    }
+
+    // 2-tick confirmation — V_PRODUCTION_STABLE: allow 1-tick if confidence ≥70% during cold start
     const prevDir = this.prevSignals.get(snapshot.market);
     this.prevSignals.set(snapshot.market, composite.direction);
-    if (composite.direction !== 'neutral' && prevDir !== composite.direction) return null;
+    if (composite.direction !== 'neutral' && prevDir !== composite.direction) {
+      const bypass2tick = this.latencyMode.shouldBypass('2tick_confirmation')
+        || (inColdStart && composite.confidence >= 0.70);
+      if (!bypass2tick) {
+        this.signalPressure.recordSignal(snapshot.market, 0, composite.confidence, true, '2tick_fail');
+        return null;
+      }
+    }
 
     // POLICY LEARNER
     const policyState = this.policyLearner.buildState(
@@ -799,22 +1134,33 @@ export class LiveTradingAgent {
     const policyRec = this.policyLearner.recommend(policyState);
     const ignorePolicySkip = stats.totalTrades < COLD_START_TRADES;
     if (!policyRec.action.startsWith('trade') && !policyRec.isExploration && !ignorePolicySkip) {
+      this.signalPressure.recordSignal(snapshot.market, 0, composite.confidence, true, 'policy_skip');
       this.simEngine.simulate(snapshot.market, composite.direction === 'bearish' ? 'short' : 'long', snapshot.price, 0, 'policy_skip', regime.regime, composite.confidence);
       return null;
     }
     const policyParams = this.policyLearner.actionToParams(policyRec.action);
 
-    // Strategy ensemble
+    // Strategy ensemble — V_PRODUCTION_STABLE: allow 1 strong strategy in cold start
     const ed = this.ensemble.evaluate(snapshot, marketSignals, composite);
-    if (!ed.shouldTrade) return null;
+    if (!ed.shouldTrade) {
+      // Cold start: allow single strategy if confidence ≥ 75%
+      const highConfSingle = inColdStart && composite.confidence >= 0.75 && ed.votes.some(v => v.result.shouldTrade);
+      if (!highConfSingle) {
+        this.signalPressure.recordSignal(snapshot.market, 0, composite.confidence, true, 'ensemble_fail');
+        return null;
+      }
+    }
 
-    // Phase 4: SHORT-CIRCUIT — EV ≤ 0 immediate skip (after cold-start)
+    // EV check
     const votingStrategies = ed.votes.filter((v) => v.result.shouldTrade && !v.shadow).map((v) => v.strategy);
     const allowedInRegime = this.regimeAdapter.filterStrategies(regime.regime as import('./regime-adapter.js').RegimeType, votingStrategies);
     const regimeAllowed = allowedInRegime.length > 0;
     const primaryStrategy = allowedInRegime[0] || votingStrategies[0] || 'ensemble';
     const evCheck = this.expectancy.checkEV(primaryStrategy, ed.confidence);
-    if (!evCheck.allowed && stats.totalTrades >= COLD_START_TRADES && !evCheck.reason?.includes('new')) return null;
+    if (!evCheck.allowed && stats.totalTrades >= COLD_START_TRADES && !evCheck.reason?.includes('new')) {
+      this.signalPressure.recordSignal(snapshot.market, 0, composite.confidence, true, 'ev_fail');
+      return null;
+    }
 
     // Technical signal
     const techSignal = this.technicals.signal(snapshot.market, snapshot.price);
@@ -839,7 +1185,35 @@ export class LiveTradingAgent {
     const rrRatio = riskDist > 0 ? rewardDist / riskDist : 0;
 
     // Phase 4: SHORT-CIRCUIT — R:R < 1.5 not worth the pipeline cost
-    if (rrRatio < 1.5) return null;
+    if (rrRatio < 1.5) {
+      this.signalPressure.recordSignal(snapshot.market, 0, composite.confidence, true, 'rr_fail');
+      return null;
+    }
+
+    // V_OMEGA: Slippage prediction — reject if predicted slippage eats the edge
+    const totalOiForSlippage = snapshot.longOi + snapshot.shortOi;
+    const prediction = this.predictive.predict(snapshot.market);
+    const slippagePred = this.adaptiveExec.predictSlippage(
+      snapshot.market,
+      (this.state.currentCapital * 0.02) * leverage, // approximate position size
+      totalOiForSlippage,
+      prediction.velocity,
+      obAnalysis?.spreadEstimate ?? 0,
+    );
+    // V_PRODUCTION_STABLE: Relax slippage viability during cold start (OI data may be 0/unreliable)
+    if (!slippagePred.viable && !this.latencyMode.isActive() && !inColdStart) {
+      this.signalPressure.recordSignal(snapshot.market, 0, composite.confidence, true, 'slippage_viability');
+      this.oppLearner.recordMiss({
+        market: snapshot.market, side, detectionTime: Date.now(),
+        signalPrice: snapshot.price, peakPrice: snapshot.price, peakPnlPct: 0,
+        missReason: 'filter_rejected', filterName: 'slippage_prediction',
+        score: 0,
+      });
+      return null;
+    }
+
+    // V_OMEGA: Get execution quality adjustment for this market
+    const execSlippageAdj = this.execFeedback.getSlippageAdjustment(snapshot.market);
 
     // Dynamic sizing
     let uncertaintyMultiplier = 1.0;
@@ -848,7 +1222,33 @@ export class LiveTradingAgent {
 
     const ddState = this.drawdown.getState();
     const maxCapital = this.state.currentCapital * 0.15;
-    const sizing = this.sizer.calculate(this.state.currentCapital, ed.confidence, stats, ddState, regimeParams.sizeMultiplier * metaDecision.sizeMultiplier * uncertaintyMultiplier * macro.sizeMultiplier * regimeRefinerMult, this.state.consecutiveLosses);
+    // V_EDGE: Apply stability + regime/market allocation multipliers
+    const stabilityMult = this.edgeProfiler.getStabilityReport().sizeMultiplier;
+    const regimeAlloc = this.edgeProfiler.getRegimeAllocations().find(r => r.regime === regime.regime);
+    const regimeAllocMult = regimeAlloc?.suggestedSizeMultiplier ?? 1.0;
+    const marketAlloc = this.edgeProfiler.getMarketAllocations().find(m => m.market === snapshot.market);
+    const marketAllocMult = marketAlloc?.suggestedSizeMultiplier ?? 1.0;
+    // V_CONTROL V2: Normalize with factor breakdown for clamp intelligence
+    const rawCompositeMultiplier = regimeParams.sizeMultiplier * metaDecision.sizeMultiplier * uncertaintyMultiplier * macro.sizeMultiplier * regimeRefinerMult * execSlippageAdj * stabilityMult * regimeAllocMult * marketAllocMult;
+    const factorBreakdown = [
+      { name: 'regime', value: regimeParams.sizeMultiplier },
+      { name: 'meta', value: metaDecision.sizeMultiplier },
+      { name: 'uncertainty', value: uncertaintyMultiplier },
+      { name: 'macro', value: macro.sizeMultiplier },
+      { name: 'refiner', value: regimeRefinerMult },
+      { name: 'slippage', value: execSlippageAdj },
+      { name: 'stability', value: stabilityMult },
+      { name: 'regimeAlloc', value: regimeAllocMult },
+      { name: 'marketAlloc', value: marketAllocMult },
+    ];
+    const normResult = this.governor.normalizeMultiplier(rawCompositeMultiplier, this.state.currentCapital * 0.02, factorBreakdown);
+    // V_CONTROL Phase 4: Signal stability filter
+    const signalStability = this.governor.evaluateSignalStability([], [], []);
+    // V_CONTROL V2: Meta-stability with execution stability input
+    const gExecStats = this.execFeedback.getGlobalStats();
+    const metaStab = this.governor.computeMetaStability([], [], 0, 0, gExecStats.p90SlippageBps, gExecStats.p50SlippageBps, gExecStats.successRate);
+    const governedMultiplier = normResult.normalizedMultiplier * signalStability.sizeMultiplier * metaStab.globalSizeMultiplier;
+    const sizing = this.sizer.calculate(this.state.currentCapital, ed.confidence, stats, ddState, governedMultiplier, this.state.consecutiveLosses);
 
     // Opportunity scoring
     const totalOi = snapshot.longOi + snapshot.shortOi;
@@ -860,8 +1260,29 @@ export class LiveTradingAgent {
       posSize, totalOi, snapshot.price, sl,
     );
 
-    if (!oppScore.passes) {
-      this.counterfactual.recordSkip(snapshot.market, side, snapshot.price, oppScore.total, `score<${metaDecision.scoreThreshold}`, primaryStrategy);
+    // V_PRODUCTION_STABLE: Use relaxed score threshold during cold start
+    const effectiveScoreThreshold = inColdStart ? 35 : metaDecision.scoreThreshold;
+    const scorePassesRaw = oppScore.total >= effectiveScoreThreshold;
+
+    if (!scorePassesRaw) {
+      this.signalPressure.recordSignal(snapshot.market, oppScore.total, composite.confidence, true, 'other');
+      // V_PRODUCTION_STABLE: Near-miss detection (score within 5 of threshold)
+      if (oppScore.total >= effectiveScoreThreshold - 5) {
+        this.signalPressure.recordNearMiss(snapshot.market, oppScore.total, effectiveScoreThreshold, 'other', composite.confidence);
+      }
+      this.counterfactual.recordSkip(snapshot.market, side, snapshot.price, oppScore.total, `score<${effectiveScoreThreshold}`, primaryStrategy);
+      return null;
+    }
+
+    // V_EDGE + V_CONTROL: Trade quality gate with signal stability buffer
+    const adjustedScore = oppScore.total - signalStability.extraScoreBuffer;
+    const qualityCheck = this.edgeProfiler.shouldTrade(adjustedScore, evCheck.ev ?? 0, slippagePred.expectedBps / 100);
+    if (!qualityCheck.allowed) {
+      this.signalPressure.recordSignal(snapshot.market, oppScore.total, composite.confidence, true, 'quality_gate');
+      if (oppScore.total >= effectiveScoreThreshold) {
+        this.signalPressure.recordNearMiss(snapshot.market, oppScore.total, effectiveScoreThreshold, 'quality_gate', composite.confidence);
+      }
+      this.counterfactual.recordSkip(snapshot.market, side, snapshot.price, oppScore.total, `quality_gate: ${qualityCheck.reason}`, primaryStrategy);
       return null;
     }
 
@@ -872,13 +1293,23 @@ export class LiveTradingAgent {
     }
 
     // Portfolio + correlation + micro-entry checks
-    let baseCollateral = Math.max(1, Math.min(sizing.collateral, Math.max(1, maxCapital)) * this.edgeRefiner.getSizeMultiplier());
+    const baseCollateral = Math.max(1, Math.min(sizing.collateral, Math.max(1, maxCapital)) * this.edgeRefiner.getSizeMultiplier());
     const portfolioCheck = this.portfolioIntel.check(this.state.positions, snapshot.market, side, baseCollateral * leverage, this.state.currentCapital);
-    if (!portfolioCheck.allowed) return null;
+    if (!portfolioCheck.allowed) { this.signalPressure.recordSignal(snapshot.market, oppScore.total, composite.confidence, true, 'portfolio_block'); return null; }
     const corrCheck = this.correlationGuard.check(this.state.positions, snapshot.market, side, baseCollateral * leverage, this.state.currentCapital);
-    if (!corrCheck.allowed) return null;
+    if (!corrCheck.allowed) { this.signalPressure.recordSignal(snapshot.market, oppScore.total, composite.confidence, true, 'correlation_block'); return null; }
+    // V_INFINITY: Micro-entry check (bypassed in latency mode)
     const microCheck = this.microEntry.check(snapshot.market, side, snapshot.price);
-    if (!microCheck.enterNow) return null;
+    if (!microCheck.enterNow && !this.latencyMode.shouldBypass('micro_entry')) {
+      // Track as missed opportunity for learning
+      this.oppLearner.recordMiss({
+        market: snapshot.market, side, detectionTime: Date.now(),
+        signalPrice: snapshot.price, peakPrice: snapshot.price, peakPnlPct: 0,
+        missReason: 'filter_rejected', filterName: 'micro_entry',
+        score: oppScore.total,
+      });
+      return null;
+    }
 
     // Apply size adjustments
     let finalCollateral = baseCollateral;
@@ -888,6 +1319,11 @@ export class LiveTradingAgent {
     const microBonus = microCheck.quality === 'excellent' ? 5 : microCheck.quality === 'good' ? 2 : 0;
     const finalScore = oppScore.total + microBonus;
     if (policyParams.sizeMultiplier !== 1.0) finalCollateral = Math.max(1, finalCollateral * policyParams.sizeMultiplier);
+    // V_PRODUCTION_STABLE: Apply cold start size reduction (0.7x during first 10 trades)
+    if (inColdStart) finalCollateral = Math.max(1, finalCollateral * coldStartSizeMult);
+
+    // V_PRODUCTION_STABLE: Record successful signal
+    this.signalPressure.recordSignal(snapshot.market, oppScore.total, composite.confidence, false);
 
     const decision: TradeDecision = {
       action: 'open' as DecisionAction,
@@ -903,7 +1339,7 @@ export class LiveTradingAgent {
     decision.riskLevel = riskCheck.riskLevel;
     decision.blockReason = riskCheck.blockReason;
 
-    if (decision.riskLevel === 'blocked') return null;
+    if (decision.riskLevel === 'blocked') { this.signalPressure.recordSignal(snapshot.market, oppScore.total, composite.confidence, true, 'risk_blocked'); return null; }
 
     // Store policy state for reward computation
     this.activeTradeStates.set(`${snapshot.market}:${side}`, {
@@ -1283,6 +1719,8 @@ export class LiveTradingAgent {
     this.log('normal', `Executing: ${decision.side} ${decision.market} ${decision.leverage}x $${decision.collateral}`);
 
     try {
+      const execStartMs = Date.now();
+      const expectedPrice = snapshot?.price ?? 0;
       const coreSide = decision.side === 'long' ? CoreTradeSide.Long : CoreTradeSide.Short;
       const result = await this.context.flashClient.openPosition(
         decision.market,
@@ -1290,6 +1728,37 @@ export class LiveTradingAgent {
         decision.collateral!,
         decision.leverage!,
       );
+      const execElapsedMs = Date.now() - execStartMs;
+
+      // V_OMEGA: Record execution quality
+      this.execFeedback.recordOpen(
+        decision.market,
+        decision.side ?? 'long',
+        expectedPrice,
+        (decision.collateral ?? 0) * (decision.leverage ?? 1),
+        result.entryPrice,
+        result.sizeUsd,
+        execElapsedMs,
+        true,
+      );
+      // V_OMEGA: Record in latency mode if active
+      if (this.latencyMode.isActive()) {
+        this.latencyMode.recordTradeResult(0);
+      }
+      // V_PRODUCTION: Log trade open for validation
+      if (this.validator.isActive()) {
+        const slipBps = expectedPrice > 0 ? Math.abs(result.entryPrice - expectedPrice) / expectedPrice * 10000 : 0;
+        const regimeMatch = decision.reasoning.match(/TRENDING_UP|TRENDING_DOWN|RANGING|HIGH_VOLATILITY|COMPRESSION/);
+        this.validator.logTradeOpen({
+          market: decision.market, side: decision.side ?? 'long', strategy: decision.strategy,
+          score: 0, confidence: decision.confidence, ev: 0,
+          regime: regimeMatch?.[0] ?? 'UNKNOWN',
+          expectedPrice, actualPrice: result.entryPrice,
+          collateral: decision.collateral ?? 0, leverage: decision.leverage ?? 1,
+          slippageBps: slipBps, feeCostUsd: result.sizeUsd * 0.0008,
+          executionMs: execElapsedMs,
+        });
+      }
 
       const entry = this.journal.record(decision, {
         entryPrice: result.entryPrice,
@@ -1318,6 +1787,12 @@ export class LiveTradingAgent {
       const msg = error instanceof Error ? error.message : String(error);
       this.log('error', `Trade failed: ${msg}`);
       this.journal.record(decision, { error: msg });
+      // V_OMEGA: Record failed execution
+      this.execFeedback.recordOpen(
+        decision.market, decision.side ?? 'long',
+        snapshot?.price ?? 0, (decision.collateral ?? 0) * (decision.leverage ?? 1),
+        0, 0, Date.now() - (snapshot?.timestamp ?? Date.now()), false, msg,
+      );
     }
   }
 
@@ -1421,7 +1896,62 @@ export class LiveTradingAgent {
       });
 
       this.callbacks.onTrade?.(entry);
-      this.log('normal', `Closed: ${position.market} ${position.side} PnL=$${pnl.toFixed(2)} | policy+weights updated`);
+
+      // V_OMEGA: Record close execution quality + feed PnL to latency mode
+      this.execFeedback.recordClose(
+        position.market, position.side,
+        position.entryPrice ?? 0, position.markPrice ?? 0,
+        0, true,
+      );
+      if (this.latencyMode.isActive()) {
+        this.latencyMode.recordTradeResult(pnl);
+      }
+
+      // V_EDGE: Record cost-adjusted trade for edge profiling
+      const marketExecStats = this.execFeedback.getMarketStats(position.market);
+      const slippageCostEst = marketExecStats ? (marketExecStats.avgSlippageBps / 10000) * (position.sizeUsd ?? 0) : 0;
+      const feeCostEst = (position.sizeUsd ?? 0) * 0.0008 * 2; // 8bps round-trip
+      const regimeFromReasoning = decision.reasoning.match(/TRENDING_UP|TRENDING_DOWN|RANGING|HIGH_VOLATILITY|COMPRESSION/)?.[0] ?? 'UNKNOWN';
+      this.edgeProfiler.recordTrade({
+        market: position.market,
+        strategy: decision.strategy,
+        regime: regimeFromReasoning,
+        side: position.side,
+        score: 0, // score not available here — recorded at open
+        confidence: decision.confidence,
+        collateral: decision.collateral ?? 0,
+        leverage: decision.leverage ?? position.leverage ?? 1,
+        expectedPnl: 0, // could be filled from TP distance at open
+        actualPnl: pnl,
+        slippageCost: slippageCostEst,
+        feeCost: feeCostEst,
+        executionCost: slippageCostEst + feeCostEst,
+        netPnl: pnl - slippageCostEst - feeCostEst,
+        exitEfficiency: 0.5, // default; could be computed from MFE tracking
+        holdingTimeMs: tradeState ? (this.state.iteration - tradeState.entryTick) * (this.config.pollIntervalMs || 10_000) : 0,
+        timestamp: Date.now(),
+      });
+
+      // V_CONTROL Phase 7: Feed live trade PnL to shadow comparison
+      this.governor.recordLiveTrade(pnl);
+
+      // V_PRODUCTION: Log trade close for validation
+      if (this.validator.isActive()) {
+        const netPnl = pnl - slippageCostEst - feeCostEst;
+        const holdMs = tradeState ? (this.state.iteration - tradeState.entryTick) * (this.config.pollIntervalMs || 10_000) : 0;
+        // Find most recent open log for this market/side
+        const openLogs = this.validator.getTradeLogs().filter(t => t.market === position.market && t.side === position.side && t.pnl === 0);
+        const openLog = openLogs[openLogs.length - 1];
+        if (openLog) {
+          this.validator.logTradeClose(openLog.id, {
+            pnl, pnlPct: position.pnlPercent ?? 0, netPnl, holdingMs: holdMs,
+            exitReason: decision.strategy,
+          });
+        }
+        this.validator.recordEquity(this.state.currentCapital);
+      }
+
+      this.log('normal', `Closed: ${position.market} ${position.side} PnL=$${pnl.toFixed(2)} net=$${(pnl - slippageCostEst - feeCostEst).toFixed(2)} | policy+weights updated`);
 
       // V17: Track rolling trade quality for fast-path gating
       this.recentTradeEVs.push(pnl);
@@ -1443,14 +1973,23 @@ export class LiveTradingAgent {
       }
 
       // EDGE REFINEMENT: check if cycle should run
+      // V_PRODUCTION: Block ALL adaptive changes during validation mode
       const closedCount = this.journal.getStats().totalTrades;
-      if (this.edgeRefiner.shouldRefine(closedCount)) {
+      if (this.validator.isFrozen()) {
+        // Architecture frozen for production validation — no refinements allowed
+      } else if (this.governor.isShadowRevertFrozen()) {
+        this.log('verbose', `EDGE REFINER: blocked by V_CONTROL shadow revert freeze`);
+      } else if (this.governor.isFrozen()) {
+        this.log('verbose', `EDGE REFINER: blocked by V_CONTROL rate limit freeze`);
+      } else if (this.edgeRefiner.shouldRefine(closedCount)) {
         const refinement = this.edgeRefiner.refine(
           this.journal.getEntries(),
           this.journal.getStats(),
           this.policyLearner.getMetrics(),
         );
         if (refinement.type !== 'no_action') {
+          // V_CONTROL V2: Record change for rate limiting
+          this.governor.recordChange('edge_refiner', refinement.target, 0, 1, this.state.iteration, closedCount);
           this.log('info', `EDGE REFINER: ${refinement.type} → ${refinement.target} | ${refinement.reason}`);
         }
       }

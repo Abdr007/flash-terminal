@@ -1558,8 +1558,16 @@ export class FlashTerminal {
       this.handleAgentAudit();
       return;
     }
-    if (lower === 'agent edge' || lower === 'agent validate' || lower === 'agent edge report') {
+    if (lower === 'agent edge' || lower === 'agent edge report') {
       await this.handleAgentEdge();
+      return;
+    }
+    if (lower === 'agent validate' || lower === 'agent production') {
+      this.handleAgentValidation();
+      return;
+    }
+    if (lower === 'agent governor' || lower === 'agent gov') {
+      this.handleAgentGovernor();
       return;
     }
     if (lower === 'agent refiner' || lower === 'agent refinements') {
@@ -3044,6 +3052,53 @@ export class FlashTerminal {
     const report = analyzer.analyze(journal.getEntries(), stats, policyMetrics);
     console.log('');
     console.log('  ' + analyzer.formatReport(report).split('\n').join('\n  '));
+    console.log('');
+  }
+
+  private handleAgentValidation(): void {
+    if (!this.liveAgent) {
+      console.log(chalk.dim('  No agent session. Start with: agent start'));
+      return;
+    }
+    const validator = this.liveAgent.getValidator();
+    if (!validator.isActive()) {
+      this.liveAgent.startValidation();
+      console.log('');
+      console.log(chalk.cyan('  Production validation mode activated.'));
+      console.log(chalk.dim('  Architecture frozen. Pure measurement for 200 trades.'));
+      console.log(chalk.dim('  Use "agent report" to check progress.'));
+      console.log('');
+    } else {
+      // Show current report
+      console.log('');
+      console.log('  ' + this.liveAgent.getValidationReport().split('\n').join('\n  '));
+      console.log('');
+    }
+  }
+
+  private handleAgentGovernor(): void {
+    if (!this.liveAgent) {
+      console.log(chalk.dim('  No agent session. Start with: agent start'));
+      return;
+    }
+    const gov = this.liveAgent.getGovernor();
+    const transparency = gov.getTransparencyReport();
+    console.log('');
+    console.log(chalk.bold('  System Governor Status'));
+    console.log(chalk.dim('  ─────────────────────────────────────────'));
+    console.log(`  Execution Lane:    ${transparency.executionLane === 'fast' ? chalk.yellow('FAST') : chalk.green('SAFE')}`);
+    console.log(`  Frozen:            ${transparency.frozen ? chalk.red('YES') : chalk.green('NO')}${transparency.freezeReason ? ` (${transparency.freezeReason})` : ''}`);
+    console.log(`  Clamp Frequency:   ${(transparency.clampAnalytics.clampFrequency * 100).toFixed(0)}%${transparency.clampAnalytics.dominantFactor !== 'none' ? ` (dominant: ${transparency.clampAnalytics.dominantFactor})` : ''}`);
+    console.log(`  Utilization:       ${(transparency.utilizationState.deployedPct * 100).toFixed(0)}%${transparency.utilizationState.relaxationReason ? ` — ${transparency.utilizationState.relaxationReason}` : ''}`);
+    console.log(`  Shadow vs Live:    ${transparency.shadowDelta.shadowBetter ? chalk.yellow('Shadow better') : chalk.green('Live OK')}`);
+    console.log(`  Exec Stability:    ${transparency.metaStabilityComponents.executionStability}/20`);
+    if (transparency.activeRestrictions.length > 0) {
+      console.log('');
+      console.log(chalk.bold('  Active Restrictions'));
+      for (const r of transparency.activeRestrictions) {
+        console.log(`  ${chalk.yellow('•')} ${r}`);
+      }
+    }
     console.log('');
   }
 
