@@ -1588,6 +1588,61 @@ export class LiveTradingAgent {
 
       // Use PositionManager for advanced tracking
       const managed = this.positionMgr.update(pos);
+      const rMultiple = managed?.rMultiple ?? 0;
+      const ts = this.activeTradeStates.get(tradeKey);
+      const holdingTicks = ts ? this.state.iteration - ts.entryTick : 0;
+      const momentum = this.exitPolicy.getMomentumState(pos.market, pos.side as 'long' | 'short');
+
+      // ── V_EXIT_DOMINANCE: Priority-ordered exit logic ──────────────────
+
+      // Phase 2: MOMENTUM REVERSAL EXIT (Priority 2 — after emergency, before profit lock)
+      if ((momentum === 'decaying' || momentum === 'reversing') && rMultiple > 0) {
+        this.log('normal', `MOMENTUM EXIT: ${pos.market} ${pos.side} R=${rMultiple.toFixed(2)} momentum=${momentum} — closing to protect profit`);
+        await this.closeWithReason(pos, 'momentum_exit', `Momentum ${momentum} at R=${rMultiple.toFixed(2)}`);
+        this.positionMgr.untrack(pos.market, pos.side);
+        continue;
+      }
+
+      // Phase 6: GIVE-BACK LIMIT (Priority 3 — protect peak profit)
+      // Track peak R per position
+      const peakKey = `peak_${tradeKey}`;
+      const prevPeakR = (this.activeTradeStates.get(peakKey) as unknown as number) ?? 0;
+      const currentPeakR = Math.max(prevPeakR, rMultiple);
+      (this.activeTradeStates as Map<string, unknown>).set(peakKey, currentPeakR);
+      if (currentPeakR > 0.20 && rMultiple < currentPeakR * 0.5) {
+        this.log('normal', `GIVE-BACK EXIT: ${pos.market} ${pos.side} R=${rMultiple.toFixed(2)} fell below 50% of peak ${currentPeakR.toFixed(2)} — closing`);
+        await this.closeWithReason(pos, 'give_back', `R fell to ${rMultiple.toFixed(2)} from peak ${currentPeakR.toFixed(2)}`);
+        this.positionMgr.untrack(pos.market, pos.side);
+        continue;
+      }
+
+      // Phase 1: PROFIT LOCK (Priority 4 — never let winner become loser)
+      // R ≥ 0.15 → breakeven stop (handled by position manager trailing stop)
+      // R ≥ 0.30 → lock minimum +0.10 profit
+      if (rMultiple >= 0.30 && pnlPct < 0.5) {
+        // R was ≥0.30 but PnL is now near zero — lock the profit
+        this.log('normal', `PROFIT LOCK: ${pos.market} ${pos.side} R=${rMultiple.toFixed(2)} but PnL=${pnlPct.toFixed(1)}% — locking profit`);
+        await this.closeWithReason(pos, 'profit_lock', `Profit lock at R=${rMultiple.toFixed(2)}`);
+        this.positionMgr.untrack(pos.market, pos.side);
+        continue;
+      }
+
+      // Phase 3: PARTIAL TAKE PROFIT at R ≥ 0.25
+      if (rMultiple >= 0.25 && !managed?.action?.includes('partial')) {
+        this.log('normal', `PARTIAL TP: ${pos.market} ${pos.side} R=${rMultiple.toFixed(2)} — closing 50%`);
+        await this.closeWithReason(pos, 'partial_tp', `R=${rMultiple.toFixed(2)} partial take profit`, 50);
+        continue;
+      }
+
+      // Phase 4: STAGNATION EXIT — dead trades die fast
+      if (holdingTicks > 20 && rMultiple < 0.10) {
+        this.log('normal', `STAGNATION EXIT: ${pos.market} ${pos.side} held ${holdingTicks} ticks at R=${rMultiple.toFixed(2)} — closing`);
+        await this.closeWithReason(pos, 'stagnation', `Held ${holdingTicks} ticks with R=${rMultiple.toFixed(2)}`);
+        this.positionMgr.untrack(pos.market, pos.side);
+        continue;
+      }
+
+      // ── END V_EXIT_DOMINANCE — fall through to existing exit logic ──
 
       if (managed) {
         // For trailing stop / hard stop from position manager — always obey
@@ -1598,10 +1653,8 @@ export class LiveTradingAgent {
           continue;
         }
 
-        // For hold/partial/time_decay — consult exit policy learner
+        // For hold/partial/time_decay — consult exit policy learner (Phase 5: Q-learning is advisory)
         if (managed.action === 'hold' || managed.action === 'partial_close' || managed.action === 'time_decay_exit') {
-          const ts = this.activeTradeStates.get(tradeKey);
-          const holdingTicks = ts ? this.state.iteration - ts.entryTick : 0;
           const regime = this.marketRegimes.get(pos.market) ?? 'RANGING';
 
           // Compute distance to TP/SL (approximate from position data)
@@ -1613,7 +1666,7 @@ export class LiveTradingAgent {
           // Approximate TP distance from R-multiple targets
           const distToTpPct = managed.rMultiple < 1 ? Math.max(0, (1 - managed.rMultiple) * 3) : 0;
 
-          const momentum = this.exitPolicy.getMomentumState(pos.market, pos.side as 'long' | 'short');
+          // momentum + holdingTicks already computed above (V_EXIT_DOMINANCE)
           const exitState = this.exitPolicy.buildState(pnlPct, holdingTicks, regime, distToTpPct, distToSlPct, momentum);
           const ddState = this.drawdown.getState();
           const exitRec = this.exitPolicy.recommend(exitState, ddState.drawdownPct > 0.05);
@@ -1681,10 +1734,9 @@ export class LiveTradingAgent {
       }
 
       // Fallback for untracked positions — use exit policy or simple rules
-      const ts = this.activeTradeStates.get(tradeKey);
-      const holdingTicks = ts ? this.state.iteration - ts.entryTick : 0;
+      // ts, holdingTicks, momentum already computed above (V_EXIT_DOMINANCE)
       const regime = this.marketRegimes.get(pos.market) ?? 'RANGING';
-      const fallbackMomentum = this.exitPolicy.getMomentumState(pos.market, pos.side as 'long' | 'short');
+      const fallbackMomentum = momentum;
       const exitState = this.exitPolicy.buildState(pnlPct, holdingTicks, regime, 10, 10, fallbackMomentum);
       const ddState = this.drawdown.getState();
       const exitRec = this.exitPolicy.recommend(exitState, ddState.drawdownPct > 0.05);
