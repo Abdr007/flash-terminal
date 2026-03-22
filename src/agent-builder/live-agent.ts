@@ -1258,7 +1258,23 @@ export class LiveTradingAgent {
     // V_CONTROL V2: Meta-stability with execution stability input
     const gExecStats = this.execFeedback.getGlobalStats();
     const metaStab = this.governor.computeMetaStability([], [], 0, 0, gExecStats.p90SlippageBps, gExecStats.p50SlippageBps, gExecStats.successRate);
-    const governedMultiplier = normResult.normalizedMultiplier * signalStability.sizeMultiplier * metaStab.globalSizeMultiplier;
+    // V_PROFIT_EXPANSION Phase 4: Position size escalation based on recent WR
+    let escalationMult = 1.0;
+    const recentJournalEntries = this.journal.getRecent(10);
+    const recentWins = recentJournalEntries.filter(e => (e.pnl ?? 0) > 0).length;
+    const recentWR = recentJournalEntries.length >= 5 ? recentWins / recentJournalEntries.length : 0;
+    const realEdge = this.edgeProfiler.getRealEdge();
+    if (recentWR >= 0.50 && realEdge.realEV > 0 && recentJournalEntries.length >= 5) {
+      escalationMult = metaDecision.mode === 'CONSERVATIVE' ? 0.8 : 1.2;
+    }
+
+    // V_PROFIT_EXPANSION Phase 5: High-confidence boost
+    let highConfBoost = 1.0;
+    if (composite.confidence >= 0.75 && (evCheck.ev ?? 0) >= 1.0 && regimeAllowed) {
+      highConfBoost = 1.3;
+    }
+
+    const governedMultiplier = normResult.normalizedMultiplier * signalStability.sizeMultiplier * metaStab.globalSizeMultiplier * escalationMult * highConfBoost;
     const sizing = this.sizer.calculate(this.state.currentCapital, ed.confidence, stats, ddState, governedMultiplier, this.state.consecutiveLosses);
 
     // Opportunity scoring
@@ -1593,48 +1609,52 @@ export class LiveTradingAgent {
       const holdingTicks = ts ? this.state.iteration - ts.entryTick : 0;
       const momentum = this.exitPolicy.getMomentumState(pos.market, pos.side as 'long' | 'short');
 
-      // ── V_EXIT_DOMINANCE: Priority-ordered exit logic ──────────────────
+      // ── V_EXIT_DOMINANCE + V_PROFIT_EXPANSION: Priority-ordered exit logic ──
 
-      // Phase 2: MOMENTUM REVERSAL EXIT (Priority 2 — after emergency, before profit lock)
-      if ((momentum === 'decaying' || momentum === 'reversing') && rMultiple > 0) {
+      // Track peak R per position
+      const peakKey = `peak_${tradeKey}`;
+      const prevPeakR = (this.activeTradeStates.get(peakKey) as unknown as number) ?? 0;
+      const currentPeakR = Math.max(prevPeakR, rMultiple);
+      (this.activeTradeStates as Map<string, unknown>).set(peakKey, currentPeakR);
+
+      // V_PROFIT_EXPANSION Phase 1: WINNER EXPANSION — let strong trades run
+      // If R≥0.30 + momentum accelerating + no reversal → extend TP, do NOT exit
+      const isWinnerExpanding = rMultiple >= 0.30 && momentum === 'accelerating';
+      if (isWinnerExpanding) {
+        this.log('verbose', `WINNER RUN: ${pos.market} ${pos.side} R=${rMultiple.toFixed(2)} momentum=${momentum} — letting it run`);
+        // Fall through to trailing stop — do NOT exit early
+      }
+
+      // Priority 2: MOMENTUM REVERSAL EXIT — but only if NOT in winner expansion
+      if (!isWinnerExpanding && (momentum === 'decaying' || momentum === 'reversing') && rMultiple > 0) {
         this.log('normal', `MOMENTUM EXIT: ${pos.market} ${pos.side} R=${rMultiple.toFixed(2)} momentum=${momentum} — closing to protect profit`);
         await this.closeWithReason(pos, 'momentum_exit', `Momentum ${momentum} at R=${rMultiple.toFixed(2)}`);
         this.positionMgr.untrack(pos.market, pos.side);
         continue;
       }
 
-      // Phase 6: GIVE-BACK LIMIT (Priority 3 — protect peak profit)
-      // Track peak R per position
-      const peakKey = `peak_${tradeKey}`;
-      const prevPeakR = (this.activeTradeStates.get(peakKey) as unknown as number) ?? 0;
-      const currentPeakR = Math.max(prevPeakR, rMultiple);
-      (this.activeTradeStates as Map<string, unknown>).set(peakKey, currentPeakR);
-      if (currentPeakR > 0.20 && rMultiple < currentPeakR * 0.5) {
-        this.log('normal', `GIVE-BACK EXIT: ${pos.market} ${pos.side} R=${rMultiple.toFixed(2)} fell below 50% of peak ${currentPeakR.toFixed(2)} — closing`);
-        await this.closeWithReason(pos, 'give_back', `R fell to ${rMultiple.toFixed(2)} from peak ${currentPeakR.toFixed(2)}`);
-        this.positionMgr.untrack(pos.market, pos.side);
-        continue;
+      // V_PROFIT_EXPANSION Phase 3: DYNAMIC TRAILING PROFIT LOCK (replaces static give-back)
+      // R ≥ 0.20 → trail at peakR × 0.60
+      // R ≥ 0.40 → trail at peakR × 0.70 (tighter trailing for big winners)
+      if (currentPeakR >= 0.20) {
+        const trailFactor = currentPeakR >= 0.40 ? 0.70 : 0.60;
+        const trailStop = currentPeakR * trailFactor;
+        if (rMultiple < trailStop) {
+          this.log('normal', `TRAIL LOCK: ${pos.market} ${pos.side} R=${rMultiple.toFixed(2)} < trail ${trailStop.toFixed(2)} (peak=${currentPeakR.toFixed(2)}×${trailFactor}) — closing`);
+          await this.closeWithReason(pos, 'trail_lock', `Trail lock at R=${rMultiple.toFixed(2)} (peak=${currentPeakR.toFixed(2)})`);
+          this.positionMgr.untrack(pos.market, pos.side);
+          continue;
+        }
       }
 
-      // Phase 1: PROFIT LOCK (Priority 4 — never let winner become loser)
-      // R ≥ 0.15 → breakeven stop (handled by position manager trailing stop)
-      // R ≥ 0.30 → lock minimum +0.10 profit
-      if (rMultiple >= 0.30 && pnlPct < 0.5) {
-        // R was ≥0.30 but PnL is now near zero — lock the profit
-        this.log('normal', `PROFIT LOCK: ${pos.market} ${pos.side} R=${rMultiple.toFixed(2)} but PnL=${pnlPct.toFixed(1)}% — locking profit`);
-        await this.closeWithReason(pos, 'profit_lock', `Profit lock at R=${rMultiple.toFixed(2)}`);
-        this.positionMgr.untrack(pos.market, pos.side);
-        continue;
-      }
-
-      // Phase 3: PARTIAL TAKE PROFIT at R ≥ 0.25
+      // V_PROFIT_EXPANSION Phase 2: PARTIAL TP at R ≥ 0.25 — close 30% (not 50%), let 70% run
       if (rMultiple >= 0.25 && !managed?.action?.includes('partial')) {
-        this.log('normal', `PARTIAL TP: ${pos.market} ${pos.side} R=${rMultiple.toFixed(2)} — closing 50%`);
-        await this.closeWithReason(pos, 'partial_tp', `R=${rMultiple.toFixed(2)} partial take profit`, 50);
+        this.log('normal', `PARTIAL TP: ${pos.market} ${pos.side} R=${rMultiple.toFixed(2)} — closing 30%, letting 70% run`);
+        await this.closeWithReason(pos, 'partial_tp', `R=${rMultiple.toFixed(2)} partial take profit`, 30);
         continue;
       }
 
-      // Phase 4: STAGNATION EXIT — dead trades die fast
+      // V_PROFIT_EXPANSION Phase 6: LOSS COMPRESSION — stagnation exit (keep losses tight)
       if (holdingTicks > 20 && rMultiple < 0.10) {
         this.log('normal', `STAGNATION EXIT: ${pos.market} ${pos.side} held ${holdingTicks} ticks at R=${rMultiple.toFixed(2)} — closing`);
         await this.closeWithReason(pos, 'stagnation', `Held ${holdingTicks} ticks with R=${rMultiple.toFixed(2)}`);
