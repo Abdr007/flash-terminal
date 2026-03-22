@@ -147,6 +147,10 @@ export class LiveTradingAgent {
   private prevSignals: Map<string, string> = new Map();
   /** V_SIGNAL_CALIBRATION: Track last 10 trade directions for diversity guard */
   private recentTradeDirections: string[] = [];
+  /** V_EDGE_EXTRACTION: Track EV by score bucket + regime + direction */
+  private edgeBuckets: Map<string, { pnl: number; count: number }> = new Map();
+  /** V_EDGE_EXTRACTION: Confidence accuracy tracking */
+  private confAccuracy: { highConf: { wins: number; total: number }; midConf: { wins: number; total: number } } = { highConf: { wins: 0, total: 0 }, midConf: { wins: 0, total: 0 } };
   /** Per-market cooldown after trade close */
   private marketCooldowns: Map<string, number> = new Map();
   /** Hourly trade counter for frequency limiting */
@@ -1346,7 +1350,52 @@ export class LiveTradingAgent {
         amplifiedScore = Math.max(amplifiedScore, oppScore.total + 3);
       }
     }
-    // If baseScore < 50, NO amplification — weak signals stay weak
+
+    // V_EDGE_EXTRACTION Phase 1: Bucket-based score adjustment
+    const bucketRegime = regime.regime.toUpperCase();
+    const currentBucket = amplifiedScore < 45 ? '40-45' : amplifiedScore < 50 ? '45-50' : amplifiedScore < 55 ? '50-55' : '55+';
+    const bucketKey = `score:${currentBucket}`;
+    const bucketData = this.edgeBuckets.get(bucketKey);
+    if (bucketData && bucketData.count >= 5) {
+      const bucketEV = bucketData.pnl / bucketData.count;
+      if (bucketEV > 0) amplifiedScore = Math.round(amplifiedScore * 1.05); // +5% for positive EV bucket
+    }
+
+    // Phase 4: Strategy surface detection — boost best-performing combos
+    const comboKey = `${currentBucket}:${bucketRegime}:${side}`;
+    const comboData = this.edgeBuckets.get(comboKey);
+    if (comboData && comboData.count >= 3 && comboData.pnl > 0) {
+      amplifiedScore = Math.round(amplifiedScore * 1.10); // +10% for proven combo
+    }
+
+    // Phase 5: Bad zone suppression — penalize zones with negative EV
+    const dirKey = `dir:${side}`;
+    const dirData = this.edgeBuckets.get(dirKey);
+    if (dirData && dirData.count >= 10 && (dirData.pnl / dirData.count) < -0.5) {
+      amplifiedScore = Math.round(amplifiedScore * 0.8); // -20% for bad direction
+    }
+    const regKey = `regime:${bucketRegime}`;
+    const regData = this.edgeBuckets.get(regKey);
+    if (regData && regData.count >= 10 && (regData.pnl / regData.count) < -0.5) {
+      amplifiedScore = Math.round(amplifiedScore * 0.8); // -20% for bad regime
+    }
+
+    // Phase 3: Confidence re-calibration — adjust trust based on accuracy
+    if (this.confAccuracy.highConf.total >= 10) {
+      const highWR = this.confAccuracy.highConf.wins / this.confAccuracy.highConf.total;
+      if (highWR < 0.40 && effectiveConfidence >= 0.60) {
+        amplifiedScore = Math.round(amplifiedScore * 0.95); // Reduce trust in high-confidence signals
+      }
+    }
+    if (this.confAccuracy.midConf.total >= 10) {
+      const midWR = this.confAccuracy.midConf.wins / this.confAccuracy.midConf.total;
+      if (midWR > 0.55 && effectiveConfidence >= 0.40 && effectiveConfidence < 0.60) {
+        amplifiedScore = Math.round(amplifiedScore * 1.05); // Boost mid-confidence signals
+      }
+    }
+
+    // Phase 2: Exploration decay — reduce exploration size as data grows
+    // (exploration size handled in the size section below)
 
     // Phase 1: HARD FLOOR BY MODE — non-negotiable minimums
     // V_ADAPTIVE_CONFIDENCE: Mode floors scale with experience
@@ -1456,8 +1505,11 @@ export class LiveTradingAgent {
     if (policyParams.sizeMultiplier !== 1.0) finalCollateral = Math.max(1, finalCollateral * policyParams.sizeMultiplier);
     // V_PRODUCTION_STABLE: Apply cold start size reduction (0.7x during first 10 trades)
     if (inColdStart) finalCollateral = Math.max(1, finalCollateral * coldStartSizeMult);
-    // V_LEARNING_ACCELERATION Phase 1: Exploration trades get 0.5x size (risk-controlled learning)
-    if (explorationTrade) finalCollateral = Math.max(1, finalCollateral * 0.5);
+    // V_EDGE_EXTRACTION Phase 2: Exploration decay — reduce size as data grows
+    if (explorationTrade) {
+      const explMult = stats.totalTrades < 40 ? 0.5 : stats.totalTrades < 80 ? 0.4 : 0.3;
+      finalCollateral = Math.max(1, finalCollateral * explMult);
+    }
     // Near-miss promoted trades get 0.7x size
     else if (nearMissPromoted) finalCollateral = Math.max(1, finalCollateral * 0.7);
 
@@ -2080,6 +2132,33 @@ export class LiveTradingAgent {
       const won = pnl > 0;
       this.expectancy.recordTrade(decision.strategy, pnl);
       this.ensemble.recordOutcome(decision.strategy, won);
+
+      // V_EDGE_EXTRACTION Phase 1: Record EV by score bucket + regime + direction
+      const scoreMatch = decision.reasoning.match(/SCORE=(\d+)/);
+      const regimeMatch = decision.reasoning.match(/TRENDING_UP|TRENDING_DOWN|RANGING|HIGH_VOLATILITY|COMPRESSION/);
+      const tradeScore = scoreMatch ? parseInt(scoreMatch[1], 10) : 0;
+      const tradeRegime = regimeMatch?.[0] ?? 'UNKNOWN';
+      const scoreBucket = tradeScore < 45 ? '40-45' : tradeScore < 50 ? '45-50' : tradeScore < 55 ? '50-55' : '55+';
+      for (const key of [
+        `score:${scoreBucket}`,
+        `regime:${tradeRegime}`,
+        `dir:${decision.side ?? 'unknown'}`,
+        `${scoreBucket}:${tradeRegime}:${decision.side ?? 'unknown'}`,
+      ]) {
+        const bucket = this.edgeBuckets.get(key) ?? { pnl: 0, count: 0 };
+        bucket.pnl += pnl;
+        bucket.count++;
+        this.edgeBuckets.set(key, bucket);
+      }
+
+      // V_EDGE_EXTRACTION Phase 3: Confidence accuracy tracking
+      if (decision.confidence >= 0.60) {
+        this.confAccuracy.highConf.total++;
+        if (won) this.confAccuracy.highConf.wins++;
+      } else if (decision.confidence >= 0.40) {
+        this.confAccuracy.midConf.total++;
+        if (won) this.confAccuracy.midConf.wins++;
+      }
 
       // Update fusion engine factor accuracy
       for (const signal of decision.signals) {
