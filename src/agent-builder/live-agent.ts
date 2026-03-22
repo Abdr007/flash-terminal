@@ -1382,15 +1382,23 @@ export class LiveTradingAgent {
     // During learning phase, decision threshold is relaxed (0.75x) to allow data collection
     const decisionThreshold = learningPhase ? effectiveScoreThreshold * 0.75 : effectiveScoreThreshold * 0.85;
 
-    // V_ADAPTIVE_CONFIDENCE Phase 4: Near-miss promotion (score ≥52 + EV>0 + close to threshold)
-    let nearMissPromoted = false;
-    if (amplifiedScore >= 52 && amplifiedScore < effectiveScoreThreshold
-        && effectiveConfidence >= (coldStartConfFloor - 0.05)
-        && tradeEV > 0 && decisionScore >= decisionThreshold) {
-      nearMissPromoted = true; // Allow at reduced size (0.7x applied later)
+    // V_LEARNING_ACCELERATION Phase 1: Controlled exploration zone (first 40 trades)
+    // Allow lower-score trades for learning, but at 0.5x size
+    const explorationPhase = stats.totalTrades < 40;
+    let explorationTrade = false;
+    if (explorationPhase && amplifiedScore >= 45 && amplifiedScore < effectiveScoreThreshold && tradeEV >= 0) {
+      explorationTrade = true; // Size reduced to 0.5x later
     }
 
-    const scorePassesRaw = (amplifiedScore >= effectiveScoreThreshold && decisionScore >= decisionThreshold) || nearMissPromoted;
+    // Near-miss promotion (score ≥48 + EV>0 + close to threshold)
+    let nearMissPromoted = false;
+    if (amplifiedScore >= 48 && amplifiedScore < effectiveScoreThreshold
+        && effectiveConfidence >= (coldStartConfFloor - 0.05)
+        && tradeEV > 0 && decisionScore >= decisionThreshold) {
+      nearMissPromoted = true;
+    }
+
+    const scorePassesRaw = (amplifiedScore >= effectiveScoreThreshold && decisionScore >= decisionThreshold) || nearMissPromoted || explorationTrade;
 
     if (!scorePassesRaw) {
       this.signalPressure.recordSignal(snapshot.market, amplifiedScore, composite.confidence, true, 'other');
@@ -1448,8 +1456,10 @@ export class LiveTradingAgent {
     if (policyParams.sizeMultiplier !== 1.0) finalCollateral = Math.max(1, finalCollateral * policyParams.sizeMultiplier);
     // V_PRODUCTION_STABLE: Apply cold start size reduction (0.7x during first 10 trades)
     if (inColdStart) finalCollateral = Math.max(1, finalCollateral * coldStartSizeMult);
-    // V_ADAPTIVE_CONFIDENCE Phase 4: Near-miss promoted trades get 0.7x size
-    if (nearMissPromoted) finalCollateral = Math.max(1, finalCollateral * 0.7);
+    // V_LEARNING_ACCELERATION Phase 1: Exploration trades get 0.5x size (risk-controlled learning)
+    if (explorationTrade) finalCollateral = Math.max(1, finalCollateral * 0.5);
+    // Near-miss promoted trades get 0.7x size
+    else if (nearMissPromoted) finalCollateral = Math.max(1, finalCollateral * 0.7);
 
     // V_SIGNAL_BALANCE_V2 Phase 2: Directional frequency control (last 20 trades)
     let dirScoreMult = 1.0;
@@ -2096,11 +2106,22 @@ export class LiveTradingAgent {
       const tradeState = this.activeTradeStates.get(tradeKey);
       if (tradeState) {
         const holdingTicks = this.state.iteration - tradeState.entryTick;
-        const reward = this.policyLearner.computeReward(pnl, decision.collateral ?? 100, decision.leverage ?? 3, holdingTicks);
+        let reward = this.policyLearner.computeReward(pnl, decision.collateral ?? 100, decision.leverage ?? 3, holdingTicks);
+
+        // V_LEARNING_ACCELERATION Phase 3: Fast feedback — bonus/penalty for exit quality
+        if (decision.strategy === 'momentum_exit' && pnl > 0) reward += 0.1;   // Good momentum exit
+        if (decision.strategy === 'stagnation') reward -= 0.1;                  // Stagnation penalty
+        if (decision.strategy === 'trail_lock' && pnl > 0) reward += 0.05;     // Profit protected
+
+        // Phase 2: Learning weight boost for edge discovery trades (score 45-55, EV>0)
+        // These trades get +15% reward magnitude to accelerate learning from exploration
+        const isEdgeDiscovery = (decision.collateral ?? 0) < (this.state.currentCapital * 0.015); // 0.5x sized = edge discovery
+        if (isEdgeDiscovery) reward *= 1.15;
+
         this.policyLearner.update(tradeState.state, tradeState.action, reward);
         this.activeTradeStates.delete(tradeKey);
         const pm = this.policyLearner.getMetrics();
-        this.log('verbose', `Policy: reward=${reward.toFixed(3)} ${tradeState.action} | LR=${pm.learningRate.toFixed(3)} explore=${(pm.explorationRate * 100).toFixed(0)}% sharpe=${pm.sharpe.toFixed(2)} states=${pm.policySize}`);
+        this.log('verbose', `Policy: reward=${reward.toFixed(3)} ${tradeState.action}${isEdgeDiscovery ? ' [EXPLORE]' : ''} | LR=${pm.learningRate.toFixed(3)} explore=${(pm.explorationRate * 100).toFixed(0)}% sharpe=${pm.sharpe.toFixed(2)} states=${pm.policySize}`);
       }
 
       // EXIT POLICY: update exit learner with final outcome
