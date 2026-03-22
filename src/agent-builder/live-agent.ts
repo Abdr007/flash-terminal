@@ -1106,7 +1106,8 @@ export class LiveTradingAgent {
     // V_PRODUCTION_STABLE: Cold start mode detection (first 10 trades)
     const COLD_START_RELAXED = 10;
     const inColdStart = stats.totalTrades < COLD_START_RELAXED;
-    const coldStartConfFloor = inColdStart ? 0.35 : 0.40;
+    // V_SELECTIVE_AGGRESSION Phase 3: Hard confidence filter (no exceptions)
+    const coldStartConfFloor = inColdStart ? 0.45 : 0.55;
     const coldStartSizeMult = inColdStart ? 0.7 : 1.0;
 
     // V_INFINITY: Orderbook intelligence — avoid entering into walls
@@ -1287,45 +1288,75 @@ export class LiveTradingAgent {
       posSize, totalOi, snapshot.price, sl,
     );
 
-    // ── V_SCORE_AMPLIFICATION: Boost valid signals without lowering standards ──
+    // ── V_SELECTIVE_AGGRESSION + V_SCORE_AMPLIFICATION ──
+
+    // Phase 4: EV PRIORITY — hard reject on negative EV
+    const tradeEV = evCheck.ev ?? 0;
+    if (tradeEV <= 0 && stats.totalTrades >= 10) {
+      this.signalPressure.recordSignal(snapshot.market, oppScore.total, composite.confidence, true, 'ev_fail');
+      return null;
+    }
+
+    // Phase 5: MULTI-CONFIRMATION — require 2 strong factors (≥60) or 1 dominant (≥75)
+    const strongFactors = composite.factors.filter(f => f.confidence >= 0.60 && f.direction !== 'neutral').length;
+    const dominantFactor = composite.factors.some(f => f.confidence >= 0.75 && f.direction !== 'neutral');
+    if (strongFactors < 2 && !dominantFactor) {
+      this.signalPressure.recordSignal(snapshot.market, oppScore.total, composite.confidence, true, 'low_confidence');
+      return null;
+    }
 
     let amplifiedScore = oppScore.total;
 
-    // Phase 1: High-quality signal amplification (+15% for confident, EV+, regime-aligned)
-    if (composite.confidence >= 0.65 && (evCheck.ev ?? 0) > 0 && regimeAllowed) {
-      amplifiedScore = Math.round(amplifiedScore * 1.15);
+    // Phase 2: AMPLIFICATION GUARD — only amplify if baseScore ≥ 50
+    if (oppScore.total >= 50) {
+      // High-quality signal amplification (+15% for confident, EV+, regime-aligned)
+      if (composite.confidence >= 0.65 && tradeEV > 0 && regimeAllowed) {
+        amplifiedScore = Math.round(amplifiedScore * 1.15);
+      }
+      // Penalty clamping — cap total penalty at 30% of raw base
+      const rawBase = (composite.confidence * 100);
+      if (rawBase > 0 && amplifiedScore < rawBase * 0.7) {
+        amplifiedScore = Math.max(amplifiedScore, Math.round(rawBase * 0.7));
+      }
+      // Regime confidence override
+      if (regimeAllowed && composite.confidence >= 0.70 && composite.confirmedFactors >= 2) {
+        amplifiedScore = Math.max(amplifiedScore, oppScore.total + 3);
+      }
     }
+    // If baseScore < 50, NO amplification — weak signals stay weak
 
-    // Phase 3: Penalty clamping — cap total penalty at 30% of raw base
-    // The scorer applies penalties internally; if the score is suppressed >30%, restore floor
-    const rawBase = (composite.confidence * 100); // approximate pre-penalty score
-    if (rawBase > 0 && amplifiedScore < rawBase * 0.7) {
-      amplifiedScore = Math.max(amplifiedScore, Math.round(rawBase * 0.7));
-    }
-
-    // Phase 4: Regime confidence override — ignore minor penalties when regime strongly aligned
-    if (regimeAllowed && composite.confidence >= 0.70 && composite.confirmedFactors >= 2) {
-      amplifiedScore = Math.max(amplifiedScore, oppScore.total + 3); // recover at least 3 points from penalties
-    }
-
-    // Phase 5: Adaptive threshold — if recent scores cluster near threshold with few trades, temporarily lower
-    const effectiveBaseThreshold = inColdStart ? 35 : metaDecision.scoreThreshold;
+    // Phase 1: HARD FLOOR BY MODE — non-negotiable minimums
+    const modeFloor = metaDecision.mode === 'AGGRESSIVE' ? 50
+      : metaDecision.mode === 'CONSERVATIVE' ? 65
+      : 55; // NORMAL
+    const effectiveBaseThreshold = inColdStart ? Math.min(45, modeFloor) : Math.max(modeFloor, metaDecision.scoreThreshold);
     let effectiveScoreThreshold = effectiveBaseThreshold;
+
+    // Adaptive threshold (if scores cluster near threshold with few trades)
     const pressureSummary = this.signalPressure.getSummary();
     if (pressureSummary.signalsGenerated >= 20 && pressureSummary.avgScore >= (effectiveBaseThreshold - 10) && pressureSummary.signalsExecuted < 3) {
-      effectiveScoreThreshold = effectiveBaseThreshold - 5;
+      effectiveScoreThreshold = Math.max(modeFloor - 5, effectiveBaseThreshold - 5); // never below mode floor - 5
     }
 
-    // Phase 2: Near-threshold boost — convert "almost trades" into valid trades
+    // Phase 4 continued: Low EV requires higher score
+    if (tradeEV > 0 && tradeEV < 0.5 && amplifiedScore < 60) {
+      this.signalPressure.recordSignal(snapshot.market, amplifiedScore, composite.confidence, true, 'ev_fail');
+      return null;
+    }
+
+    // Near-threshold boost (only for clean signals)
     if (amplifiedScore >= (effectiveScoreThreshold - 5) && amplifiedScore < effectiveScoreThreshold) {
-      // Only boost if signal is clean (no directional conflicts, good clarity)
-      const noConflicts = composite.confirmedFactors >= 1 && composite.confidence >= 0.50;
+      const noConflicts = composite.confirmedFactors >= 2 && composite.confidence >= 0.55;
       if (noConflicts) {
         amplifiedScore += 5;
       }
     }
 
-    const scorePassesRaw = amplifiedScore >= effectiveScoreThreshold;
+    // Phase 6: DECISION SCORE — blended quality metric
+    const decisionScore = (amplifiedScore * 0.5) + (composite.confidence * 100 * 0.3) + (Math.max(0, tradeEV) * 20 * 0.2);
+    const decisionThreshold = effectiveScoreThreshold * 0.9; // slightly below score threshold (blended)
+
+    const scorePassesRaw = amplifiedScore >= effectiveScoreThreshold && decisionScore >= decisionThreshold;
 
     if (!scorePassesRaw) {
       this.signalPressure.recordSignal(snapshot.market, amplifiedScore, composite.confidence, true, 'other');
