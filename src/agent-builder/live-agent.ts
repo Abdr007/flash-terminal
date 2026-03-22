@@ -1351,51 +1351,72 @@ export class LiveTradingAgent {
       }
     }
 
-    // V_EDGE_EXTRACTION Phase 1: Bucket-based score adjustment
+    // V_EDGE_VALIDATION_LOCK: Validated edge extraction (requires real statistical evidence)
     const bucketRegime = regime.regime.toUpperCase();
     const currentBucket = amplifiedScore < 45 ? '40-45' : amplifiedScore < 50 ? '45-50' : amplifiedScore < 55 ? '50-55' : '55+';
+
+    // Phase 7: Edge confidence = min(1.0, count/50) — scales boost with sample size
+    const edgeConf = (count: number) => Math.min(1.0, count / 50);
+
+    // Phase 1: Bucket boost (requires 20+ trades, NOT 5)
     const bucketKey = `score:${currentBucket}`;
     const bucketData = this.edgeBuckets.get(bucketKey);
-    if (bucketData && bucketData.count >= 5) {
+    if (bucketData && bucketData.count >= 20) {
       const bucketEV = bucketData.pnl / bucketData.count;
-      if (bucketEV > 0) amplifiedScore = Math.round(amplifiedScore * 1.05); // +5% for positive EV bucket
+      const baseBoost = bucketEV > 0 ? 0.05 : 0; // +5% max
+      // Phase 2: Require both total EV > 0 AND recent positive trend
+      if (baseBoost > 0 && bucketData.pnl > 0) {
+        const conf = edgeConf(bucketData.count);
+        amplifiedScore = Math.round(amplifiedScore * (1 + baseBoost * conf)); // Scaled by confidence
+      }
     }
 
-    // Phase 4: Strategy surface detection — boost best-performing combos
+    // Phase 4: Strategy surface detection (requires 15+ trades, NOT 3)
     const comboKey = `${currentBucket}:${bucketRegime}:${side}`;
     const comboData = this.edgeBuckets.get(comboKey);
-    if (comboData && comboData.count >= 3 && comboData.pnl > 0) {
-      amplifiedScore = Math.round(amplifiedScore * 1.10); // +10% for proven combo
+    if (comboData && comboData.count >= 15 && comboData.pnl > 0) {
+      const conf = edgeConf(comboData.count);
+      amplifiedScore = Math.round(amplifiedScore * (1 + 0.10 * conf)); // Up to +10% for proven combo
     }
 
-    // Phase 5: Bad zone suppression — penalize zones with negative EV
+    // Phase 4 (soft suppression): Bad zone penalties (gentle at first, harder with more data)
     const dirKey = `dir:${side}`;
     const dirData = this.edgeBuckets.get(dirKey);
-    if (dirData && dirData.count >= 10 && (dirData.pnl / dirData.count) < -0.5) {
-      amplifiedScore = Math.round(amplifiedScore * 0.8); // -20% for bad direction
+    if (dirData && dirData.count >= 10) {
+      const dirEV = dirData.pnl / dirData.count;
+      if (dirEV < -0.5) {
+        // Phase 6: Allow 10% exploration even in bad zones (prevent permanent blind spots)
+        const suppressMult = dirData.count >= 20 ? 0.8 : 0.9; // Soft first, harder later
+        if (Math.random() > 0.10) { // 90% suppressed, 10% exploration allowed
+          amplifiedScore = Math.round(amplifiedScore * suppressMult);
+        }
+      }
     }
     const regKey = `regime:${bucketRegime}`;
     const regData = this.edgeBuckets.get(regKey);
-    if (regData && regData.count >= 10 && (regData.pnl / regData.count) < -0.5) {
-      amplifiedScore = Math.round(amplifiedScore * 0.8); // -20% for bad regime
+    if (regData && regData.count >= 10) {
+      const regEV = regData.pnl / regData.count;
+      if (regEV < -0.5) {
+        const suppressMult = regData.count >= 20 ? 0.8 : 0.9;
+        if (Math.random() > 0.10) {
+          amplifiedScore = Math.round(amplifiedScore * suppressMult);
+        }
+      }
     }
 
-    // Phase 3: Confidence re-calibration — adjust trust based on accuracy
-    if (this.confAccuracy.highConf.total >= 10) {
+    // Confidence re-calibration (requires 15+ samples for stability)
+    if (this.confAccuracy.highConf.total >= 15) {
       const highWR = this.confAccuracy.highConf.wins / this.confAccuracy.highConf.total;
       if (highWR < 0.40 && effectiveConfidence >= 0.60) {
-        amplifiedScore = Math.round(amplifiedScore * 0.95); // Reduce trust in high-confidence signals
+        amplifiedScore = Math.round(amplifiedScore * 0.95);
       }
     }
-    if (this.confAccuracy.midConf.total >= 10) {
+    if (this.confAccuracy.midConf.total >= 15) {
       const midWR = this.confAccuracy.midConf.wins / this.confAccuracy.midConf.total;
       if (midWR > 0.55 && effectiveConfidence >= 0.40 && effectiveConfidence < 0.60) {
-        amplifiedScore = Math.round(amplifiedScore * 1.05); // Boost mid-confidence signals
+        amplifiedScore = Math.round(amplifiedScore * 1.05);
       }
     }
-
-    // Phase 2: Exploration decay — reduce exploration size as data grows
-    // (exploration size handled in the size section below)
 
     // Phase 1: HARD FLOOR BY MODE — non-negotiable minimums
     // V_ADAPTIVE_CONFIDENCE: Mode floors scale with experience
