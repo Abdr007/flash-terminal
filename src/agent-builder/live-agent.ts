@@ -1106,8 +1106,10 @@ export class LiveTradingAgent {
     // V_PRODUCTION_STABLE: Cold start mode detection (first 10 trades)
     const COLD_START_RELAXED = 10;
     const inColdStart = stats.totalTrades < COLD_START_RELAXED;
-    // V_SELECTIVE_AGGRESSION Phase 3: Hard confidence filter (no exceptions)
-    const coldStartConfFloor = inColdStart ? 0.45 : 0.55;
+    // V_ADAPTIVE_CONFIDENCE Phase 1: Dynamic confidence floor (scales with experience)
+    const coldStartConfFloor = stats.totalTrades < 20 ? 0.38
+      : stats.totalTrades < 50 ? 0.45
+      : 0.50;
     const coldStartSizeMult = inColdStart ? 0.7 : 1.0;
 
     // V_INFINITY: Orderbook intelligence — avoid entering into walls
@@ -1120,9 +1122,21 @@ export class LiveTradingAgent {
       return null;
     }
 
-    // Low confidence short-circuit
-    if (composite.confidence < coldStartConfFloor || !composite.confirmed) {
-      this.signalPressure.recordSignal(snapshot.market, 0, composite.confidence, true, 'low_confidence');
+    // V_ADAPTIVE_CONFIDENCE Phase 2: Boost confidence for aligned signals (before floor check)
+    let effectiveConfidence = composite.confidence;
+    const earlyRegime = this.precomputedRegimes.get(snapshot.market);
+    if (earlyRegime && snapshot.priceChange24h !== 0 && effectiveConfidence >= 0.40) {
+      effectiveConfidence = Math.min(0.85, effectiveConfidence + 0.05);
+    }
+    // High momentum + strong signal boost
+    const earlyPrediction = this.predictive.predict(snapshot.market);
+    if (Math.abs(earlyPrediction.velocity) > 0.3 && composite.confirmedFactors >= 1) {
+      effectiveConfidence = Math.min(0.85, effectiveConfidence + 0.05);
+    }
+
+    // Low confidence short-circuit (uses boosted confidence)
+    if (effectiveConfidence < coldStartConfFloor || !composite.confirmed) {
+      this.signalPressure.recordSignal(snapshot.market, 0, effectiveConfidence, true, 'low_confidence');
       return null;
     }
 
@@ -1297,11 +1311,20 @@ export class LiveTradingAgent {
       return null;
     }
 
-    // Phase 5: MULTI-CONFIRMATION — require 2 strong factors (≥60) or 1 dominant (≥75)
+    // V_ADAPTIVE_CONFIDENCE Phase 3: Soft multi-confirmation (scales with experience)
     const strongFactors = composite.factors.filter(f => f.confidence >= 0.60 && f.direction !== 'neutral').length;
+    const mediumFactors = composite.factors.filter(f => f.confidence >= 0.55 && f.direction !== 'neutral').length;
     const dominantFactor = composite.factors.some(f => f.confidence >= 0.75 && f.direction !== 'neutral');
-    if (strongFactors < 2 && !dominantFactor) {
-      this.signalPressure.recordSignal(snapshot.market, oppScore.total, composite.confidence, true, 'low_confidence');
+    let confirmationPasses: boolean;
+    if (stats.totalTrades < 30) {
+      // Early phase: 1 strong (≥60%) OR 2 medium (≥55%)
+      confirmationPasses = strongFactors >= 1 || mediumFactors >= 2;
+    } else {
+      // Mature phase: 2 strong (≥60%) OR 1 dominant (≥75%)
+      confirmationPasses = strongFactors >= 2 || dominantFactor;
+    }
+    if (!confirmationPasses) {
+      this.signalPressure.recordSignal(snapshot.market, oppScore.total, effectiveConfidence, true, 'low_confidence');
       return null;
     }
 
@@ -1326,10 +1349,12 @@ export class LiveTradingAgent {
     // If baseScore < 50, NO amplification — weak signals stay weak
 
     // Phase 1: HARD FLOOR BY MODE — non-negotiable minimums
-    const modeFloor = metaDecision.mode === 'AGGRESSIVE' ? 50
-      : metaDecision.mode === 'CONSERVATIVE' ? 65
-      : 55; // NORMAL
-    const effectiveBaseThreshold = inColdStart ? Math.min(45, modeFloor) : Math.max(modeFloor, metaDecision.scoreThreshold);
+    // V_ADAPTIVE_CONFIDENCE: Mode floors scale with experience
+    const learningPhase = stats.totalTrades < 30;
+    const modeFloor = metaDecision.mode === 'AGGRESSIVE' ? (learningPhase ? 42 : 50)
+      : metaDecision.mode === 'CONSERVATIVE' ? (learningPhase ? 48 : 60)
+      : (learningPhase ? 45 : 55); // NORMAL
+    const effectiveBaseThreshold = inColdStart ? Math.min(42, modeFloor) : Math.max(modeFloor, metaDecision.scoreThreshold);
     let effectiveScoreThreshold = effectiveBaseThreshold;
 
     // Adaptive threshold (if scores cluster near threshold with few trades)
@@ -1353,10 +1378,19 @@ export class LiveTradingAgent {
     }
 
     // Phase 6: DECISION SCORE — blended quality metric
-    const decisionScore = (amplifiedScore * 0.5) + (composite.confidence * 100 * 0.3) + (Math.max(0, tradeEV) * 20 * 0.2);
-    const decisionThreshold = effectiveScoreThreshold * 0.9; // slightly below score threshold (blended)
+    const decisionScore = (amplifiedScore * 0.5) + (effectiveConfidence * 100 * 0.3) + (Math.max(0, tradeEV) * 20 * 0.2);
+    // During learning phase, decision threshold is relaxed (0.75x) to allow data collection
+    const decisionThreshold = learningPhase ? effectiveScoreThreshold * 0.75 : effectiveScoreThreshold * 0.85;
 
-    const scorePassesRaw = amplifiedScore >= effectiveScoreThreshold && decisionScore >= decisionThreshold;
+    // V_ADAPTIVE_CONFIDENCE Phase 4: Near-miss promotion (score ≥52 + EV>0 + close to threshold)
+    let nearMissPromoted = false;
+    if (amplifiedScore >= 52 && amplifiedScore < effectiveScoreThreshold
+        && effectiveConfidence >= (coldStartConfFloor - 0.05)
+        && tradeEV > 0 && decisionScore >= decisionThreshold) {
+      nearMissPromoted = true; // Allow at reduced size (0.7x applied later)
+    }
+
+    const scorePassesRaw = (amplifiedScore >= effectiveScoreThreshold && decisionScore >= decisionThreshold) || nearMissPromoted;
 
     if (!scorePassesRaw) {
       this.signalPressure.recordSignal(snapshot.market, amplifiedScore, composite.confidence, true, 'other');
@@ -1414,6 +1448,8 @@ export class LiveTradingAgent {
     if (policyParams.sizeMultiplier !== 1.0) finalCollateral = Math.max(1, finalCollateral * policyParams.sizeMultiplier);
     // V_PRODUCTION_STABLE: Apply cold start size reduction (0.7x during first 10 trades)
     if (inColdStart) finalCollateral = Math.max(1, finalCollateral * coldStartSizeMult);
+    // V_ADAPTIVE_CONFIDENCE Phase 4: Near-miss promoted trades get 0.7x size
+    if (nearMissPromoted) finalCollateral = Math.max(1, finalCollateral * 0.7);
 
     // V_SIGNAL_BALANCE_V2 Phase 2: Directional frequency control (last 20 trades)
     let dirScoreMult = 1.0;
