@@ -168,6 +168,10 @@ export class Logger {
         .replace(/gsk_[^\s"]+/g, 'gsk_***')
         // [L-12] Mask base58 private keys (64-88 chars of base58 alphabet)
         .replace(/[1-9A-HJ-NP-Za-km-z]{64,88}/g, (m) => m.slice(0, 8) + '***REDACTED***')
+        // [F-10] Truncate full URLs to origin only — prevent leaking paths/tokens
+        .replace(/https?:\/\/[^\s"']+/g, (url) => {
+          try { return new URL(url).origin + '/***'; } catch { return url; }
+        })
     );
   }
 

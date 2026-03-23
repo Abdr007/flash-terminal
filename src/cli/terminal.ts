@@ -672,8 +672,8 @@ export class FlashTerminal {
         return;
       }
 
-      if (trimmed.length > 1000) {
-        console.log(chalk.red('  Input too long (max 1000 characters).'));
+      if (trimmed.length > 4096) {
+        console.log(chalk.red('  Input too long (max 4096 characters).'));
         this.rl.prompt();
         return;
       }

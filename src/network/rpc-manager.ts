@@ -622,6 +622,7 @@ export class RpcManager {
               new Connection(ep.url, {
                 commitment: 'confirmed',
                 disableRetryOnRateLimit: true,
+                fetch: (url, options) => fetch(url, { ...options, signal: AbortSignal.timeout(30_000) }),
               }),
             );
           } catch {

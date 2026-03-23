@@ -131,7 +131,10 @@ class PythPriceService {
       if (e instanceof Error && e.message.includes('Pythnet')) throw e;
       throw new Error(`Invalid Pythnet URL: ${pythnetUrl}`, { cause: e });
     }
-    const conn = new Connection(pythnetUrl);
+    const conn = new Connection(pythnetUrl, {
+      commitment: 'confirmed',
+      fetch: (url, options) => fetch(url, { ...options, signal: AbortSignal.timeout(30_000) }),
+    });
     this.pythClient = new PythHttpClient(conn, getPythProgramKeyForCluster('pythnet'));
   }
 

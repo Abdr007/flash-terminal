@@ -204,6 +204,9 @@ export class StateCache {
               continue;
             }
 
+            // Reject oversized account data (max 10MB) to prevent OOM from malicious RPC
+            if (Buffer.isBuffer(account.data) && account.data.length > 10_485_760) continue;
+
             this.accountCache.set(key, {
               data: Buffer.from(account.data),
               owner: account.owner.toBase58(),
@@ -281,6 +284,10 @@ export class StateCache {
     try {
       const account = await this.connection.getAccountInfo(pubkey, 'confirmed');
       if (account) {
+        // Reject oversized account data (max 10MB) to prevent OOM from malicious RPC
+        if (Buffer.isBuffer(account.data) && account.data.length > 10_485_760) {
+          return null;
+        }
         this.accountCache.set(key, {
           data: Buffer.from(account.data),
           owner: account.owner.toBase58(),
@@ -344,6 +351,9 @@ export class StateCache {
           results[missingIndices[j]] = account;
 
           if (account) {
+            // Reject oversized account data (max 10MB) to prevent OOM from malicious RPC
+            if (Buffer.isBuffer(account.data) && account.data.length > 10_485_760) continue;
+
             const key = missingKeys[j].toBase58();
             this.accountCache.set(key, {
               data: Buffer.from(account.data),
