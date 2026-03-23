@@ -12,46 +12,16 @@ export interface TokenPrice {
   isFallback: boolean;
 }
 
-// Pyth Hermes feed IDs (hex) — source: hermes.pyth.network/v2/price_feeds
-// Single source of truth for all Flash Trade market prices.
-const PYTH_FEED_IDS: Record<string, string> = {
-  // Crypto
-  SOL: '0xef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d',
-  BTC: '0xe62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43',
-  ETH: '0xff61491a931112ddf1bd8147cd1b641375f79f5825126d665480874634fd0ace',
-  BNB: '0x2f95862b045670cd22bee3114c39763a4a08beeb663b145d283c31d7d1101c4f',
-  ZEC: '0xbe9b59d178f0d6a97ab4c343bff2aa69caa1eaae3e9048a65788c529b125bb24',
-  JTO: '0xb43660a5f790c69354b0729a5ef9d50d68f1df92107540210b9cccba1f947cc2',
-  JUP: '0x0a0408d619e9380abad35060f9192039ed5042fa6f82301d0e48bb52be830996',
-  PYTH: '0x0bbf28e9a841a1cc788f6a361b17ca072d0ea3098a1e5df1c3922d06719579ff',
-  RAY: '0x91568baa8beb53db23eb3fb7f22c6e8bd303d103919e19733f2bb642d3e7987a',
-  BONK: '0x72b021217ca3fe68922a19aaf990109cb9d84e9ad004b4d2025ad6f529314419',
-  WIF: '0x4ca4beeca86f0d164160323817a4e42b10010a724c2217c6ee41b54cd4cc61fc',
-  PENGU: '0xbed3097008b9b5e3c93bec20be79cb43986b85a996475589351a21e67bae9b61',
-  ORE: '0x142b804c658e14ff60886783e46e5a51bdf398b4871d9d8f7c28aa1585cad504',
-  HYPE: '0x4279e31cc369bbcc2faf022b382b080e32a8e689ff20fbc530d2a603eb6cd98b',
-  FARTCOIN: '0x58cd29ef0e714c5affc44f269b2c1899a52da4169d7acc147b9da692e6953608',
-  KMNO: '0xb17e5bc5de742a8a378b54c9c75442b7d51e30ada63f28d9bd28d3c0e26511a0',
-  MET: '0x0292e0f405bcd4a496d34e48307f6787349ad2bcd8505c3d3a9f77d81a67a682',
-  PUMP: '0x7a01fca212788bba7c5bf8c9efd576a8a722f070d2c17596ff7bb609b8d5c3b9',
-  // Commodities
-  XAU: '0x765d2ba906dbc32ca17cc11f5310a89e9ee1f6420508c63861f2f8ba4ee34bb2',
-  XAG: '0xf2fb02c32b055c805e7238d628e5e9dadef274376114eb1f012337cabe93871e',
-  CRUDEOIL: '0x925ca92ff005ae943c158e3563f59698ce7e75c5a8c8dd43303a0a154887b3e6',
-  // Forex
-  EUR: '0xa995d00bb36a63cef7fd2c287dc105fc8f3d93779f062f09551b0af3e81ec30b',
-  GBP: '0x84c2dde9633d93d1bcad84e7dc41c9d56578b7ec52fabedc1f335d673df0a7c1',
-  USDJPY: '0xef2c98c804ba503c6a707e38be4dfbb16683775f195b091252bf24693042fd52',
-  USDCNH: '0xeef52e09c878ad41f6a81803e3640fe04dceea727de894edd4ea117e2e332e66',
-  // US Equities
-  SPY: '0x5374a7d76a45ae2443cef351d10482b7bcc6ef5a928e75030d63b5fb3abe7cb5',
-  NVDA: '0x61c4ca5b9731a79e285a01e24432d57d89f0ecdd4cd7828196ca8992d5eafef6',
-  TSLA: '0x42676a595d0099c381687124805c8bb22c75424dffcaa55e3dc6549854ebe20a',
-  AAPL: '0x5a207c4aa0114baecf852fcd9db9beb8ec715f2db48caa525dbd878fd416fb09',
-  AMD: '0x7178689d88cdd76574b64438fc57f4e57efaf0bf5f9593ee19c10e46a3c5b5cf',
-  AMZN: '0x82c59e36a8e0247e15283748d6cd51f5fa1019d73fbf3ab6d927e17d9e357a7f',
-  PLTR: '0x3a4c922ec7e8cd86a6fa4005827e723a134a16f4ffe836eac91e7820c61f75a1',
-};
+// Pyth Hermes feed IDs — loaded dynamically from Market Registry (SDK source of truth).
+// No hardcoded feed IDs. New markets added via `npm update flash-sdk` are auto-discovered.
+import { getAllPythFeedIds, getPythFeedIdFromRegistry } from '../markets/index.js';
+
+/** Lazily-loaded Pyth feed ID map from SDK PoolConfig.json. */
+let _pythFeedIds: Record<string, string> | null = null;
+function getPythFeedIds(): Record<string, string> {
+  if (!_pythFeedIds) _pythFeedIds = getAllPythFeedIds();
+  return _pythFeedIds;
+}
 
 const FETCH_TIMEOUT_MS = 8_000;
 const MAX_PRICE_CACHE_ENTRIES = 500;
@@ -94,7 +64,7 @@ let _historyLoaded = false;
 
 /** Get the Pyth feed ID for a market symbol (for diagnostics). */
 export function getPythFeedId(symbol: string): string | null {
-  return PYTH_FEED_IDS[symbol.toUpperCase()] ?? null;
+  return getPythFeedIdFromRegistry(symbol.toUpperCase()) ?? null;
 }
 
 export class PriceService {
@@ -189,7 +159,7 @@ export class PriceService {
     const feedIds: string[] = [];
     const idToSymbol = new Map<string, string>();
     for (const sym of symbols) {
-      const feedId = PYTH_FEED_IDS[sym];
+      const feedId = getPythFeedIds()[sym];
       if (feedId) {
         feedIds.push(feedId);
         idToSymbol.set(feedId.slice(2), sym);

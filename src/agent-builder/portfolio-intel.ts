@@ -8,26 +8,19 @@
  */
 
 import type { Position } from '../sdk/types.js';
+import { getMarketGroup, getAllGroups } from '../markets/index.js';
 
 // ─── Asset Groups (correlated assets) ────────────────────────────────────────
-
-const ASSET_GROUPS: Record<string, string[]> = {
-  'major_crypto': ['SOL', 'BTC', 'ETH'],
-  'alt_defi': ['JUP', 'JTO', 'RAY', 'PYTH', 'KMNO'],
-  'meme': ['BONK', 'WIF', 'FARTCOIN', 'PENGU', 'PUMP'],
-  'precious_metals': ['XAU', 'XAG'],
-  'forex': ['EUR', 'GBP', 'USDJPY', 'USDCNH'],
-  'commodities': ['CRUDEOIL'],
-  'equities': ['SPY', 'NVDA', 'TSLA', 'AAPL', 'AMD', 'AMZN', 'PLTR'],
-  'standalone': ['HYPE', 'ORE', 'ZEC', 'BNB', 'MET'],
-};
+// Loaded dynamically from Market Registry (SDK source of truth).
+// New markets are auto-classified into groups based on type/pool.
 
 function getGroup(market: string): string {
-  const upper = market.toUpperCase();
-  for (const [group, assets] of Object.entries(ASSET_GROUPS)) {
-    if (assets.includes(upper)) return group;
-  }
-  return 'unknown';
+  return getMarketGroup(market);
+}
+
+/** Get all group definitions (for display/diagnostics). */
+export function getGroups(): Record<string, string[]> {
+  return getAllGroups();
 }
 
 // ─── Types ───────────────────────────────────────────────────────────────────

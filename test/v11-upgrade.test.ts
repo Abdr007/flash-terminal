@@ -227,33 +227,36 @@ describe('Correlation Guard', () => {
   });
 
   it('blocks same-direction in same cluster', () => {
-    const positions = [mockPos('SOL', 'long', 100)] as any[];
-    const result = guard.check(positions, 'BONK', 'long', 50, 10000);
+    // BONK and PENGU are both in meme_community cluster
+    const positions = [mockPos('BONK', 'long', 100)] as any[];
+    const result = guard.check(positions, 'PENGU', 'long', 50, 10000);
     expect(result.allowed).toBe(false);
-    expect(result.reason).toContain('sol_ecosystem');
+    expect(result.reason).toContain('meme_community');
   });
 
   it('allows opposite direction in same cluster with reduced size', () => {
-    const positions = [mockPos('SOL', 'long', 100)] as any[];
-    const result = guard.check(positions, 'BONK', 'short', 50, 10000);
+    // BONK and PENGU are both in meme_community cluster
+    const positions = [mockPos('BONK', 'long', 100)] as any[];
+    const result = guard.check(positions, 'PENGU', 'short', 50, 10000);
     expect(result.allowed).toBe(true);
     expect(result.sizeMultiplier).toBeLessThan(1.0);
   });
 
   it('blocks when cluster position limit exceeded', () => {
     const positions = [
-      mockPos('SOL', 'long', 100),
-      mockPos('BONK', 'short', 50),
+      mockPos('BONK', 'long', 100),
+      mockPos('PENGU', 'short', 50),
     ] as any[];
-    // WIF short blocked because BONK short already exists in same cluster (per-direction limit)
+    // WIF short blocked because PENGU short already exists in same cluster (per-direction limit)
     const result = guard.check(positions, 'WIF', 'short', 50, 10000);
     expect(result.allowed).toBe(false);
-    expect(result.reason).toContain('sol_ecosystem');
+    expect(result.reason).toContain('meme_community');
   });
 
   it('blocks when cluster exposure exceeds cap', () => {
-    const positions = [mockPos('SOL', 'long', 1400)] as any[];
-    const result = guard.check(positions, 'JUP', 'short', 200, 10000);
+    // BONK with large exposure in meme_community, PENGU would exceed cap
+    const positions = [mockPos('BONK', 'long', 1400)] as any[];
+    const result = guard.check(positions, 'PENGU', 'short', 200, 10000);
     expect(result.allowed).toBe(false);
     expect(result.reason).toContain('exceed');
   });
@@ -273,9 +276,9 @@ describe('Correlation Guard', () => {
 
   it('getClusterInfo returns correct cluster', () => {
     const info = guard.getClusterInfo('BONK');
-    expect(info.cluster).toBe('sol_ecosystem');
-    expect(info.members).toContain('SOL');
+    expect(info.cluster).toBe('meme_community');
     expect(info.members).toContain('BONK');
+    expect(info.members).toContain('PENGU');
   });
 });
 

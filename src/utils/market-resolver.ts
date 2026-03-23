@@ -10,60 +10,26 @@
  */
 
 import { getAllMarkets, getPoolForMarket } from '../config/index.js';
+import { getAllAliases } from '../markets/index.js';
 import { getLogger } from './logger.js';
 
 // ─── Alias Dictionary ───────────────────────────────────────────────────────
-// Maps lowercase alias → canonical UPPERCASE market symbol.
-// Multi-word aliases use the space-collapsed form as key as well.
+// Loaded dynamically from Market Registry (SDK source of truth).
+// Registry provides auto-generated aliases; this layer merges them with
+// any custom overrides. New SDK markets get aliases automatically.
 
-const MARKET_ALIASES: Record<string, string> = {
-  // Full names
-  jito: 'JTO',
-  raydium: 'RAY',
-  kamino: 'KMNO',
-  metaplex: 'MET',
-  solana: 'SOL',
-  bitcoin: 'BTC',
-  ethereum: 'ETH',
-  ether: 'ETH',
-  zcash: 'ZEC',
-  // Commodities
-  gold: 'XAU',
-  silver: 'XAG',
-  crude: 'CRUDEOIL',
-  oil: 'CRUDEOIL',
-  'crude oil': 'CRUDEOIL',
-  crudeoil: 'CRUDEOIL',
-  // Forex
-  euro: 'EUR',
-  pound: 'GBP',
-  sterling: 'GBP',
-  yen: 'USDJPY',
-  yuan: 'USDCNH',
-  // Memecoins / Community
-  penguin: 'PENGU',
-  pengu: 'PENGU',
-  hyperliquid: 'HYPE',
-  hype: 'HYPE',
-  pumpfun: 'PUMP',
-  pump: 'PUMP',
-  fartcoin: 'FARTCOIN',
-  ore: 'ORE',
-  bonk: 'BONK',
-  wif: 'WIF',
-  // Binance
-  binance: 'BNB',
-  // Stocks (Ondo.1)
-  nvidia: 'NVDA',
-  tesla: 'TSLA',
-  apple: 'AAPL',
-  amazon: 'AMZN',
-  palantir: 'PLTR',
-  sp500: 'SPY',
-  's&p': 'SPY',
-  's&p500': 'SPY',
-  'sp 500': 'SPY',
-};
+let _cachedAliases: Record<string, string> | null = null;
+
+function getMarketAliasMap(): Record<string, string> {
+  if (_cachedAliases) return _cachedAliases;
+  _cachedAliases = getAllAliases();
+  return _cachedAliases;
+}
+
+/** Force refresh alias cache (e.g., after SDK update). */
+export function refreshAliasCache(): void {
+  _cachedAliases = null;
+}
 
 /**
  * Resolve a user-provided market string to a canonical Flash Trade symbol.
@@ -97,11 +63,11 @@ export function resolveMarket(input: string): string {
   if (allMarkets.includes(collapsed)) return collapsed;
 
   // 2. Exact alias match (handles multi-word like "crude oil")
-  if (MARKET_ALIASES[lower]) return MARKET_ALIASES[lower];
+  if (getMarketAliasMap()[lower]) return getMarketAliasMap()[lower];
 
   // 3. Space-collapsed alias match
   const collapsedLower = lower.replace(/\s+/g, '');
-  if (MARKET_ALIASES[collapsedLower]) return MARKET_ALIASES[collapsedLower];
+  if (getMarketAliasMap()[collapsedLower]) return getMarketAliasMap()[collapsedLower];
 
   // 4. Fallback: return collapsed uppercase
   return collapsed;
@@ -135,7 +101,7 @@ export function isValidMarket(symbol: string): boolean {
  * Get all known aliases for display/documentation purposes.
  */
 export function getMarketAliases(): ReadonlyMap<string, string> {
-  return new Map(Object.entries(MARKET_ALIASES));
+  return new Map(Object.entries(getMarketAliasMap()));
 }
 
 /**
@@ -149,8 +115,10 @@ export function getMarketAliases(): ReadonlyMap<string, string> {
 export function normalizeAssetText(text: string): string {
   let result = text;
 
+  const aliasMap = getMarketAliasMap();
+
   // Process multi-word aliases first (longest match first)
-  const multiWord = Object.entries(MARKET_ALIASES)
+  const multiWord = Object.entries(aliasMap)
     .filter(([alias]) => alias.includes(' '))
     .sort((a, b) => b[0].length - a[0].length);
 
@@ -159,7 +127,7 @@ export function normalizeAssetText(text: string): string {
   }
 
   // Then single-word aliases
-  for (const [alias, symbol] of Object.entries(MARKET_ALIASES)) {
+  for (const [alias, symbol] of Object.entries(aliasMap)) {
     if (alias.includes(' ')) continue; // already handled
     result = result.replace(new RegExp(`\\b${escapeRegex(alias)}\\b`, 'gi'), symbol.toLowerCase());
   }

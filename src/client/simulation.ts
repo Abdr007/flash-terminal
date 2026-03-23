@@ -23,19 +23,12 @@ import { computeSimulationLiquidationPrice } from '../utils/protocol-liq.js';
 
 const MAX_TRADE_HISTORY = 500;
 const MAX_LIVE_PRICE_ENTRIES = 100;
-const DEFAULT_SLIPPAGE_BPS = 8; // 0.08% default slippage
-
-/** Per-market slippage based on typical liquidity — higher for memes/low-liq */
-const MARKET_SLIPPAGE_BPS: Record<string, number> = {
-  BTC: 3, ETH: 4, SOL: 6,
-  BNB: 8, JUP: 10, RAY: 12, PYTH: 12, JTO: 12,
-  BONK: 15, WIF: 15, PENGU: 18, PUMP: 18, FARTCOIN: 20,
-  XAU: 5, XAG: 8, CRUDEOIL: 10,
-  SPY: 4, NVDA: 6, TSLA: 8, AAPL: 5, AMD: 8, AMZN: 6, PLTR: 10,
-};
+// Slippage loaded dynamically from Market Registry (SDK source of truth).
+// New markets get safe defaults based on their type classification.
+import { getDefaultSlippageBps as registrySlippageBps } from '../markets/index.js';
 
 function getSlippageBps(market: string): number {
-  return MARKET_SLIPPAGE_BPS[market.toUpperCase()] ?? DEFAULT_SLIPPAGE_BPS;
+  return registrySlippageBps(market);
 }
 
 // Feed IDs are centralized in PriceService (src/data/prices.ts).

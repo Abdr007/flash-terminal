@@ -12,27 +12,19 @@
  */
 
 import type { Position } from '../sdk/types.js';
+import { getMarketCluster, getAllClusters } from '../markets/index.js';
 
 // ─── Correlation Clusters ───────────────────────────────────────────────────
-
-/** Asset clusters — assets within a cluster tend to move together */
-const CLUSTERS: Record<string, string[]> = {
-  sol_ecosystem: ['SOL', 'BONK', 'WIF', 'JUP', 'PUMP', 'PYTH', 'RAY', 'JTO', 'KMNO', 'PENGU'],
-  btc_major: ['BTC'],
-  eth_major: ['ETH'],
-  other_crypto: ['BNB', 'ZEC', 'HYPE', 'MET', 'ORE', 'FARTCOIN'],
-  precious_metals: ['XAU', 'XAG'],
-  forex: ['EUR', 'GBP', 'USDJPY', 'USDCNH'],
-  commodities: ['CRUDEOIL'],
-  us_equities: ['SPY', 'NVDA', 'TSLA', 'AAPL', 'AMD', 'AMZN', 'PLTR'],
-};
+// Loaded dynamically from Market Registry (SDK source of truth).
+// New markets are auto-assigned to appropriate clusters based on type/pool.
 
 function getCluster(market: string): string {
-  const upper = market.toUpperCase();
-  for (const [cluster, assets] of Object.entries(CLUSTERS)) {
-    if (assets.includes(upper)) return cluster;
-  }
-  return `standalone_${upper}`;
+  return getMarketCluster(market);
+}
+
+/** Get all cluster definitions (for display/diagnostics). */
+export function getClusters(): Record<string, string[]> {
+  return getAllClusters();
 }
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -239,7 +231,8 @@ export class CorrelationGuard {
    */
   getClusterInfo(market: string): { cluster: string; members: string[] } {
     const cluster = getCluster(market);
-    const members = CLUSTERS[cluster] ?? [market.toUpperCase()];
+    const allClusters = getAllClusters();
+    const members = allClusters[cluster] ?? [market.toUpperCase()];
     return { cluster, members };
   }
 }
