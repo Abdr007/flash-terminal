@@ -166,6 +166,15 @@ export class MetaAgent {
       this.consecutiveHalts = 0;
     }
 
+    // EARLY-PHASE OVERRIDE: Prevent premature HALT when data is insufficient.
+    // With <20 closed trades, WR and EV are statistically meaningless.
+    // Allow CONSERVATIVE (never HALT) so the agent can collect learning data.
+    // Auto-disables at 20 trades — full strict META resumes.
+    if (mode === 'HALT' && recentTradeCount < 20) {
+      mode = 'CONSERVATIVE';
+      reasons.push(`EARLY-PHASE(${recentTradeCount}/20)→CONSERVATIVE`);
+    }
+
     // Hysteresis — don't flip modes every tick
     this.recentDecisions.push(mode);
     if (this.recentDecisions.length > this.maxHistory) this.recentDecisions.shift();
