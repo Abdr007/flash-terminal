@@ -54,6 +54,7 @@ import { SystemGovernor } from './system-governor.js';
 import { SignalPressure } from './signal-pressure.js';
 import { ProductionValidator } from './production-validator.js';
 import { saveAgentState, loadAgentState, buildPersistedState } from './state-persistence.js';
+import { writeHeartbeat, writePidFile, cleanPidFile, cleanHeartbeat } from '../agent/agent-runtime.js';
 import type { CompositeSignal } from './signal-fusion.js';
 
 import type {
@@ -278,6 +279,9 @@ export class LiveTradingAgent {
     this.stopRequested = false;
     this.setStatus(AgentStatus.RUNNING);
 
+    // Write PID file + initial heartbeat for external detection
+    try { writePidFile(); writeHeartbeat(); } catch { /* non-critical */ }
+
     this.log('info', `Agent "${this.config.name}" v11 (persistent-learning) starting`);
     this.log('info', `Scanning: ${this.config.markets.length} markets → score + rank → top trades only`);
     this.log('info', `Strategies: ${this.strategies.map((s) => s.name).join(', ')}`);
@@ -368,6 +372,9 @@ export class LiveTradingAgent {
 
     // PERSIST learning state before cleanup
     this.persistState();
+
+    // Clean PID file + heartbeat (signal to external detectors that we're stopped)
+    try { cleanPidFile(); cleanHeartbeat(); } catch { /* non-critical */ }
 
     // Full cleanup — prevent memory leaks on long sessions
     this.prevSignals.clear();
@@ -467,6 +474,9 @@ export class LiveTradingAgent {
     const tickTimer = this.perf.startTimer('tick');
     this.state.iteration++;
     this.callbacks.onTick?.(this.state, this.state.iteration);
+
+    // Heartbeat: write timestamp every tick (fire-and-forget, non-blocking)
+    try { writeHeartbeat(); } catch { /* never throw from heartbeat */ }
 
     // DAILY RESET — reset daily PnL tracking at UTC midnight
     const todayUtc = new Date().toISOString().slice(0, 10);
@@ -1846,7 +1856,18 @@ export class LiveTradingAgent {
         continue;
       }
 
+      // STAGNATION EARLY EXIT: Cut flat/losing trades before large loss develops.
+      // Triggers at 12 ticks if PnL ≤ -0.3% — catches slow bleed early.
+      // Does NOT touch profitable trades (pnlPct > 0) or momentum_exit winners.
+      if (holdingTicks >= 12 && pnlPct <= -0.3) {
+        this.log('normal', `STAGNATION_EARLY_EXIT: ${pos.market} ${pos.side} ticks=${holdingTicks} pnl=${pnlPct.toFixed(2)}% R=${rMultiple.toFixed(2)} — cutting loss early`);
+        await this.closeWithReason(pos, 'stagnation', `Early exit: ${holdingTicks} ticks at ${pnlPct.toFixed(2)}%`);
+        this.positionMgr.untrack(pos.market, pos.side);
+        continue;
+      }
+
       // V_PROFIT_EXPANSION Phase 6: LOSS COMPRESSION — stagnation exit (keep losses tight)
+      // Catches remaining flat trades (near-zero PnL) held too long.
       if (holdingTicks > 20 && rMultiple < 0.10) {
         this.log('normal', `STAGNATION EXIT: ${pos.market} ${pos.side} held ${holdingTicks} ticks at R=${rMultiple.toFixed(2)} — closing`);
         await this.closeWithReason(pos, 'stagnation', `Held ${holdingTicks} ticks with R=${rMultiple.toFixed(2)}`);
