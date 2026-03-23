@@ -74,7 +74,10 @@ program
     const config = loadConfig();
 
     if (opts.pool) config.defaultPool = opts.pool;
-    if (opts.rpc) config.rpcUrl = opts.rpc;
+    if (opts.rpc) {
+      const { validateRpcUrl } = await import('./config/index.js');
+      config.rpcUrl = validateRpcUrl(opts.rpc);
+    }
     if (opts.plugins === false) config.noPlugins = true;
 
     const terminal = new FlashTerminal(config);

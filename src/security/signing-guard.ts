@@ -253,6 +253,7 @@ export class SigningGuard {
 let _guard: SigningGuard | null = null;
 
 export function initSigningGuard(config?: Partial<SigningGuardConfig>): SigningGuard {
+  if (_guard) return _guard;
   _guard = new SigningGuard(config);
   return _guard;
 }

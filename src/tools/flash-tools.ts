@@ -40,6 +40,17 @@ import {
   estimateLiqPrice,
 } from './trade-helpers.js';
 
+/** Scrub sensitive data (URLs, API keys) from error messages before displaying to the user. */
+function scrubErrorMsg(msg: string): string {
+  return msg
+    .replace(/https?:\/\/[^\s"']+/g, (url) => {
+      try { return new URL(url).origin + '/***'; } catch { return '***'; }
+    })
+    .replace(/sk-ant-[^\s"']+/g, 'sk-ant-***')
+    .replace(/gsk_[^\s"']+/g, 'gsk_***')
+    .replace(/api[_-]?key=[^&\s"]+/gi, 'api_key=***');
+}
+
 // ─── flash_open_position ─────────────────────────────────────────────────────
 
 export const flashOpenPosition: ToolDefinition = {
@@ -497,7 +508,7 @@ export const flashOpenPosition: ToolDefinition = {
             });
             return {
               success: false,
-              message: `  Failed to open position: ${humanizeSdkError(getErrorMessage(error), collateral, leverage)}`,
+              message: `  Failed to open position: ${humanizeSdkError(scrubErrorMsg(getErrorMessage(error)), collateral, leverage)}`,
             };
           }
         },
@@ -524,6 +535,13 @@ export const flashClosePosition: ToolDefinition = {
       closePercent?: number;
       closeAmount?: number;
     };
+
+    if (closePercent !== undefined && (!Number.isFinite(closePercent) || closePercent < 1 || closePercent > 100)) {
+      return { success: false, message: chalk.red('  Invalid close percentage. Must be 1-100.') };
+    }
+    if (closeAmount !== undefined && (!Number.isFinite(closeAmount) || closeAmount <= 0)) {
+      return { success: false, message: chalk.red('  Invalid close amount. Must be positive.') };
+    }
 
     const validationError = validateLiveTradeContext(context);
     if (validationError) {
@@ -736,7 +754,7 @@ export const flashClosePosition: ToolDefinition = {
               result: 'failed',
               reason: getErrorMessage(error),
             });
-            return { success: false, message: `  Failed to close position: ${humanizeSdkError(getErrorMessage(error))}` };
+            return { success: false, message: `  Failed to close position: ${humanizeSdkError(scrubErrorMsg(getErrorMessage(error)))}` };
           }
         },
       },
@@ -909,7 +927,7 @@ export const flashAddCollateral: ToolDefinition = {
               result: 'failed',
               reason: getErrorMessage(error),
             });
-            return { success: false, message: `  Failed to add collateral: ${humanizeSdkError(getErrorMessage(error), amount)}` };
+            return { success: false, message: `  Failed to add collateral: ${humanizeSdkError(scrubErrorMsg(getErrorMessage(error)), amount)}` };
           }
         },
       },
@@ -1092,7 +1110,7 @@ export const flashRemoveCollateral: ToolDefinition = {
               result: 'failed',
               reason: getErrorMessage(error),
             });
-            return { success: false, message: `  Failed to remove collateral: ${humanizeSdkError(getErrorMessage(error), amount)}` };
+            return { success: false, message: `  Failed to remove collateral: ${humanizeSdkError(scrubErrorMsg(getErrorMessage(error)), amount)}` };
           }
         },
       },

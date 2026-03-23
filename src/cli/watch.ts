@@ -98,100 +98,107 @@ export async function startWatch(command: string, deps: WatchDeps): Promise<void
   // ─── State ─────────────────────────────────────────────────────
   let running = true;
   let refreshing = false;
+  let interval: ReturnType<typeof setInterval> | null = null;
   const renderer = new TermRenderer();
 
-  const buildHeader = (): string[] => {
-    const now = new Date().toLocaleTimeString();
-    return [
-      '',
-      `  ${theme.accentBold('WATCH MODE')}`,
-      theme.dim(
-        `  ${now}  |  Watching: ${theme.value(command)}  |  Refresh ${REFRESH_INTERVAL_MS / 1000}s  |  Press ${theme.value('q')} to exit`,
-      ),
-      `  ${theme.separator(Math.min(process.stdout.columns || 80, 80))}`,
-    ];
+  const restoreTerminal = () => {
+    running = false;
+    if (interval) {
+      clearInterval(interval);
+      interval = null;
+    }
+    if (process.stdin.isTTY) {
+      process.stdin.setRawMode(wasRaw ?? false);
+    }
+    process.stdin.pause();
+    process.stdin.resume();
+    renderer.clear();
+    renderer.reset();
+    deps.rl.resume();
   };
 
-  const fetchOutput = async (): Promise<string> => {
-    // Re-parse each refresh so data is fresh
-    let freshIntent: ParsedIntent;
-    try {
-      freshIntent = await deps.parseCommand(command);
-    } catch {
-      freshIntent = intent;
-    }
-
-    const result: ToolResult = await deps.engine.dispatch(freshIntent);
-    return result.message;
-  };
-
-  const render = async () => {
-    if (!running || refreshing) return;
-    refreshing = true;
-
-    try {
-      const output = await fetchOutput();
-      const headerLines = buildHeader();
-      const outputLines = output.split('\n');
-      const frame = [...headerLines, ...outputLines, ''];
-
-      // Only update if frame content changed
-      if (renderer.hasChanged(frame)) {
-        renderer.render(frame);
-      }
-    } catch (err) {
-      const headerLines = buildHeader();
-      const errLines = [...headerLines, '', theme.negative(`  Refresh error: ${getErrorMessage(err)}`), ''];
-      renderer.render(errLines);
-    } finally {
-      refreshing = false;
-    }
-  };
-
-  // ─── Initial render ────────────────────────────────────────────
-  renderer.clear();
-  await render();
-
-  // ─── Refresh interval ─────────────────────────────────────────
-  const interval = setInterval(() => {
-    if (running && !refreshing) {
-      render().catch(() => {});
-    }
-  }, REFRESH_INTERVAL_MS);
-  interval.unref();
-
-  // ─── Key listener — exit on 'q' ───────────────────────────────
-  await new Promise<void>((resolve) => {
-    const onKey = (data: Buffer) => {
-      const key = data.toString();
-
-      // Exit on 'q', 'Q', or Ctrl+C (0x03)
-      if (key === 'q' || key === 'Q' || key === '\x03') {
-        // Remove listener FIRST to prevent double-fire
-        process.stdin.removeListener('data', onKey);
-        running = false;
-        clearInterval(interval);
-
-        // Restore terminal state
-        if (process.stdin.isTTY) {
-          process.stdin.setRawMode(wasRaw ?? false);
-        }
-
-        // Drain any buffered stdin before resuming readline
-        process.stdin.pause();
-        process.stdin.resume();
-
-        // Clear screen and restore CLI
-        renderer.clear();
-        renderer.reset();
-
-        // Resume readline AFTER screen clear
-        deps.rl.resume();
-        resolve();
-      }
-      // All other keys are silently consumed — they never reach readline
+  try {
+    const buildHeader = (): string[] => {
+      const now = new Date().toLocaleTimeString();
+      return [
+        '',
+        `  ${theme.accentBold('WATCH MODE')}`,
+        theme.dim(
+          `  ${now}  |  Watching: ${theme.value(command)}  |  Refresh ${REFRESH_INTERVAL_MS / 1000}s  |  Press ${theme.value('q')} to exit`,
+        ),
+        `  ${theme.separator(Math.min(process.stdout.columns || 80, 80))}`,
+      ];
     };
 
-    process.stdin.on('data', onKey);
-  });
+    const fetchOutput = async (): Promise<string> => {
+      // Re-parse each refresh so data is fresh
+      let freshIntent: ParsedIntent;
+      try {
+        freshIntent = await deps.parseCommand(command);
+      } catch {
+        freshIntent = intent;
+      }
+
+      const result: ToolResult = await deps.engine.dispatch(freshIntent);
+      return result.message;
+    };
+
+    const render = async () => {
+      if (!running || refreshing) return;
+      refreshing = true;
+
+      try {
+        const output = await fetchOutput();
+        const headerLines = buildHeader();
+        const outputLines = output.split('\n');
+        const frame = [...headerLines, ...outputLines, ''];
+
+        // Only update if frame content changed
+        if (renderer.hasChanged(frame)) {
+          renderer.render(frame);
+        }
+      } catch (err) {
+        const headerLines = buildHeader();
+        const errLines = [...headerLines, '', theme.negative(`  Refresh error: ${getErrorMessage(err)}`), ''];
+        renderer.render(errLines);
+      } finally {
+        refreshing = false;
+      }
+    };
+
+    // ─── Initial render ────────────────────────────────────────────
+    renderer.clear();
+    await render();
+
+    // ─── Refresh interval ─────────────────────────────────────────
+    interval = setInterval(() => {
+      if (running && !refreshing) {
+        render().catch(() => {});
+      }
+    }, REFRESH_INTERVAL_MS);
+    interval.unref();
+
+    // ─── Key listener — exit on 'q' ───────────────────────────────
+    await new Promise<void>((resolve) => {
+      const onKey = (data: Buffer) => {
+        const key = data.toString();
+
+        // Exit on 'q', 'Q', or Ctrl+C (0x03)
+        if (key === 'q' || key === 'Q' || key === '\x03') {
+          // Remove listener FIRST to prevent double-fire
+          process.stdin.removeListener('data', onKey);
+          restoreTerminal();
+          resolve();
+        }
+        // All other keys are silently consumed — they never reach readline
+      };
+
+      process.stdin.on('data', onKey);
+    });
+  } finally {
+    // Ensure terminal state is always restored even if an error escapes
+    if (running) {
+      restoreTerminal();
+    }
+  }
 }

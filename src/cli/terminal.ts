@@ -636,8 +636,11 @@ export class FlashTerminal {
     }
 
     // ─── Signal Handlers ──────────────────────────────────────────────
-    process.on('SIGINT', () => this.shutdown());
-    process.on('SIGTERM', () => this.shutdown());
+    process.once('SIGINT', () => {
+      process.once('SIGINT', () => process.exit(1)); // force-kill on 2nd Ctrl+C
+      this.shutdown();
+    });
+    process.once('SIGTERM', () => this.shutdown());
 
     // ─── Start Line Handler ───────────────────────────────────────────
     // Resume readline now that the line handler is about to be registered
@@ -830,6 +833,7 @@ export class FlashTerminal {
 
     // Cleanup
     this.rl.close();
+    process.exit(process.exitCode ?? 0);
   }
 
   // ─── Welcome Screen ────────────────────────────────────────────────
@@ -1507,6 +1511,9 @@ export class FlashTerminal {
       uptime: Math.floor(process.uptime()),
     });
 
+    try {
+      if (this.liveAgent && typeof this.liveAgent.stop === 'function') this.liveAgent.stop();
+    } catch { /* best-effort */ }
     console.log(chalk.dim('\n  Goodbye.\n'));
     this.rl.close();
     process.exit(0);

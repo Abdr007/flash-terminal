@@ -626,6 +626,16 @@ export function validateIntent(intent: ParsedIntent): CommandAlert | null {
       return invalidPriceAlert(i.limitPrice);
     }
   }
+  if (typeof i.takeProfit === 'number') {
+    if (!Number.isFinite(i.takeProfit) || i.takeProfit <= 0) {
+      return invalidPriceAlert(i.takeProfit);
+    }
+  }
+  if (typeof i.stopLoss === 'number') {
+    if (!Number.isFinite(i.stopLoss) || i.stopLoss <= 0) {
+      return invalidPriceAlert(i.stopLoss);
+    }
+  }
 
   // Market validation (only for trading actions that require a valid market)
   if (typeof i.market === 'string' && i.market) {
@@ -1684,6 +1694,11 @@ export class AIInterpreter {
     // Try contextual follow-up resolution
     const contextResult = this.tryContextualParse(userInput);
     if (contextResult) {
+      const alert = validateIntent(contextResult);
+      if (alert) {
+        logger.debug('AI', 'Contextual validation failed', { input: userInput, alert: alert.type });
+        return { action: ActionType.Help, _alert: alert } as ParsedIntent;
+      }
       logger.debug('AI', 'Parsed with context', { input: userInput, action: contextResult.action });
       this.updateContext(contextResult);
       return contextResult;
@@ -1940,6 +1955,10 @@ export class OfflineInterpreter {
 
     const contextResult = this.tryContextualParse(userInput);
     if (contextResult) {
+      const alert = validateIntent(contextResult);
+      if (alert) {
+        return { action: ActionType.Help, _alert: alert } as ParsedIntent;
+      }
       this.updateContext(contextResult);
       return contextResult;
     }

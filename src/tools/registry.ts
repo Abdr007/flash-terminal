@@ -52,9 +52,21 @@ export class ToolRegistry {
       };
     }
 
+    let validated: Record<string, unknown>;
+    if (tool.parameters) {
+      try {
+        validated = tool.parameters.parse(params) as Record<string, unknown>;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'Invalid parameters';
+        return { success: false, message: `  Parameter validation failed: ${msg}` };
+      }
+    } else {
+      validated = params;
+    }
+
     const t0 = isProfilingEnabled() ? profileStart('command', toolName) : 0;
     try {
-      const result = await tool.execute(params, context);
+      const result = await tool.execute(validated, context);
       if (t0 !== 0) profileEnd('command', t0, toolName);
       return result;
     } catch (error: unknown) {

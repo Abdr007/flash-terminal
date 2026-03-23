@@ -53,13 +53,25 @@ function saveAliases(aliases: Record<string, string>): void {
   }
 }
 
+const RESERVED = new Set([
+  'help', 'portfolio', 'positions', 'balance', 'wallet', 'markets',
+  'close', 'open', 'long', 'short', 'dryrun', 'exit', 'quit',
+  'dashboard', 'scan', 'analyze', 'risk', 'monitor', 'history',
+  'trades', 'volume', 'funding', 'depth', 'inspect', 'earn',
+  'degen', 'config', 'status', 'fees', 'agent', 'autopilot',
+]);
+
 /** Set a custom alias. */
 export function setAlias(shortcut: string, expansion: string): boolean {
   const aliases = loadAliases();
   if (Object.keys(aliases).length >= MAX_ALIASES && !(shortcut in aliases)) {
     return false; // Too many aliases
   }
-  aliases[shortcut.toLowerCase()] = expansion;
+  const key = shortcut.toLowerCase();
+  if (!/^[a-z0-9_-]+$/.test(key)) return false;
+  if (key.length > 50) return false;
+  if (RESERVED.has(key)) return false;
+  aliases[key] = expansion;
   saveAliases(aliases);
   return true;
 }

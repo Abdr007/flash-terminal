@@ -46,7 +46,7 @@ function parseNetwork(value: string | undefined): Network {
   return 'mainnet-beta';
 }
 
-function validateRpcUrl(url: string): string {
+export function validateRpcUrl(url: string): string {
   let parsed: URL;
   try {
     parsed = new URL(url);
@@ -188,7 +188,7 @@ export function loadConfig(): FlashConfig {
   return {
     rpcUrl: validateRpcUrl(process.env.RPC_URL || rpcDefault),
     backupRpcUrls,
-    pythnetUrl: process.env.PYTHNET_URL || 'https://pythnet.rpcpool.com',
+    pythnetUrl: validateRpcUrl(process.env.PYTHNET_URL || 'https://pythnet.rpcpool.com'),
     walletPath: resolveHome(process.env.WALLET_PATH || '~/.config/solana/id.json'),
     anthropicApiKey: process.env.ANTHROPIC_API_KEY || '',
     groqApiKey: process.env.GROQ_API_KEY || '',
