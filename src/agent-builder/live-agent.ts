@@ -151,6 +151,8 @@ export class LiveTradingAgent {
   private edgeBuckets: Map<string, { pnl: number; count: number }> = new Map();
   /** V_EDGE_EXTRACTION: Confidence accuracy tracking */
   private confAccuracy: { highConf: { wins: number; total: number }; midConf: { wins: number; total: number } } = { highConf: { wins: 0, total: 0 }, midConf: { wins: 0, total: 0 } };
+  /** Orderbook wall bypass tracking during learning */
+  private obBypass: { trades: number; pnl: number; hardBlock: boolean } = { trades: 0, pnl: 0, hardBlock: false };
   /** Per-market cooldown after trade close */
   private marketCooldowns: Map<string, number> = new Map();
   /** Hourly trade counter for frequency limiting */
@@ -1120,10 +1122,25 @@ export class LiveTradingAgent {
     const obAnalysis = this.orderbookIntel.analyze(snapshot.market);
     const earlySide = composite.direction === 'bearish' ? 'short' : 'long';
     const obAvoid = this.orderbookIntel.shouldAvoidEntry(snapshot.market, earlySide);
-    // V_PRODUCTION_STABLE: Relax orderbook wall during cold start (OI data noisy early on)
-    if (obAvoid.avoid && !this.latencyMode.isActive() && !inColdStart) {
-      this.signalPressure.recordSignal(snapshot.market, 0, composite.confidence, true, 'orderbook_wall');
-      return null;
+    // Adaptive orderbook wall: soft gate with penalty — allows trade flow while managing risk.
+    // Soft gate: score * 0.75 penalty + size * 0.6 reduction (applied downstream).
+    // Hard block only if: (a) auto-stop triggered (bypass EV < 0 after 10 trades), or
+    //                     (b) signal too weak (confidence < floor - 0.05).
+    let obWallPenalty = 1.0; // no penalty by default
+    if (obAvoid.avoid && !this.latencyMode.isActive()) {
+      if (!this.obBypass.hardBlock) {
+        // SOFT GATE: penalize score, reduce size — let trade through if signal is near threshold
+        obWallPenalty = 0.75;
+        // Reject only if signal is clearly too weak (floor - 5%)
+        if (composite.confidence < (coldStartConfFloor - 0.05)) {
+          this.signalPressure.recordSignal(snapshot.market, 0, composite.confidence, true, 'orderbook_wall');
+          return null;
+        }
+      } else {
+        // HARD: auto-stop triggered (bypass EV negative) — full rejection
+        this.signalPressure.recordSignal(snapshot.market, 0, composite.confidence, true, 'orderbook_wall');
+        return null;
+      }
     }
 
     // V_ADAPTIVE_CONFIDENCE Phase 2: Boost confidence for aligned signals (before floor check)
@@ -1332,7 +1349,7 @@ export class LiveTradingAgent {
       return null;
     }
 
-    let amplifiedScore = oppScore.total;
+    let amplifiedScore = Math.round(oppScore.total * obWallPenalty); // Apply orderbook wall penalty (1.0 or 0.75)
 
     // Phase 2: AMPLIFICATION GUARD — only amplify if baseScore ≥ 50
     if (oppScore.total >= 50) {
@@ -1545,13 +1562,18 @@ export class LiveTradingAgent {
     if (policyParams.sizeMultiplier !== 1.0) finalCollateral = Math.max(1, finalCollateral * policyParams.sizeMultiplier);
     // V_PRODUCTION_STABLE: Apply cold start size reduction (0.7x during first 10 trades)
     if (inColdStart) finalCollateral = Math.max(1, finalCollateral * coldStartSizeMult);
+    // Orderbook wall bypass: reduce size + track
+    if (obWallPenalty < 1.0) {
+      finalCollateral = Math.max(1, finalCollateral * 0.6);
+      this.obBypass.trades++;
+    }
     // V_CONTROLLED_ACCELERATION: Size by trade type
     if (microTrade) {
-      finalCollateral = Math.max(1, finalCollateral * 0.3); // Phase 4: micro trades 0.3x
+      finalCollateral = Math.max(1, finalCollateral * 0.3);
     } else if (explorationTrade) {
-      finalCollateral = Math.max(1, finalCollateral * 0.4); // Phase 1: exploration 0.4x
+      finalCollateral = Math.max(1, finalCollateral * 0.4);
     } else if (nearMissPromoted) {
-      finalCollateral = Math.max(1, finalCollateral * 0.6); // Phase 2: near-miss 0.6x
+      finalCollateral = Math.max(1, finalCollateral * 0.6);
     }
 
     // V_SIGNAL_BALANCE_V2 Phase 2: Directional frequency control (last 20 trades)
@@ -2173,6 +2195,24 @@ export class LiveTradingAgent {
       const won = pnl > 0;
       this.expectancy.recordTrade(decision.strategy, pnl);
       this.ensemble.recordOutcome(decision.strategy, won);
+
+      // Orderbook bypass auto-correction:
+      // - If bypass EV < 0 after 10 bypass trades → revert to hard block
+      // - If hard block active and 20 more total trades pass → reset and retry soft gate
+      this.obBypass.pnl += pnl;
+      if (this.obBypass.trades >= 10 && this.obBypass.pnl < 0 && !this.obBypass.hardBlock) {
+        this.obBypass.hardBlock = true;
+        this.log('normal', `OB WALL: Bypass EV $${(this.obBypass.pnl / this.obBypass.trades).toFixed(2)} < 0 after ${this.obBypass.trades} bypass trades — reverting to HARD BLOCK`);
+      }
+      // Recovery: after 20 total trades since hard block, reset and give soft gate another chance
+      if (this.obBypass.hardBlock && this.obBypass.trades > 0) {
+        const totalTrades = this.journal.getStats().totalTrades;
+        const tradesSinceBlock = totalTrades - (this.obBypass.trades + 10);
+        if (tradesSinceBlock >= 20) {
+          this.obBypass = { trades: 0, pnl: 0, hardBlock: false };
+          this.log('normal', 'OB WALL: Hard block reset after 20 trades — retrying soft gate');
+        }
+      }
 
       // V_EDGE_EXTRACTION Phase 1: Record EV by score bucket + regime + direction
       const scoreMatch = decision.reasoning.match(/SCORE=(\d+)/);
