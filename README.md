@@ -624,41 +624,71 @@ NO_DNA=1                          # Agent mode (structured JSON output)
 
 ---
 
-## Project Structure
+## Project Architecture
+
+Layered, modular system where each layer has strict boundaries. No layer reaches past its neighbor. Safety infrastructure is enforced at the boundary between intent and execution.
 
 ```
 src/
-├── agent/           Agent tools, analysis, observability
-├── agent-builder/   Autonomous agent: live agent, learning, metrics, dashboard
-├── ai/              NLP interpreter, intent parsing
-├── cli/             Terminal REPL, command registry, completions, market monitor
-├── client/          FlashClient (live) + SimulatedFlashClient (paper)
-├── config/          Config loader, pool mapping, market discovery
-├── core/            TX engine, state reconciliation, execution middleware
-├── data/            PriceService (Pyth Hermes), FStatsClient
-├── earn/            Liquidity pool registry, yield analytics
-├── journal/         Trade journal, crash recovery engine
-├── monitor/         Risk monitor, event monitor
-├── network/         RPC manager, TPU client, multi-endpoint failover
-├── observability/   Metrics, alert hooks, webhook consumers
-├── orders/          Limit order engine
-├── plugins/         Dynamic plugin loader
-├── portfolio/       Portfolio manager, rebalance, risk
-├── protocol/        Protocol inspector (pool/market/OI)
-├── regime/          Market regime detector
-├── risk/            TP/SL engine, exposure, liquidation risk
-├── scanner/         Market scanner (parallel, 32 markets)
-├── security/        Signing guard, circuit breaker, trading gate
-├── shadow/          Risk mirror, shadow engine
-├── strategies/      Mean reversion, momentum, whale follow
-├── system/          Health monitor, diagnostics, maintenance
-├── token/           FAF integration, staking, VIP tiers
-├── tools/           Tool engine, all command implementations
-├── transaction/     ALT resolver, ATA resolver, instruction aggregator
-├── types/           Central types, enums, Zod schemas
-├── utils/           Logger, formatting, retry, market resolver
-└── wallet/          Wallet manager, session, store, balances
+│
+│  ── Interface ──────────────────────────────────────────────
+│
+├── cli/               Interactive REPL, command dispatch, tab completion, market monitor
+├── ai/                NLP intent parser with deterministic regex primary path
+│
+│  ── Agent & Intelligence ───────────────────────────────────
+│
+├── agent-builder/     ★ Autonomous trading agent — Q-learning, edge profiler,
+│                        exit intelligence, production validator, system governor
+├── agent/             Agent tools: analysis, dashboard, observability commands
+├── scanner/           Parallel market scanner — 32 markets, opportunity scoring
+├── strategies/        Signal generators: momentum, mean reversion, whale follow
+├── regime/            Market condition classifier: trend, range, volatility, compression
+│
+│  ── Execution Engine ───────────────────────────────────────
+│
+├── core/              ★ TX engine — pre-cached blockhash, multi-endpoint broadcast,
+│                        state reconciliation, execution middleware
+├── transaction/       Instruction builder: ALT resolver, ATA resolver, aggregator
+├── orders/            Limit order engine with on-chain placement and cancellation
+│
+│  ── Risk & Safety ──────────────────────────────────────────
+│
+├── security/          ★ Signing guard, circuit breaker, kill switch, rate limiter
+├── risk/              TP/SL engine (2-tick confirmation), exposure analysis, liquidation math
+├── monitor/           Background risk monitor (5s prices, 20s positions), event monitor
+├── shadow/            Risk mirror — parallel shadow execution for strategy validation
+│
+│  ── Data & Network ─────────────────────────────────────────
+│
+├── client/            FlashClient (live on-chain) + SimulatedFlashClient (paper trading)
+├── data/              PriceService (Pyth Hermes), FStatsClient (protocol analytics)
+├── network/           RPC manager — multi-endpoint failover, TPU routing, slot lag detection
+├── config/            Config loader, SDK-driven pool mapping, market discovery, env validation
+├── protocol/          Protocol inspector — on-chain pool, market, OI, and fee inspection
+│
+│  ── Portfolio & Finance ────────────────────────────────────
+│
+├── portfolio/         Portfolio manager, rebalance analysis, allocation, risk metrics
+├── earn/              Liquidity pool registry, FLP/sFLP management, yield analytics
+├── token/             FAF governance token: staking, VIP tiers, revenue sharing, referrals
+│
+│  ── Observability & Recovery ───────────────────────────────
+│
+├── observability/     Metrics export, alert hooks, webhook/Slack consumers
+├── system/            Health monitor (memory, event loop, RPC), diagnostics, maintenance
+├── journal/           Trade journal with crash recovery — pending TX verification on restart
+│
+│  ── Foundation ─────────────────────────────────────────────
+│
+├── wallet/            Wallet manager, session lifecycle, encrypted store, token balances
+├── tools/             Tool engine — 60+ command implementations, help system
+├── plugins/           Dynamic plugin loader with runtime tool registration
+├── types/             Central type definitions, enums, Zod validation schemas
+└── utils/             Logger (scrubbed), formatting, retry (circuit breaker), market resolver
 ```
+
+`★` — Critical system modules. Changes require full test suite verification.
 
 ---
 
