@@ -22,6 +22,13 @@ const BUDGET_WINDOW_MS = 60_000;  // 1-minute sliding window
 const MAX_RETRIES_PER_WINDOW = 50; // Max retries across all modules per window
 const retryTimestamps: number[] = [];
 
+// ─── Error Log Throttle ──────────────────────────────────────────────────────
+// Prevent the same label from flooding the console with identical error messages.
+// After the first error, suppress duplicates for THROTTLE_WINDOW_MS, then log a
+// summary count.
+const THROTTLE_WINDOW_MS = 30_000; // 30s window
+const errorThrottle = new Map<string, { firstAt: number; count: number; lastLogged: number }>();
+
 /**
  * Check if a retry is allowed within the global budget.
  * Returns true if the retry should proceed, false if budget is exhausted.
@@ -138,9 +145,29 @@ export async function withRetry<T>(fn: () => Promise<T>, label: string, opts: Pa
     }
   }
 
-  logger.error('RETRY', `${label} failed after ${maxAttempts} attempts`, {
-    error: lastError?.message ?? 'unknown',
-  });
+  // Throttle repeated error logs for the same label
+  const now = Date.now();
+  const throttle = errorThrottle.get(label);
+  if (throttle && now - throttle.firstAt < THROTTLE_WINDOW_MS) {
+    throttle.count++;
+    // Log summary every 10 suppressed errors, or after 15s silence
+    if (throttle.count % 10 === 0 || now - throttle.lastLogged > 15_000) {
+      logger.error('RETRY', `${label} failed after ${maxAttempts} attempts (${throttle.count} failures in ${Math.round((now - throttle.firstAt) / 1000)}s)`, {
+        error: lastError?.message ?? 'unknown',
+      });
+      throttle.lastLogged = now;
+    }
+  } else {
+    // First error or window expired — log immediately and start new window
+    errorThrottle.set(label, { firstAt: now, count: 1, lastLogged: now });
+    logger.error('RETRY', `${label} failed after ${maxAttempts} attempts`, {
+      error: lastError?.message ?? 'unknown',
+    });
+    // Clean up old throttle entries
+    for (const [k, v] of errorThrottle) {
+      if (now - v.firstAt > THROTTLE_WINDOW_MS * 2) errorThrottle.delete(k);
+    }
+  }
   throw lastError;
 }
 

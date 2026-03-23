@@ -171,6 +171,15 @@ export class EventMonitor {
   // ─── Tick Dispatcher ─────────────────────────────────────────────────
 
   private async tick(): Promise<void> {
+    // Skip ticks when system is in CRITICAL state — reduce load during resource pressure
+    try {
+      const { getHealth } = await import('../system/health.js');
+      const health = getHealth();
+      if (health?.state === 'CRITICAL') {
+        return; // pause event monitoring entirely during CRITICAL
+      }
+    } catch { /* health not initialized */ }
+
     this.cycleCount++;
     const events: MonitorEvent[] = [];
 

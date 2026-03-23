@@ -236,11 +236,16 @@ async function checkMonitorEngine(): Promise<CheckResult> {
   return { name: 'Monitor Engine', passed, details };
 }
 
-function gatherSystemHealth(rpcManager: RpcManager): DoctorReport['health'] {
+async function gatherSystemHealth(rpcManager: RpcManager): Promise<DoctorReport['health']> {
   const latencyMs = rpcManager.activeLatencyMs > 0 ? rpcManager.activeLatencyMs : 0;
   const memoryMb = Math.round(process.memoryUsage().heapUsed / 1024 / 1024);
   const uptime = formatUptime();
-  return { latencyMs, memoryMb, uptime, version: 'v1.0.0' };
+  let version = 'v1.0.4';
+  try {
+    const { BUILD_INFO } = await import('../build-info.js');
+    version = `v${BUILD_INFO.version}`;
+  } catch { /* fallback */ }
+  return { latencyMs, memoryMb, uptime, version };
 }
 
 // ─── Main Entry ─────────────────────────────────────────────────────────────
@@ -301,7 +306,7 @@ export async function runDoctor(
   }
 
   // 7. System Health
-  const health = gatherSystemHealth(rpcManager);
+  const health = await gatherSystemHealth(rpcManager);
 
   lines.push(`  ${theme.section('System Health')}`);
   lines.push(theme.pair('RPC latency', health.latencyMs > 0 ? health.latencyMs + 'ms' : theme.dim('--')));

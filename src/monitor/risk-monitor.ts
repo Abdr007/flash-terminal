@@ -163,6 +163,19 @@ export class RiskMonitor {
     const logger = getLogger();
     this.tickCount++;
 
+    // Skip ticks when system is in CRITICAL state — reduce load during resource pressure
+    try {
+      const { getHealth } = await import('../system/health.js');
+      const health = getHealth();
+      if (health?.state === 'CRITICAL') {
+        // Only run every 4th tick (20s instead of 5s) during CRITICAL
+        if (this.tickCount % 4 !== 0) {
+          logger.debug('RISK_MONITOR', 'Skipping tick — system CRITICAL');
+          return;
+        }
+      }
+    } catch { /* health not initialized */ }
+
     try {
       // Tiered refresh: full position fetch every POSITION_INTERVAL_MS, use cache otherwise
       const now = Date.now();

@@ -1553,6 +1553,14 @@ export class FlashTerminal {
       this.handleAgentStatus();
       return;
     }
+    if (lower === 'agent attach') {
+      this.handleAgentAttach();
+      return;
+    }
+    if (lower === 'agent logs' || lower === 'agent tail') {
+      this.handleAgentLogs();
+      return;
+    }
     if (lower === 'agent report' || lower === 'agent evaluate') {
       this.handleAgentReport();
       return;
@@ -2840,8 +2848,19 @@ export class FlashTerminal {
   private liveAgent: import('../agent-builder/live-agent.js').LiveTradingAgent | null = null;
 
   private async handleAgentStart(dryRun: boolean): Promise<void> {
+    // Check in-process agent first
     if (this.liveAgent?.isRunning) {
-      console.log(chalk.yellow('  Agent is already running. Use "agent stop" first.'));
+      console.log(chalk.yellow('  Agent is already running in this session. Use "agent stop" first.'));
+      return;
+    }
+    // Check external sessions — only block if another agent is ACTUALLY running
+    // (has a recent heartbeat). Just being inside a tmux session doesn't mean
+    // the agent is started — we might BE that session about to start.
+    const { getAgentStatus, formatAgentStatus } = await import('../agent/agent-runtime.js');
+    const runtime = getAgentStatus(false);
+    if (runtime.status !== 'STOPPED' && runtime.lastHeartbeatMs && !runtime.heartbeatStale) {
+      console.log(chalk.yellow(`  ${formatAgentStatus(runtime)}`));
+      console.log(chalk.dim('  Use "agent attach" to reconnect or "agent stop" to stop it first.'));
       return;
     }
 
@@ -2915,34 +2934,160 @@ export class FlashTerminal {
     }
   }
 
-  private handleAgentStop(): void {
-    if (!this.liveAgent?.isRunning) {
+  private async handleAgentStop(): Promise<void> {
+    // In-process agent takes priority
+    if (this.liveAgent?.isRunning) {
+      this.liveAgent.stop();
+      console.log(chalk.yellow('  Agent stop requested.'));
+      return;
+    }
+    // Check external sessions
+    const { getAgentStatus, getActiveSession } = await import('../agent/agent-runtime.js');
+    const { execSync } = await import('child_process');
+    const runtime = getAgentStatus(false);
+    if (runtime.status === 'STOPPED') {
       console.log(chalk.dim('  No agent running.'));
       return;
     }
-    this.liveAgent.stop();
-    console.log(chalk.yellow('  Agent stop requested.'));
+    // Stop external tmux session
+    const session = getActiveSession();
+    if (session) {
+      try {
+        execSync(`tmux send-keys -t ${session} "agent stop" Enter`, { stdio: 'pipe' });
+        console.log(chalk.yellow(`  Stop command sent to tmux session: ${session}`));
+        console.log(chalk.dim('  Agent will gracefully shut down and save state.'));
+      } catch {
+        console.log(chalk.red(`  Failed to send stop command to session: ${session}`));
+      }
+    } else if (runtime.pid) {
+      console.log(chalk.yellow(`  Agent process detected (PID ${runtime.pid}) but no tmux session.`));
+      console.log(chalk.dim('  Use "kill ' + runtime.pid + '" to stop manually.'));
+    }
   }
 
-  private handleAgentStatus(): void {
-    if (!this.liveAgent) {
-      console.log(chalk.dim('  No agent session.'));
+  private async handleAgentStatus(): Promise<void> {
+    // In-process agent: show full live state
+    if (this.liveAgent) {
+      const state = this.liveAgent.getState();
+      const stats = this.liveAgent.getJournal().getStats();
+      console.log('');
+      console.log(`  ${theme.accentBold('AGENT STATUS')}`);
+      console.log(`  ${theme.separator(40)}`);
+      console.log(theme.pair('Status', String(state.status)));
+      console.log(theme.pair('Mode', 'in-process (this session)'));
+      console.log(theme.pair('Iteration', String(state.iteration)));
+      console.log(theme.pair('Capital', `$${state.currentCapital.toFixed(2)}`));
+      console.log(theme.pair('Daily PnL', `$${state.dailyPnl.toFixed(2)}`));
+      console.log(theme.pair('Positions', String(state.positions.length)));
+      console.log(theme.pair('Trades', `${stats.totalTrades} (${stats.wins}W/${stats.losses}L)`));
+      console.log(theme.pair('Win Rate', `${(stats.winRate * 100).toFixed(1)}%`));
+      if (state.inCooldown) console.log(theme.pair('Cooldown', `${Math.ceil((state.cooldownUntil - Date.now()) / 1000)}s remaining`));
+      if (state.safetyStopReason) console.log(chalk.red(`  Safety Stop: ${state.safetyStopReason}`));
+      console.log('');
       return;
     }
-    const state = this.liveAgent.getState();
-    const stats = this.liveAgent.getJournal().getStats();
+
+    // External detection: tmux, process, heartbeat
+    const { getAgentStatus, formatAgentStatus, validateRuntimeIntegrity, writeRuntimeSnapshot } = await import('../agent/agent-runtime.js');
+
+    // Run integrity check first (self-heals stale PID, orphans)
+    const integrity = validateRuntimeIntegrity();
+
+    const runtime = getAgentStatus(false);
+
+    // Write snapshot for external monitoring
+    writeRuntimeSnapshot(runtime);
+
     console.log('');
     console.log(`  ${theme.accentBold('AGENT STATUS')}`);
     console.log(`  ${theme.separator(40)}`);
-    console.log(theme.pair('Status', String(state.status)));
-    console.log(theme.pair('Iteration', String(state.iteration)));
-    console.log(theme.pair('Capital', `$${state.currentCapital.toFixed(2)}`));
-    console.log(theme.pair('Daily PnL', `$${state.dailyPnl.toFixed(2)}`));
-    console.log(theme.pair('Positions', String(state.positions.length)));
-    console.log(theme.pair('Trades', `${stats.totalTrades} (${stats.wins}W/${stats.losses}L)`));
-    console.log(theme.pair('Win Rate', `${(stats.winRate * 100).toFixed(1)}%`));
-    if (state.inCooldown) console.log(theme.pair('Cooldown', `${Math.ceil((state.cooldownUntil - Date.now()) / 1000)}s remaining`));
-    if (state.safetyStopReason) console.log(chalk.red(`  Safety Stop: ${state.safetyStopReason}`));
+
+    // Status line with color
+    const statusColor = runtime.status === 'RUNNING' ? chalk.green
+      : runtime.status === 'DEGRADED' ? chalk.yellow
+      : chalk.dim;
+    console.log(theme.pair('Status', statusColor(formatAgentStatus(runtime))));
+
+    if (runtime.session) {
+      console.log(theme.pair('Session', runtime.session));
+    }
+    if (runtime.pid) {
+      console.log(theme.pair('PID', String(runtime.pid)));
+    }
+    if (runtime.lastHeartbeatMs) {
+      const ago = Math.round((Date.now() - runtime.lastHeartbeatMs) / 1000);
+      const heartbeatText = `${ago}s ago${runtime.heartbeatStale ? chalk.yellow(' (STALE)') : ''}`;
+      console.log(theme.pair('Heartbeat', heartbeatText));
+    }
+    if (runtime.stateFileBytes) {
+      console.log(theme.pair('State File', `${(runtime.stateFileBytes / 1024).toFixed(1)} KB`));
+    }
+    if (runtime.lastStateUpdateMs) {
+      const stateAgo = Math.round((Date.now() - runtime.lastStateUpdateMs) / 1000);
+      console.log(theme.pair('State Updated', `${stateAgo}s ago`));
+    }
+
+    // Integrity report
+    if (integrity.actions.length > 0) {
+      console.log('');
+      for (const action of integrity.actions) {
+        console.log(chalk.cyan(`  [auto-heal] ${action}`));
+      }
+    }
+    if (integrity.warnings.length > 0) {
+      for (const warn of integrity.warnings) {
+        console.log(chalk.yellow(`  [warning] ${warn}`));
+      }
+    }
+
+    // Helpful hints
+    if (runtime.status === 'STOPPED') {
+      console.log('');
+      console.log(chalk.dim('  Start: "agent start" or "agent start --live"'));
+    } else if (runtime.mode === 'tmux') {
+      console.log('');
+      console.log(chalk.dim(`  Attach: "agent attach" | Logs: "agent logs" | Stop: "agent stop"`));
+    }
+    console.log('');
+  }
+
+  private async handleAgentAttach(): Promise<void> {
+    const { getActiveSession } = await import('../agent/agent-runtime.js');
+    const session = getActiveSession();
+    if (!session) {
+      console.log(chalk.dim('  No agent tmux session running.'));
+      return;
+    }
+    console.log(chalk.cyan(`  Attaching to tmux session: ${session}`));
+    console.log(chalk.dim('  Press Ctrl+B then D to detach back to this terminal.'));
+    const { execSync } = await import('child_process');
+    try {
+      execSync(`tmux attach -t ${session}`, { stdio: 'inherit' });
+    } catch {
+      console.log(chalk.dim('  Detached from agent session.'));
+    }
+  }
+
+  private async handleAgentLogs(): Promise<void> {
+    const { getAgentLogs, getActiveSession } = await import('../agent/agent-runtime.js');
+    const session = getActiveSession();
+    if (!session) {
+      console.log(chalk.dim('  No agent tmux session running.'));
+      return;
+    }
+    const logs = getAgentLogs(100);
+    if (!logs || logs.trim().length === 0) {
+      console.log(chalk.dim('  No recent logs captured.'));
+      return;
+    }
+    console.log('');
+    console.log(`  ${theme.accentBold(`AGENT LOGS (${session})`)}`);
+    console.log(`  ${theme.separator(50)}`);
+    // Show last 40 non-empty lines
+    const lines = logs.split('\n').filter((l: string) => l.trim().length > 0).slice(-40);
+    for (const line of lines) {
+      console.log(`  ${chalk.dim(line)}`);
+    }
     console.log('');
   }
 

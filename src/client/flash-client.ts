@@ -116,6 +116,13 @@ class PythPriceService {
   private cache: Map<string, { data: LiveTokenPrice; expiry: number }> = new Map();
   private cacheTtlMs = 5_000;
 
+  // Circuit breaker: stop hammering Pyth after consecutive failures
+  private consecutiveFailures = 0;
+  private circuitOpenUntil = 0;
+  private static readonly CB_THRESHOLD = 3;         // open circuit after 3 consecutive failures
+  private static readonly CB_COOLDOWN_MS = 30_000;   // stay open for 30s before half-open retry
+  private static readonly CB_MAX_COOLDOWN_MS = 120_000; // max 2 min cooldown after repeated trips
+
   constructor(pythnetUrl: string) {
     // Validate Pythnet URL: must be HTTPS (or localhost for dev)
     try {
@@ -155,6 +162,13 @@ class PythPriceService {
 
     if (uncached.length === 0) return priceMap;
 
+    // ─── Circuit Breaker ─────────────────────────────────────────────────
+    // When Pyth is down, stop hammering it. Return stale cache instead.
+    if (now < this.circuitOpenUntil) {
+      logger.debug('PRICE', `Pyth circuit breaker open — returning ${priceMap.size} cached prices (retry in ${Math.round((this.circuitOpenUntil - now) / 1000)}s)`);
+      return priceMap; // return whatever was cached above
+    }
+
     // Evict expired entries if cache is too large
     if (this.cache.size >= MAX_PYTH_CACHE_ENTRIES) {
       for (const [k, entry] of this.cache) {
@@ -166,7 +180,26 @@ class PythPriceService {
       }
     }
 
-    const pythData = await withRetry(() => this.pythClient.getData(), 'pyth-prices', { maxAttempts: 2 });
+    let pythData;
+    try {
+      pythData = await withRetry(() => this.pythClient.getData(), 'pyth-prices', { maxAttempts: 2 });
+      // Success — reset circuit breaker
+      this.consecutiveFailures = 0;
+      this.circuitOpenUntil = 0;
+    } catch (err) {
+      this.consecutiveFailures++;
+      if (this.consecutiveFailures >= PythPriceService.CB_THRESHOLD) {
+        // Exponential cooldown: 30s, 60s, 120s (capped)
+        const backoffMultiplier = Math.min(2 ** (this.consecutiveFailures - PythPriceService.CB_THRESHOLD), 4);
+        const cooldown = Math.min(
+          PythPriceService.CB_COOLDOWN_MS * backoffMultiplier,
+          PythPriceService.CB_MAX_COOLDOWN_MS,
+        );
+        this.circuitOpenUntil = now + cooldown;
+        logger.warn('PRICE', `Pyth circuit breaker OPEN — ${this.consecutiveFailures} consecutive failures, cooldown ${Math.round(cooldown / 1000)}s`);
+      }
+      throw err; // let caller handle (they already catch)
+    }
 
     for (const token of uncached) {
       const priceData: PriceData | undefined = pythData.productPrice.get(token.pythTicker);
