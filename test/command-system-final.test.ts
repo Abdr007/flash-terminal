@@ -249,13 +249,13 @@ describe('Interactive Builder Final', () => {
 
 describe('Validation Final', () => {
   it('validateIntent rejects invalid leverage', () => {
-    const r = localParse('long sol 200x 10');
+    const r = localParse('long sol 2000x 10');
     // Should either return null (rejected) or be caught by validateIntent
     if (r) {
       const alert = validateIntent(r);
-      // If leverage is > 100, should have an alert
-      if ((r as any).leverage > 100) {
-        assert.ok(alert, 'should reject > 100x leverage');
+      // If leverage is > 1000, should have an alert (per-market limits enforced in flash-tools)
+      if ((r as any).leverage > 1000) {
+        assert.ok(alert, 'should reject > 1000x leverage');
       }
     }
   });

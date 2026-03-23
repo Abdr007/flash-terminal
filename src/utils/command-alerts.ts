@@ -149,7 +149,7 @@ export function limitOrderSyntaxAlert(): CommandAlert {
 export function invalidLeverageAlert(value: number): CommandAlert {
   return {
     type: 'parameter',
-    message: ['', alertHeader(`Invalid leverage: ${value}x`), chalk.dim('  Allowed range: 1.1x – 100x'), ''].join('\n'),
+    message: ['', alertHeader(`Invalid leverage: ${value}x`), chalk.dim('  Allowed range: 1.1x – 1000x (enable degen mode for higher limits)'), ''].join('\n'),
   };
 }
 

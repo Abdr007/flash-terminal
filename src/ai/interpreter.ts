@@ -579,9 +579,10 @@ function expandAliases(input: string): string {
 export function validateIntent(intent: ParsedIntent): CommandAlert | null {
   const i = intent as Record<string, unknown>;
 
-  // Leverage validation
+  // Leverage validation — basic sanity check only.
+  // Per-market limits (including degen mode) are enforced in flash-tools.ts.
   if (typeof i.leverage === 'number') {
-    if (!Number.isFinite(i.leverage) || i.leverage < 1.1 || i.leverage > 100) {
+    if (!Number.isFinite(i.leverage) || i.leverage < 1.1 || i.leverage > 1000) {
       return invalidLeverageAlert(i.leverage);
     }
   }

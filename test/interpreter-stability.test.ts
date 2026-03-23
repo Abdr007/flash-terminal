@@ -302,8 +302,8 @@ describe('Parameter Validation', () => {
     expect(alert!.type).toBe('parameter');
   });
 
-  it('should reject leverage above 100', () => {
-    const intent = { action: ActionType.OpenPosition, market: 'SOL', side: TradeSide.Long, leverage: 150, collateral: 100 };
+  it('should reject leverage above 1000', () => {
+    const intent = { action: ActionType.OpenPosition, market: 'SOL', side: TradeSide.Long, leverage: 1500, collateral: 100 };
     const alert = validateIntent(intent as any);
     expect(alert).not.toBeNull();
     expect(alert!.type).toBe('parameter');

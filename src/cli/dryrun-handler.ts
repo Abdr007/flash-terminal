@@ -234,6 +234,14 @@ export async function handleDryRun(deps: DryRunDeps, innerCommand: string): Prom
 
   // Only trade actions are supported for dry-run
   if (innerIntent.action !== ActionType.OpenPosition) {
+    // Surface validation alerts (e.g., invalid leverage, unknown market)
+    // instead of showing the generic usage message
+    const alert = (innerIntent as Record<string, unknown>)._alert as { message?: string } | undefined;
+    if (alert?.message) {
+      console.log(alert.message);
+      return;
+    }
+
     console.log('');
     console.log(chalk.yellow('  Dry run currently supports open position commands only.'));
     console.log('');
@@ -245,8 +253,6 @@ export async function handleDryRun(deps: DryRunDeps, innerCommand: string): Prom
     console.log('');
     return;
   }
-
-  if (innerIntent.action !== ActionType.OpenPosition) return;
   const { market, side, collateral, leverage, collateral_token } = innerIntent;
 
   // Check if virtual market is currently open before building preview
