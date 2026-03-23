@@ -1452,23 +1452,42 @@ export class LiveTradingAgent {
     // During learning phase, decision threshold is relaxed (0.75x) to allow data collection
     const decisionThreshold = learningPhase ? effectiveScoreThreshold * 0.75 : effectiveScoreThreshold * 0.85;
 
-    // V_LEARNING_ACCELERATION Phase 1: Controlled exploration zone (first 40 trades)
-    // Allow lower-score trades for learning, but at 0.5x size
-    const explorationPhase = stats.totalTrades < 40;
+    // V_CONTROLLED_ACCELERATION: Fast-learning mode (until 50 trades, then revert)
+    const fastLearning = stats.totalTrades < 50;
+
+    // Phase 3: Time-based minimum activity — if no trade in 90 min, relax gates
+    const msSinceLastTrade = this.state.lastTradeTimestamp > 0 ? Date.now() - this.state.lastTradeTimestamp : 0;
+    const tradeDrought = msSinceLastTrade > 90 * 60_000 && fastLearning;
+    const droughtRelax = tradeDrought ? 0.05 : 0; // -5% confidence floor during drought
+
+    // Phase 1: Expanded exploration (score ≥42 for first 50 trades, 0.4x size)
     let explorationTrade = false;
-    if (explorationPhase && amplifiedScore >= 45 && amplifiedScore < effectiveScoreThreshold && tradeEV >= 0) {
-      explorationTrade = true; // Size reduced to 0.5x later
+    if (fastLearning && amplifiedScore >= 42 && amplifiedScore < effectiveScoreThreshold && tradeEV >= 0) {
+      explorationTrade = true;
     }
 
-    // Near-miss promotion (score ≥48 + EV>0 + close to threshold)
+    // Phase 2: Near-miss promotion boost (score ≥42, confidence ≥45%, EV>0 → 0.6x size)
     let nearMissPromoted = false;
-    if (amplifiedScore >= 48 && amplifiedScore < effectiveScoreThreshold
-        && effectiveConfidence >= (coldStartConfFloor - 0.05)
-        && tradeEV > 0 && decisionScore >= decisionThreshold) {
+    if (amplifiedScore >= 42 && amplifiedScore < effectiveScoreThreshold
+        && effectiveConfidence >= (coldStartConfFloor - droughtRelax - 0.05)
+        && tradeEV > 0) {
       nearMissPromoted = true;
     }
 
-    const scorePassesRaw = (amplifiedScore >= effectiveScoreThreshold && decisionScore >= decisionThreshold) || nearMissPromoted || explorationTrade;
+    // Phase 4: Partial signal execution — if 2 strong factors agree but full pipeline fails
+    let microTrade = false;
+    if (fastLearning && !explorationTrade && !nearMissPromoted
+        && strongFactors >= 2 && amplifiedScore >= 38 && amplifiedScore < 42) {
+      microTrade = true; // 0.3x size — feeds learning loop
+    }
+
+    // Phase 3 continued: Allow best near-miss during drought
+    if (tradeDrought && !explorationTrade && !nearMissPromoted && !microTrade
+        && amplifiedScore >= 38 && effectiveConfidence >= (coldStartConfFloor - 0.10)) {
+      nearMissPromoted = true; // Drought override
+    }
+
+    const scorePassesRaw = (amplifiedScore >= effectiveScoreThreshold && decisionScore >= decisionThreshold) || nearMissPromoted || explorationTrade || microTrade;
 
     if (!scorePassesRaw) {
       this.signalPressure.recordSignal(snapshot.market, amplifiedScore, composite.confidence, true, 'other');
@@ -1526,13 +1545,14 @@ export class LiveTradingAgent {
     if (policyParams.sizeMultiplier !== 1.0) finalCollateral = Math.max(1, finalCollateral * policyParams.sizeMultiplier);
     // V_PRODUCTION_STABLE: Apply cold start size reduction (0.7x during first 10 trades)
     if (inColdStart) finalCollateral = Math.max(1, finalCollateral * coldStartSizeMult);
-    // V_EDGE_EXTRACTION Phase 2: Exploration decay — reduce size as data grows
-    if (explorationTrade) {
-      const explMult = stats.totalTrades < 40 ? 0.5 : stats.totalTrades < 80 ? 0.4 : 0.3;
-      finalCollateral = Math.max(1, finalCollateral * explMult);
+    // V_CONTROLLED_ACCELERATION: Size by trade type
+    if (microTrade) {
+      finalCollateral = Math.max(1, finalCollateral * 0.3); // Phase 4: micro trades 0.3x
+    } else if (explorationTrade) {
+      finalCollateral = Math.max(1, finalCollateral * 0.4); // Phase 1: exploration 0.4x
+    } else if (nearMissPromoted) {
+      finalCollateral = Math.max(1, finalCollateral * 0.6); // Phase 2: near-miss 0.6x
     }
-    // Near-miss promoted trades get 0.7x size
-    else if (nearMissPromoted) finalCollateral = Math.max(1, finalCollateral * 0.7);
 
     // V_SIGNAL_BALANCE_V2 Phase 2: Directional frequency control (last 20 trades)
     let dirScoreMult = 1.0;
