@@ -273,6 +273,9 @@ export class ToolEngine {
       case ActionType.RpcTest:
         return { toolName: 'rpc_test', params: {} };
 
+      case ActionType.RpcList:
+        return { toolName: 'rpc_list', params: {} };
+
       case ActionType.ProtocolStatus:
         return { toolName: 'protocol_status', params: {} };
 

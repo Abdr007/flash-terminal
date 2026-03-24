@@ -16,8 +16,8 @@ const CACHE_SWEEP_INTERVAL_MS = 5 * 60_000; // 5 minutes
 const MEMORY_CHECK_INTERVAL_MS = 5 * 60_000; // 5 minutes
 const ORACLE_CHECK_INTERVAL_MS = 10_000; // 10 seconds
 // Realistic for flash-sdk + Solana: baseline ~500-800MB with all pools loaded
-const RSS_WARNING_THRESHOLD = 1.2 * 1024 * 1024 * 1024;  // 1.2 GB
-const RSS_CRITICAL_THRESHOLD = 1.8 * 1024 * 1024 * 1024;  // 1.8 GB
+const RSS_WARNING_THRESHOLD = 1.8 * 1024 * 1024 * 1024;  // 1.8 GB
+const RSS_CRITICAL_THRESHOLD = 2.5 * 1024 * 1024 * 1024;  // 2.5 GB
 
 export interface MaintenanceHandle {
   stop(): void;

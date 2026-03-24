@@ -89,6 +89,38 @@ export class RpcManager {
     return this.endpoints;
   }
 
+  /** Add a new RPC endpoint at runtime. Returns false if already present. */
+  addEndpoint(url: string, label?: string): boolean {
+    if (this.endpoints.some((ep) => ep.url === url)) return false;
+    const ep: RpcEndpoint = { url, label: label ?? labelFromUrl(url) };
+    this.endpoints.push(ep);
+    this.failureHistory.set(url, []);
+    return true;
+  }
+
+  /** Remove an RPC endpoint by URL. Cannot remove the active endpoint. Returns false if not found or active. */
+  removeEndpoint(url: string): boolean {
+    const idx = this.endpoints.findIndex((ep) => ep.url === url);
+    if (idx < 0 || idx === this.activeIndex) return false;
+    this.endpoints.splice(idx, 1);
+    this.failureHistory.delete(url);
+    this.latencyHistory.delete(url);
+    this.slotHistory.delete(url);
+    // Adjust active index if needed
+    if (this.activeIndex > idx) this.activeIndex--;
+    return true;
+  }
+
+  /** Switch to a specific endpoint by URL. Returns false if not found. */
+  switchTo(url: string): boolean {
+    const idx = this.endpoints.findIndex((ep) => ep.url === url);
+    if (idx < 0 || idx === this.activeIndex) return false;
+    this.activeIndex = idx;
+    this._connection = createConnection(this.endpoints[idx].url);
+    this.onConnectionChange?.(this._connection, this.endpoints[idx]);
+    return true;
+  }
+
   /** Last known latency (ms) for a specific endpoint, or -1 if unknown. */
   getEndpointLatency(url: string): number {
     return this.latencyHistory.get(url) ?? -1;

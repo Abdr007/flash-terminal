@@ -431,9 +431,6 @@ export class FlashClient implements IFlashClient {
     userReferralAccount: PublicKey;
   } | null = null;
 
-  /** Recent trade cache — prevents duplicate submissions within a short window */
-  private recentTrades = new Map<string, number>(); // tradeKey -> timestamp
-  private static readonly TRADE_CACHE_TTL_MS = 120_000;
 
   /** Pre-cached blockhash — refreshed every 5s to avoid blocking on getLatestBlockhash during trade */
   private cachedBlockhash: { blockhash: string; lastValidBlockHeight: number; fetchedAt: number } | null = null;
@@ -1310,49 +1307,6 @@ export class FlashClient implements IFlashClient {
 
   // ─── Recent Trade Cache ──────────────────────────────────────────────────
 
-  /**
-   * Build a cache key for a trade operation.
-   */
-  private tradeCacheKey(action: string, market: string, side: TradeSide, amount?: number): string {
-    return `${action}:${market}:${side}${amount !== undefined ? `:${amount}` : ''}`;
-  }
-
-  /**
-   * Check if an identical trade was recently submitted. Prevents accidental
-   * duplicate commands when the user re-sends after a timeout that actually landed.
-   * Evicts expired entries on each check.
-   */
-  private checkRecentTrade(key: string): void {
-    const now = Date.now();
-    // Evict expired entries
-    for (const [k, ts] of this.recentTrades) {
-      if (now - ts > FlashClient.TRADE_CACHE_TTL_MS) {
-        this.recentTrades.delete(k);
-      }
-    }
-    // Bound cache size to prevent unbounded growth in long sessions
-    if (this.recentTrades.size > 1000) {
-      const oldest = Array.from(this.recentTrades.entries())
-        .sort(([, a], [, b]) => a - b)
-        .slice(0, this.recentTrades.size - 500);
-      for (const [k] of oldest) this.recentTrades.delete(k);
-    }
-    const lastTime = this.recentTrades.get(key);
-    if (lastTime && now - lastTime < FlashClient.TRADE_CACHE_TTL_MS) {
-      const ago = Math.ceil((now - lastTime) / 1000);
-      throw new Error(
-        `Duplicate trade detected — the same trade was submitted ${ago}s ago.\n` +
-          `  Wait ${Math.ceil((FlashClient.TRADE_CACHE_TTL_MS - (now - lastTime)) / 1000)}s or check "positions" to verify.`,
-      );
-    }
-  }
-
-  /**
-   * Record a successful trade in the cache.
-   */
-  private recordRecentTrade(key: string): void {
-    this.recentTrades.set(key, Date.now());
-  }
 
   // ─── Open Position ────────────────────────────────────────────────────────
 
@@ -1376,10 +1330,6 @@ export class FlashClient implements IFlashClient {
         `Minimum collateral is $10 (got $${collateralAmount}).\n` + `  Try: open ${leverage}x ${sideStr} ${market} $10`,
       );
     }
-
-    // Duplicate trade cache check (synchronous)
-    const cacheKey = this.tradeCacheKey('open', market, side, collateralAmount);
-    this.checkRecentTrade(cacheKey);
 
     // Acquire trade lock BEFORE any async operations to prevent interleaving
     this.acquireTradeLock(market, side);
@@ -1610,7 +1560,7 @@ export class FlashClient implements IFlashClient {
         undefined,
         cuOverride,
       );
-      this.recordRecentTrade(cacheKey);
+
 
       // Compute SDK-exact liquidation price for the return value
       let openLiqPrice = 0;
@@ -1703,8 +1653,7 @@ export class FlashClient implements IFlashClient {
   ): Promise<ClosePositionResult> {
     const logger = getLogger();
 
-    const cacheKey = this.tradeCacheKey('close', market, side);
-    this.checkRecentTrade(cacheKey);
+
 
     this.acquireTradeLock(market, side);
     try {
@@ -1887,7 +1836,7 @@ export class FlashClient implements IFlashClient {
 
       // CU limit handled by dynamic scaling in sendTx (420k base, +30k if >4 instructions)
       const txSignature = await this.sendTx(allCloseIxs, allSigners, poolConfig);
-      this.recordRecentTrade(cacheKey);
+
 
       const closeAction = shouldFullClose ? 'CLOSE' : 'PARTIAL_CLOSE';
       logger.trade(closeAction, {
@@ -1915,8 +1864,7 @@ export class FlashClient implements IFlashClient {
   // ─── Collateral Management ────────────────────────────────────────────────
 
   async addCollateral(market: string, side: TradeSide, amount: number): Promise<CollateralResult> {
-    const cacheKey = this.tradeCacheKey('add', market, side, amount);
-    this.checkRecentTrade(cacheKey);
+
 
     this.acquireTradeLock(market, side);
     try {
@@ -1959,7 +1907,7 @@ export class FlashClient implements IFlashClient {
       }
 
       const txSignature = await this.sendTx(result.instructions, result.additionalSigners, poolConfig);
-      this.recordRecentTrade(cacheKey);
+
       getLogger().trade('ADD_COLLATERAL', { market, side, amount, collateralSymbol, tx: txSignature });
       return { txSignature };
     } finally {
@@ -1968,8 +1916,7 @@ export class FlashClient implements IFlashClient {
   }
 
   async removeCollateral(market: string, side: TradeSide, amount: number): Promise<CollateralResult> {
-    const cacheKey = this.tradeCacheKey('remove', market, side, amount);
-    this.checkRecentTrade(cacheKey);
+
 
     this.acquireTradeLock(market, side);
     try {
@@ -2012,7 +1959,7 @@ export class FlashClient implements IFlashClient {
       }
 
       const txSignature = await this.sendTx(result.instructions, result.additionalSigners, poolConfig);
-      this.recordRecentTrade(cacheKey);
+
       getLogger().trade('REMOVE_COLLATERAL', { market, side, amount, collateralSymbol, tx: txSignature });
       return { txSignature };
     } finally {
@@ -2934,8 +2881,7 @@ export class FlashClient implements IFlashClient {
       );
     }
 
-    const cacheKey = this.tradeCacheKey('open', market, side, collateralAmount);
-    this.checkRecentTrade(cacheKey);
+
 
     this.acquireTradeLock(market, side);
     try {
@@ -3161,7 +3107,7 @@ export class FlashClient implements IFlashClient {
         txSignature = await this.sendTx(openResult.instructions, openResult.additionalSigners, poolConfig, altAccounts);
       }
 
-      this.recordRecentTrade(cacheKey);
+
 
       // Compute liquidation price
       let openLiqPrice = 0;

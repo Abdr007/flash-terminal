@@ -64,6 +64,10 @@ export enum ActionType {
   SystemAudit = 'system_audit',
   RpcStatus = 'rpc_status',
   RpcTest = 'rpc_test',
+  RpcSet = 'rpc_set',
+  RpcAdd = 'rpc_add',
+  RpcRemove = 'rpc_remove',
+  RpcList = 'rpc_list',
   TxInspect = 'tx_inspect',
 
   // Transaction Debug
@@ -354,6 +358,25 @@ export const RpcTestSchema = z.object({
   action: z.literal(ActionType.RpcTest),
 });
 
+export const RpcSetSchema = z.object({
+  action: z.literal(ActionType.RpcSet),
+  url: z.string().max(500),
+});
+
+export const RpcAddSchema = z.object({
+  action: z.literal(ActionType.RpcAdd),
+  url: z.string().max(500),
+});
+
+export const RpcRemoveSchema = z.object({
+  action: z.literal(ActionType.RpcRemove),
+  url: z.string().max(500),
+});
+
+export const RpcListSchema = z.object({
+  action: z.literal(ActionType.RpcList),
+});
+
 export const TxInspectSchema = z.object({
   action: z.literal(ActionType.TxInspect),
   signature: z.string().max(100).optional(),
@@ -571,6 +594,10 @@ export const ParsedIntentSchema = z.discriminatedUnion('action', [
   TxMetricsSchema,
   RpcStatusSchema,
   RpcTestSchema,
+  RpcSetSchema,
+  RpcAddSchema,
+  RpcRemoveSchema,
+  RpcListSchema,
   TxInspectSchema,
   TxDebugSchema,
   TradeHistorySchema,

@@ -312,6 +312,30 @@ export class FlashTerminal {
       /* sdk compat check is non-critical */
     }
 
+    // ─── Update Check (non-blocking) ────────────────────────────────
+    try {
+      const { BUILD_INFO } = await import('../build-info.js');
+      fetch('https://registry.npmjs.org/flash-terminal/latest', {
+        signal: AbortSignal.timeout(5000),
+      })
+        .then((res) => (res.ok ? (res.json() as Promise<{ version: string }>) : null))
+        .then((data) => {
+          if (data && data.version !== BUILD_INFO.version) {
+            console.log(
+              chalk.yellow(
+                `\n  Update available: v${BUILD_INFO.version} → v${data.version}` +
+                  `\n  Run ${chalk.bold('flash update')} to install\n`,
+              ),
+            );
+          }
+        })
+        .catch(() => {
+          /* update check is non-critical */
+        });
+    } catch {
+      /* update check is non-critical */
+    }
+
     // ─── Alert Consumers ──────────────────────────────────────────────
     try {
       const { autoRegisterWebhook } = await import('../observability/alert-consumers/webhook-consumer.js');
@@ -1371,6 +1395,145 @@ export class FlashTerminal {
     this.applyWalletFlowState(state);
   }
 
+  // ─── Update ─────────────────────────────────────────────────────
+
+  /** Check for updates and install from within the terminal */
+  private async handleUpdate(): Promise<void> {
+    const { BUILD_INFO } = await import('../build-info.js');
+    process.stdout.write('  Checking for updates...\r');
+
+    try {
+      const res = await fetch('https://registry.npmjs.org/flash-terminal/latest', {
+        signal: AbortSignal.timeout(10000),
+      });
+      if (!res.ok) {
+        console.log(chalk.yellow('  Could not reach npm registry.'));
+        return;
+      }
+      const data = (await res.json()) as { version: string };
+      if (data.version === BUILD_INFO.version) {
+        console.log(`  Already up to date (v${BUILD_INFO.version}).     `);
+        return;
+      }
+
+      console.log(`  Updating v${BUILD_INFO.version} → v${data.version}...     `);
+      const { spawn } = await import('child_process');
+      await new Promise<void>((resolveP, rejectP) => {
+        const child = spawn('npm', ['install', '-g', 'flash-terminal@latest'], {
+          shell: false,
+          stdio: 'inherit',
+          timeout: 120_000,
+        });
+        child.on('close', (code) => {
+          if (code === 0) resolveP();
+          else rejectP(new Error(`npm install exited with code ${code}`));
+        });
+        child.on('error', rejectP);
+      });
+
+      console.log('');
+      console.log(chalk.green(`  Updated to v${data.version}.`));
+      console.log(chalk.dim('  Restart Flash Terminal to use the new version.'));
+      console.log('');
+    } catch (err) {
+      console.log(chalk.red(`  Update failed: ${getErrorMessage(err)}`));
+      console.log(chalk.dim('  Try manually: npm install -g flash-terminal@latest'));
+    }
+  }
+
+  // ─── RPC Management ──────────────────────────────────────────────
+
+  /** Set primary RPC URL — switches active endpoint and persists */
+  private async handleRpcSet(url: string): Promise<void> {
+    if (!url) {
+      console.log(chalk.yellow('  Usage: rpc set <url>'));
+      return;
+    }
+    try {
+      const { validateRpcUrl, saveConfigField } = await import('../config/index.js');
+      const validUrl = validateRpcUrl(url);
+      const { getRpcManagerInstance } = await import('../network/rpc-manager.js');
+      const mgr = getRpcManagerInstance();
+      if (!mgr) {
+        console.log(chalk.red('  RPC manager not initialized.'));
+        return;
+      }
+      // Add if not present, then switch to it
+      mgr.addEndpoint(validUrl);
+      mgr.switchTo(validUrl);
+      // Persist as primary
+      saveConfigField('rpc_url', validUrl);
+      // Update config in memory
+      this.config.rpcUrl = validUrl;
+      console.log(chalk.green(`\n  Primary RPC set to: ${validUrl}\n`));
+    } catch (err) {
+      console.log(chalk.red(`  Invalid RPC URL: ${getErrorMessage(err)}`));
+    }
+  }
+
+  /** Add a backup RPC endpoint */
+  private async handleRpcAdd(url: string): Promise<void> {
+    if (!url) {
+      console.log(chalk.yellow('  Usage: rpc add <url>'));
+      return;
+    }
+    try {
+      const { validateRpcUrl, saveConfigField } = await import('../config/index.js');
+      const validUrl = validateRpcUrl(url);
+      const { getRpcManagerInstance } = await import('../network/rpc-manager.js');
+      const mgr = getRpcManagerInstance();
+      if (!mgr) {
+        console.log(chalk.red('  RPC manager not initialized.'));
+        return;
+      }
+      const added = mgr.addEndpoint(validUrl);
+      if (!added) {
+        console.log(chalk.yellow('  Endpoint already configured.'));
+        return;
+      }
+      // Persist backup URLs
+      const currentBackups = this.config.backupRpcUrls ?? [];
+      currentBackups.push(validUrl);
+      this.config.backupRpcUrls = currentBackups;
+      saveConfigField('backup_rpc_urls', currentBackups);
+      console.log(chalk.green(`\n  Backup RPC added: ${validUrl}`));
+      console.log(chalk.dim(`  Total endpoints: ${mgr.totalEndpoints}\n`));
+    } catch (err) {
+      console.log(chalk.red(`  Invalid RPC URL: ${getErrorMessage(err)}`));
+    }
+  }
+
+  /** Remove a backup RPC endpoint */
+  private async handleRpcRemove(url: string): Promise<void> {
+    if (!url) {
+      console.log(chalk.yellow('  Usage: rpc remove <url>'));
+      return;
+    }
+    const { getRpcManagerInstance } = await import('../network/rpc-manager.js');
+    const mgr = getRpcManagerInstance();
+    if (!mgr) {
+      console.log(chalk.red('  RPC manager not initialized.'));
+      return;
+    }
+    const active = mgr.activeEndpoint;
+    if (active.url === url) {
+      console.log(chalk.red('  Cannot remove the active endpoint. Switch to another first with: rpc set <url>'));
+      return;
+    }
+    const removed = mgr.removeEndpoint(url);
+    if (!removed) {
+      console.log(chalk.yellow('  Endpoint not found.'));
+      return;
+    }
+    // Update persisted backups
+    const { saveConfigField } = await import('../config/index.js');
+    const currentBackups = (this.config.backupRpcUrls ?? []).filter((u) => u !== url);
+    this.config.backupRpcUrls = currentBackups;
+    saveConfigField('backup_rpc_urls', currentBackups as unknown as string);
+    console.log(chalk.green(`\n  Removed: ${url}`));
+    console.log(chalk.dim(`  Remaining endpoints: ${mgr.totalEndpoints}\n`));
+  }
+
   // ─── Prompt ────────────────────────────────────────────────────────
 
   /** Update prompt prefix based on current mode */
@@ -1587,6 +1750,12 @@ export class FlashTerminal {
     }
     if (lower === 'agent refiner' || lower === 'agent refinements') {
       this.handleAgentRefiner();
+      return;
+    }
+
+    // ─── Update Command ──────────────────────────────────────────
+    if (lower === 'update' || lower === 'flash update') {
+      await this.handleUpdate();
       return;
     }
 
@@ -2064,6 +2233,18 @@ export class FlashTerminal {
       } else {
         console.log(theme.dim('\n  Unknown command.\n'));
       }
+      return;
+    } else if (lower.startsWith('rpc set ')) {
+      const url = input.slice('rpc set '.length).trim();
+      await this.handleRpcSet(url);
+      return;
+    } else if (lower.startsWith('rpc add ')) {
+      const url = input.slice('rpc add '.length).trim();
+      await this.handleRpcAdd(url);
+      return;
+    } else if (lower.startsWith('rpc remove ')) {
+      const url = input.slice('rpc remove '.length).trim();
+      await this.handleRpcRemove(url);
       return;
     } else if (lower === 'inspect pool' || lower.startsWith('inspect pool ')) {
       const poolInput = lower === 'inspect pool' ? '' : input.slice('inspect pool '.length).trim();

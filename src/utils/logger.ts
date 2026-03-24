@@ -5,6 +5,10 @@ import chalk from 'chalk';
 
 const MAX_LOG_FILE_BYTES = 10 * 1024 * 1024; // 10MB max before rotation
 
+/** Background categories whose errors should NOT interrupt the interactive prompt.
+ *  These are logged to file only — not printed to console. */
+const BACKGROUND_CATEGORIES = new Set(['HEALTH', 'RETRY', 'MEMORY', 'ORACLE', 'MAINTENANCE', 'RECONCILER']);
+
 export type LogFormat = 'text' | 'json';
 
 export enum LogLevel {
@@ -153,9 +157,16 @@ export class Logger {
       this.writeToConsole(entry);
     }
 
-    // Show in CLI only if explicitly enabled (showInCli) or for errors
-    if (this.showInCli || level >= LogLevel.Error) {
+    // Show in CLI only if explicitly enabled (showInCli) or for user-facing errors.
+    // Suppress noisy background categories (HEALTH, RETRY, MEMORY, ORACLE) from the
+    // interactive prompt — they are still written to the log file.
+    if (this.showInCli) {
       this.writeToConsole(entry);
+    } else if (level >= LogLevel.Error) {
+      const bg = BACKGROUND_CATEGORIES.has(entry.category);
+      if (!bg) {
+        this.writeToConsole(entry);
+      }
     }
   }
 

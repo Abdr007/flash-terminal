@@ -142,7 +142,7 @@ function loadConfigFile(): ConfigFileData {
 }
 
 /** Persist a single field to ~/.flash/config.json (merge with existing) */
-export function saveConfigField(key: string, value: string | number | boolean | undefined): void {
+export function saveConfigField(key: string, value: string | number | boolean | string[] | undefined): void {
   const configPath = resolve(homedir(), '.flash', 'config.json');
   let data: Record<string, unknown> = {};
   try {

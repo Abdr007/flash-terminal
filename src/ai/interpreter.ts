@@ -332,6 +332,8 @@ function flexParseOpen(input: string): ParsedIntent | null {
     body = body.replace(/^(?:a|an|the)\s+/, '');
     if (body === before) break;
   }
+  // Normalize "@" to "$" so "@10" and "@$10" are treated as collateral amounts
+  body = body.replace(/@\$?(\d)/g, '$$$1');
   // Strip filler words (aggressive — keeps only meaningful tokens)
   body = body.replace(
     /\b(?:with|for|on|at|to|in|of|using|and|the|a|an|my|position|collateral|dollars?|bucks?|usd|usdc)\b/g,

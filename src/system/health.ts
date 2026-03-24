@@ -21,13 +21,13 @@ const HEALTH_TICK_MS = 5_000;
 const LAG_POLL_MS = 500;
 
 // Thresholds
-const LAG_WARNING_MS = 200;   // Raised: 100ms too aggressive for Node.js with heavy SDK
-const LAG_CRITICAL_MS = 1000; // Raised: 500ms triggered during normal SDK operations
+const LAG_WARNING_MS = 500;   // Node.js with heavy SDK ops regularly hits 200-400ms
+const LAG_CRITICAL_MS = 2000; // Only flag truly blocked event loops
 // Memory thresholds — realistic for Node.js + flash-sdk + Solana libs.
 // Baseline: flash-sdk PoolConfig loads ~80MB per pool (IDL, accounts, buffers).
 // With 6 pools + state-cache + connections: ~500-800MB is NORMAL operating range.
-const MEM_WARNING_BYTES = 1.2 * 1024 * 1024 * 1024;  // 1.2 GB
-const MEM_CRITICAL_BYTES = 1.8 * 1024 * 1024 * 1024;  // 1.8 GB
+const MEM_WARNING_BYTES = 1.8 * 1024 * 1024 * 1024;  // 1.8 GB
+const MEM_CRITICAL_BYTES = 2.5 * 1024 * 1024 * 1024;  // 2.5 GB
 const ERROR_RATE_WARNING = 10;
 const ERROR_RATE_CRITICAL = 30;
 const RPC_LATENCY_WARNING_MS = 2000;

@@ -1336,6 +1336,7 @@ export {
   protocolStatusTool,
   rpcStatusTool,
   rpcTestTool,
+  rpcListTool,
   txInspectTool,
   txDebugTool,
   tradeHistoryTool,

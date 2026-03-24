@@ -207,6 +207,35 @@ export const rpcTestTool: ToolDefinition = {
   },
 };
 
+export const rpcListTool: ToolDefinition = {
+  name: 'rpc_list',
+  description: 'List all configured RPC endpoints',
+  parameters: z.object({}),
+  execute: async (): Promise<ToolResult> => {
+    const { getRpcManagerInstance } = await import('../network/rpc-manager.js');
+    const mgr = getRpcManagerInstance();
+    if (!mgr) {
+      return { success: true, message: chalk.dim('  RPC manager not initialized.') };
+    }
+    const endpoints = mgr.getEndpoints();
+    const active = mgr.activeEndpoint;
+    const lines: string[] = ['', chalk.bold('  RPC Endpoints'), ''];
+    for (const ep of endpoints) {
+      const isActive = ep.url === active.url;
+      const marker = isActive ? chalk.green(' ● ') : chalk.dim(' ○ ');
+      const label = isActive ? chalk.green(ep.label) : ep.label;
+      const latency = mgr.getEndpointLatency(ep.url);
+      const latStr = latency > 0 ? chalk.dim(` (${latency}ms)`) : '';
+      lines.push(`  ${marker} ${label}${latStr}`);
+      lines.push(chalk.dim(`      ${ep.url}`));
+    }
+    lines.push('');
+    lines.push(chalk.dim('  Commands: rpc set <url> | rpc add <url> | rpc remove <url>'));
+    lines.push('');
+    return { success: true, message: lines.join('\n') };
+  },
+};
+
 export const txInspectTool: ToolDefinition = {
   name: 'tx_inspect',
   description: 'Inspect a transaction by signature',
@@ -1117,6 +1146,7 @@ export const allProtocolTools: ToolDefinition[] = [
   protocolStatusTool,
   rpcStatusTool,
   rpcTestTool,
+  rpcListTool,
   txInspectTool,
   txDebugTool,
   tradeHistoryTool,
