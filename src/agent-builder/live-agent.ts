@@ -1856,11 +1856,13 @@ export class LiveTradingAgent {
         continue;
       }
 
-      // STAGNATION EARLY EXIT: Cut flat/losing trades before large loss develops.
-      // Triggers at 12 ticks if PnL ≤ -0.3% — catches slow bleed early.
-      // Does NOT touch profitable trades (pnlPct > 0) or momentum_exit winners.
-      if (holdingTicks >= 12 && pnlPct <= -0.3) {
-        this.log('normal', `STAGNATION_EARLY_EXIT: ${pos.market} ${pos.side} ticks=${holdingTicks} pnl=${pnlPct.toFixed(2)}% R=${rMultiple.toFixed(2)} — cutting loss early`);
+      // STAGNATION EARLY EXIT: Cut flat/losing trades before time_decay fires.
+      // Two tiers:
+      //   Tier 1: ≥8 ticks AND pnl ≤ -0.3% → definite loser, cut fast
+      //   Tier 2: ≥12 ticks AND pnl < +0.05% → going nowhere, cut before time_decay
+      // Does NOT touch trades with meaningful profit (pnlPct ≥ 0.05%).
+      if ((holdingTicks >= 8 && pnlPct <= -0.3) || (holdingTicks >= 12 && pnlPct < 0.05)) {
+        this.log('normal', `STAGNATION_EARLY_EXIT: ${pos.market} ${pos.side} ticks=${holdingTicks} pnl=${pnlPct.toFixed(2)}% R=${rMultiple.toFixed(2)} — cutting early`);
         await this.closeWithReason(pos, 'stagnation', `Early exit: ${holdingTicks} ticks at ${pnlPct.toFixed(2)}%`);
         this.positionMgr.untrack(pos.market, pos.side);
         continue;
