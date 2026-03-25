@@ -6,6 +6,103 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.1.1] — 2026-03-25
+
+### Production Hardening
+
+- **Runtime State Machine** — ACTIVE/IDLE/DEGRADED states with automatic idle detection (60s inactivity)
+- **Central Scheduler** — All background polling loops managed with priority-based throttling (CRITICAL/NORMAL/LOW)
+- **Idle Mode** — LOW tasks suspended, NORMAL tasks throttled 5x when user is inactive
+- **Circuit Breakers** — Generic `ServiceCircuitBreaker` (CLOSED→OPEN→HALF_OPEN) wired into fstats and Pyth Hermes
+- **Event Loop Protection** — Scheduler actively drops tasks when lag >2s, only CRITICAL runs at >5s
+- **Memory Backpressure** — RSS-based load shedding at 1.8GB (warning) and 2.5GB (critical)
+- **Watchdog** — Detects stuck tasks (>60s) and force-releases them
+- **Health Score** — Unified 0-100 score (lag 30pts, errors 25pts, RPC 25pts, memory 20pts)
+
+### Observability
+
+- **`system metrics` command** — Shows health score, scheduler status, circuit breaker states, retry budget
+- **`update` command** — Works inside interactive terminal (not just CLI)
+
+### Bug Fixes
+
+- **Timer leak** — `clearTimeout` moved to `finally` block in slack-consumer.ts and webhook-consumer.ts
+- **Background noise** — HEALTH/RETRY/ORACLE/MEMORY errors suppressed from terminal prompt (log file only)
+- **Memory thresholds** — Raised to 1.8GB (warn) and 2.5GB (critical) for realistic flash-sdk usage
+- **Event loop lag thresholds** — Raised to 500ms (warn) and 2s (critical)
+
+### CLI Polish
+
+- Install section added to README top
+- Debug commands hidden from help (engine status, benchmark engine)
+- Removed FAF typo aliases
+
+---
+
+## [1.1.0] — 2026-03-25
+
+### Background Error Suppression
+
+- HEALTH, RETRY, MEMORY, ORACLE, MAINTENANCE, RECONCILER errors no longer print to terminal prompt — written to log file only
+
+### Threshold Adjustments
+
+- Memory warning: 1.2GB → 1.8GB, critical: 1.8GB → 2.5GB
+- Event loop lag warning: 200ms → 500ms, critical: 1s → 2s
+
+---
+
+## [1.0.9] — 2026-03-25
+
+### In-Terminal Update
+
+- `update` command works inside the interactive terminal (previously CLI-only)
+
+---
+
+## [1.0.8] — 2026-03-25
+
+### RPC Management
+
+- **`rpc set <url>`** — Set primary RPC endpoint, persists to `~/.flash/config.json`
+- **`rpc add <url>`** — Add backup RPC endpoint for failover
+- **`rpc remove <url>`** — Remove a backup endpoint
+- **`rpc list`** — Show all configured endpoints with active marker
+
+### Parser Fix
+
+- `@` symbol now treated as `$` in trade commands — `2x sol long @10` works
+
+### Duplicate Trade Cache Removed
+
+- Removed 120-second duplicate trade cache that blocked intentional same-market trades
+
+### Startup Update Check
+
+- Terminal shows update notification on launch when a newer version is available
+
+### Package Fix
+
+- `.env.example` now shipped with npm package
+
+---
+
+## [1.0.7] — 2026-03-25
+
+### Package Fix
+
+- Added `.env.example` to `files` field in package.json
+
+---
+
+## [1.0.6] — 2026-03-25
+
+### Critical Fix
+
+- **Removed circular self-dependency** — `flash-terminal` was listed as its own dependency, causing install failures
+
+---
+
 ## [1.0.1] — 2026-03-16
 
 ### Architecture Refinement

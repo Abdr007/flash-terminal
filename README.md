@@ -18,7 +18,7 @@
   <a href="https://www.typescriptlang.org"><img src="https://img.shields.io/badge/TypeScript-Strict-3178C6?style=flat-square&logo=typescript&logoColor=white" alt="TypeScript" /></a>&nbsp;
   <a href="https://www.flash.trade"><img src="https://img.shields.io/badge/Flash_Trade-SDK-26d97f?style=flat-square" alt="Flash SDK" /></a>&nbsp;
   <a href="https://github.com/Abdr007/flash-terminal/actions"><img src="https://img.shields.io/github/actions/workflow/status/Abdr007/flash-terminal/ci.yml?branch=main&style=flat-square&label=CI" alt="CI" /></a>&nbsp;
-  <img src="https://img.shields.io/badge/Tests-1926_passing-brightgreen?style=flat-square" alt="Tests" />&nbsp;
+  <img src="https://img.shields.io/badge/Tests-1985_passing-brightgreen?style=flat-square" alt="Tests" />&nbsp;
   <a href="https://github.com/Abdr007/flash-terminal/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue?style=flat-square" alt="MIT License" /></a>
 </p>
 
@@ -641,7 +641,7 @@ Flash Terminal is in **stable maintenance** on Solana mainnet.
 
 | Metric | Value |
 |:-------|:------|
-| Version | v1.0.5 |
+| Version | v1.1.1 |
 | Markets | 32 active across 7 pools |
 | Test suite | 1,926 assertions passing |
 | TypeScript | Strict mode, zero errors |
