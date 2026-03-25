@@ -13,6 +13,7 @@ import {
 import { FSTATS_BASE_URL, POOL_NAMES } from '../config/index.js';
 import { getLogger } from '../utils/logger.js';
 import { getErrorMessage } from '../utils/retry.js';
+import { getServiceBreaker } from '../core/circuit-breaker-service.js';
 
 /** Whitelist of valid pool names for API queries. Loaded from SDK config. */
 const VALID_POOLS = new Set(POOL_NAMES);
@@ -95,6 +96,11 @@ type RawOpenPosition = RawActivityRecord;
 const MAX_RESPONSE_BYTES = 2 * 1024 * 1024; // 2MB max response body
 
 async function safeFetchJson<T>(path: string): Promise<T | null> {
+  const cb = getServiceBreaker('fstats', { failureThreshold: 5, cooldownMs: 30_000, maxCooldownMs: 120_000, cooldownMultiplier: 2 });
+  if (!cb.allowRequest()) {
+    return null; // Circuit open — skip
+  }
+
   const url = `${FSTATS_BASE_URL}${path}`;
   const logger = getLogger();
   logger.api(url);
@@ -130,6 +136,7 @@ async function safeFetchJson<T>(path: string): Promise<T | null> {
           // Retry failed — fall through to return null
         }
       }
+      cb.recordFailure();
       logger.info('ANALYTICS', `fstats ${res.status}: ${res.statusText} for ${path}`);
       return null;
     }
@@ -172,8 +179,11 @@ async function safeFetchJson<T>(path: string): Promise<T | null> {
       chunks.push(value);
     }
     const text = new TextDecoder().decode(Buffer.concat(chunks));
-    return JSON.parse(text) as T;
+    const result = JSON.parse(text) as T;
+    cb.recordSuccess();
+    return result;
   } catch (error: unknown) {
+    cb.recordFailure();
     logger.info('ANALYTICS', `fstats fetch failed for ${path}: ${getErrorMessage(error)}`);
     return null;
   } finally {

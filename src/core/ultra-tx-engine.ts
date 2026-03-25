@@ -27,6 +27,8 @@ import {
 } from '@solana/web3.js';
 import { getLogger } from '../utils/logger.js';
 import { getMetrics } from '../observability/metrics.js';
+import { getScheduler } from './scheduler.js';
+import { TaskPriority } from './runtime-state.js';
 
 // Ed25519 program ID — oracle signature verification instructions must be ordered before CU budget
 const ED25519_PROGRAM_ID = 'Ed25519SigVerify111111111111111111111111111';
@@ -232,11 +234,21 @@ export class UltraTxEngine {
     this.startBlockhashPipeline();
     this.refreshBroadcastConnections();
 
-    // Refresh broadcast connections every 30s
-    this.broadcastRefreshTimer = setInterval(() => {
-      this.refreshBroadcastConnections();
-    }, 30_000);
-    this.broadcastRefreshTimer.unref();
+    // Refresh broadcast connections every 30s — LOW priority, suspended in IDLE
+    const scheduler = getScheduler();
+    if (scheduler) {
+      scheduler.register({
+        name: 'tx-broadcast-refresh',
+        fn: () => this.refreshBroadcastConnections(),
+        baseIntervalMs: 30_000,
+        priority: TaskPriority.LOW,
+      });
+    } else {
+      this.broadcastRefreshTimer = setInterval(() => {
+        this.refreshBroadcastConnections();
+      }, 30_000);
+      this.broadcastRefreshTimer.unref();
+    }
 
     // Initialize leader-aware routing (can be disabled via FLASH_LEADER_ROUTING=0)
     if (this.config.tpuForwarding || this.config.multiBroadcast) {
@@ -253,10 +265,21 @@ export class UltraTxEngine {
     // Immediate first fetch
     this.refreshBlockhash().catch(() => {});
 
-    this.blockhashTimer = setInterval(() => {
-      this.refreshBlockhash().catch(() => {});
-    }, BLOCKHASH_REFRESH_MS);
-    this.blockhashTimer.unref();
+    // Blockhash refresh — NORMAL priority, throttled in IDLE (no trades happening)
+    const sched = getScheduler();
+    if (sched) {
+      sched.register({
+        name: 'tx-blockhash-refresh',
+        fn: () => { this.refreshBlockhash().catch(() => {}); },
+        baseIntervalMs: BLOCKHASH_REFRESH_MS,
+        priority: TaskPriority.NORMAL,
+      });
+    } else {
+      this.blockhashTimer = setInterval(() => {
+        this.refreshBlockhash().catch(() => {});
+      }, BLOCKHASH_REFRESH_MS);
+      this.blockhashTimer.unref();
+    }
   }
 
   private async refreshBlockhash(): Promise<CachedBlockhash> {
@@ -1458,6 +1481,11 @@ export class UltraTxEngine {
   // ─── Shutdown ────────────────────────────────────────────────────────────
 
   shutdown(): void {
+    const scheduler = getScheduler();
+    if (scheduler) {
+      scheduler.unregister('tx-blockhash-refresh');
+      scheduler.unregister('tx-broadcast-refresh');
+    }
     if (this.blockhashTimer) {
       clearInterval(this.blockhashTimer);
       this.blockhashTimer = null;

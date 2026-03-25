@@ -41,10 +41,9 @@ export function registerSlackConsumer(config: SlackConsumerConfig): () => void {
     const emoji = SEVERITY_EMOJI[alert.severity];
     const text = `${emoji} *Flash Terminal Alert*\n*${alert.event}*: ${alert.message}`;
 
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), SLACK_TIMEOUT_MS);
     try {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), SLACK_TIMEOUT_MS);
-
       const payload: Record<string, unknown> = { text };
       if (config.channel) payload.channel = config.channel;
 
@@ -54,14 +53,14 @@ export function registerSlackConsumer(config: SlackConsumerConfig): () => void {
         body: JSON.stringify(payload),
         signal: controller.signal,
       });
-
-      clearTimeout(timeout);
     } catch (err) {
       try {
         getLogger().debug('SLACK', `Alert delivery failed: ${err}`);
       } catch {
         /* never throw */
       }
+    } finally {
+      clearTimeout(timeout);
     }
   });
 }

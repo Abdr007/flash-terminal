@@ -4,6 +4,8 @@ import { homedir } from 'os';
 import { IFlashClient, Position } from '../types/index.js';
 import { getLogger } from '../utils/logger.js';
 import { getErrorMessage } from '../utils/retry.js';
+import { getScheduler } from './scheduler.js';
+import { TaskPriority } from './runtime-state.js';
 
 // ─── Reconciliation Engine ──────────────────────────────────────────────────
 //
@@ -133,14 +135,25 @@ export class StateReconciler {
   startPeriodicSync(): void {
     if (this._running) return;
     this._running = true;
-    this.timer = setInterval(() => {
+
+    const reconcileFn = (): void => {
       this.reconcile().catch((err) => {
         getLogger().debug('RECONCILER', `Periodic sync error: ${getErrorMessage(err)}`);
       });
-    }, RECONCILE_INTERVAL_MS);
-    // Don't let the reconciler keep Node alive after user exits
-    if (this.timer.unref) {
-      this.timer.unref();
+    };
+
+    // Use central scheduler if available (LOW priority — suspended in IDLE)
+    const scheduler = getScheduler();
+    if (scheduler) {
+      scheduler.register({
+        name: 'state-reconciliation',
+        fn: reconcileFn,
+        baseIntervalMs: RECONCILE_INTERVAL_MS,
+        priority: TaskPriority.LOW,
+      });
+    } else {
+      this.timer = setInterval(reconcileFn, RECONCILE_INTERVAL_MS);
+      if (this.timer.unref) this.timer.unref();
     }
   }
 
@@ -149,6 +162,10 @@ export class StateReconciler {
    */
   stop(): void {
     this._running = false;
+    const scheduler = getScheduler();
+    if (scheduler) {
+      scheduler.unregister('state-reconciliation');
+    }
     if (this.timer) {
       clearInterval(this.timer);
       this.timer = null;

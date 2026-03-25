@@ -3,6 +3,8 @@ import { IFlashClient } from '../types/index.js';
 import { RpcManager } from '../network/rpc-manager.js';
 import { getReconciler } from '../core/state-reconciliation.js';
 import { getLogger } from '../utils/logger.js';
+import { getScheduler } from '../core/scheduler.js';
+import { TaskPriority } from '../core/runtime-state.js';
 import { getErrorMessage } from '../utils/retry.js';
 
 // ─── Status Bar ──────────────────────────────────────────────────────────────
@@ -114,20 +116,30 @@ export class StatusBar {
     }, 2_000);
     if (this.initDelayTimer.unref) this.initDelayTimer.unref();
 
-    this.timer = setInterval(() => {
+    const refreshFn = (): void => {
       if (!this.suspended) {
         this.refresh().catch(() => {});
       }
-    }, STATUS_INTERVAL_MS);
-
-    if (this.timer.unref) {
-      this.timer.unref();
+    };
+    const scheduler = getScheduler();
+    if (scheduler) {
+      scheduler.register({
+        name: 'status-bar-refresh',
+        fn: refreshFn,
+        baseIntervalMs: STATUS_INTERVAL_MS,
+        priority: TaskPriority.LOW,
+      });
+    } else {
+      this.timer = setInterval(refreshFn, STATUS_INTERVAL_MS);
+      if (this.timer.unref) this.timer.unref();
     }
   }
 
   /** Stop the status bar permanently. */
   stop(): void {
     this.active = false;
+    const scheduler = getScheduler();
+    if (scheduler) scheduler.unregister('status-bar-refresh');
     if (this.initDelayTimer) {
       clearTimeout(this.initDelayTimer);
       this.initDelayTimer = null;

@@ -407,6 +407,20 @@ export const COMMAND_REGISTRY: CommandEntry[] = [
     dispatchAliases: ['system'],
   },
   {
+    name: 'system metrics',
+    action: null,
+    category: 'Utilities',
+    description: 'Full runtime metrics: health, scheduler, circuit breakers',
+    aliases: ['sysmetrics'],
+  },
+  {
+    name: 'update',
+    action: null,
+    category: 'Utilities',
+    description: 'Check for updates and install latest version',
+    aliases: ['flash update'],
+  },
+  {
     name: 'system audit',
     action: ActionType.SystemAudit,
     category: 'Utilities',
@@ -507,6 +521,7 @@ export const COMMAND_REGISTRY: CommandEntry[] = [
     category: 'Utilities',
     description: 'Show execution engine info',
     aliases: ['engine'],
+    hidden: true,
   },
   {
     name: 'benchmark engine',
@@ -514,6 +529,7 @@ export const COMMAND_REGISTRY: CommandEntry[] = [
     category: 'Utilities',
     description: 'Benchmark execution engines',
     aliases: ['engine benchmark'],
+    hidden: true,
   },
   {
     name: 'degen',
@@ -725,7 +741,7 @@ export const COMMAND_REGISTRY: CommandEntry[] = [
     action: ActionType.FafReferral,
     category: 'FAF Token',
     description: 'Referral status + claimable rebates',
-    aliases: ['faf referrals', 'faf referal', 'faf refferal'],
+    aliases: ['faf referrals'],
   },
   {
     name: 'faf points',

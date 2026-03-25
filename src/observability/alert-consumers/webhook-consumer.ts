@@ -33,10 +33,9 @@ export function registerWebhookConsumer(config: WebhookConsumerConfig): () => vo
   return getAlertManager().onAlert(async (alert: Alert) => {
     if (SEVERITY_RANK[alert.severity] < minRank) return;
 
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), WEBHOOK_TIMEOUT_MS);
     try {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), WEBHOOK_TIMEOUT_MS);
-
       await fetch(config.url, {
         method: 'POST',
         headers: {
@@ -53,14 +52,14 @@ export function registerWebhookConsumer(config: WebhookConsumerConfig): () => vo
         }),
         signal: controller.signal,
       });
-
-      clearTimeout(timeout);
     } catch (err) {
       try {
         getLogger().debug('WEBHOOK', `Alert delivery failed: ${err}`);
       } catch {
         /* never throw */
       }
+    } finally {
+      clearTimeout(timeout);
     }
   });
 }

@@ -28,6 +28,17 @@
 
 ---
 
+## Install
+
+```bash
+npm install -g flash-terminal
+flash
+```
+
+Requires Node.js 20+. See [Getting Started](https://flash-terminal-docs.vercel.app/guide/getting-started) for full setup.
+
+---
+
 ## Why This Exists
 
 Most trading tools are UI-first, opaque, and unsafe by default. They hide execution details, fabricate convenience data, and give you no control over what happens between your intent and the chain.

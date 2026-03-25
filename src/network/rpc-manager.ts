@@ -2,6 +2,8 @@ import { Connection } from '@solana/web3.js';
 import chalk from 'chalk';
 import { getLogger } from '../utils/logger.js';
 import { createConnection } from '../wallet/connection.js';
+import { getScheduler } from '../core/scheduler.js';
+import { TaskPriority } from '../core/runtime-state.js';
 
 const LATENCY_THRESHOLD_MS = 3_000;
 const HEALTH_CHECK_TIMEOUT_MS = 5_000;
@@ -434,8 +436,7 @@ export class RpcManager {
     const logger = getLogger();
     logger.info('RPC', `Health monitor started (interval: ${HEALTH_MONITOR_INTERVAL_MS / 1000}s)`);
 
-    this.monitorTimer = setInterval(async () => {
-      // Mutex: skip if previous health check is still in-flight
+    const monitorFn = async (): Promise<void> => {
       if (this.healthCheckInProgress) return;
       this.healthCheckInProgress = true;
       try {
@@ -444,7 +445,6 @@ export class RpcManager {
 
         if (!health.healthy) {
           this.consecutiveMonitorFailures++;
-          // Suppress log spam during prolonged outages — log every 5th failure
           if (this.consecutiveMonitorFailures <= 3 || this.consecutiveMonitorFailures % 5 === 0) {
             logger.warn(
               'RPC',
@@ -471,7 +471,6 @@ export class RpcManager {
           }
           this.consecutiveMonitorFailures = 0;
         } else {
-          // Healthy — reset consecutive failure counter and degraded flag
           if (this.consecutiveMonitorFailures > 0) {
             logger.info(
               'RPC',
@@ -482,19 +481,29 @@ export class RpcManager {
           this._allEndpointsDown = false;
         }
 
-        // Run partition detection on every health check cycle
         this.detectPartition();
       } catch {
-        // Monitor must never crash
         this.consecutiveMonitorFailures++;
       } finally {
         this.healthCheckInProgress = false;
       }
-    }, HEALTH_MONITOR_INTERVAL_MS);
+    };
 
-    // Don't let the monitor keep Node alive
-    if (this.monitorTimer.unref) {
+    // Use central scheduler if available (NORMAL — throttled 5x in IDLE)
+    const scheduler = getScheduler();
+    if (scheduler) {
+      scheduler.register({
+        name: 'rpc-health-monitor',
+        fn: monitorFn,
+        baseIntervalMs: HEALTH_MONITOR_INTERVAL_MS,
+        priority: TaskPriority.NORMAL,
+      });
+      // Set a dummy timer so monitorTimer is truthy (prevents re-entry)
+      this.monitorTimer = setInterval(() => {}, 2_147_483_647);
       this.monitorTimer.unref();
+    } else {
+      this.monitorTimer = setInterval(monitorFn, HEALTH_MONITOR_INTERVAL_MS);
+      if (this.monitorTimer.unref) this.monitorTimer.unref();
     }
   }
 
@@ -540,6 +549,8 @@ export class RpcManager {
    * Stop background health monitoring.
    */
   stopMonitoring(): void {
+    const scheduler = getScheduler();
+    if (scheduler) scheduler.unregister('rpc-health-monitor');
     if (this.monitorTimer) {
       clearInterval(this.monitorTimer);
       this.monitorTimer = null;

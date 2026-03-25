@@ -3,6 +3,7 @@ import { join } from 'path';
 import { homedir } from 'os';
 import { getLogger } from '../utils/logger.js';
 import { getErrorMessage } from '../utils/retry.js';
+import { getServiceBreaker } from '../core/circuit-breaker-service.js';
 
 export interface TokenPrice {
   symbol: string;
@@ -168,6 +169,9 @@ export class PriceService {
 
     if (feedIds.length === 0) return [];
 
+    const cb = getServiceBreaker('pyth-hermes', { failureThreshold: 3, cooldownMs: 15_000, maxCooldownMs: 60_000, cooldownMultiplier: 2 });
+    if (!cb.allowRequest()) return []; // Circuit open — return empty, use cache
+
     const params = feedIds.map((id) => `ids[]=${id}`).join('&');
     const url = `https://hermes.pyth.network/v2/updates/price/latest?${params}&parsed=true`;
     const controller = new AbortController();
@@ -228,7 +232,11 @@ export class PriceService {
         });
       }
 
+      cb.recordSuccess();
       return results;
+    } catch (err) {
+      cb.recordFailure();
+      throw err;
     } finally {
       clearTimeout(timeout);
     }

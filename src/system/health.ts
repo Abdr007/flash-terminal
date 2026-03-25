@@ -65,6 +65,8 @@ export interface CauseBreakdown {
 
 export interface HealthSnapshot {
   state: HealthState;
+  /** Unified health score: 100 = perfect, 0 = critical failure */
+  healthScore: number;
   eventLoopLagMs: number;
   memoryRssMB: number;
   heapUsedMB: number;
@@ -185,34 +187,32 @@ class HealthMonitorImpl implements HealthMonitor {
   private history: HistorySample[] = [];
 
   constructor() {
-    // Event loop lag monitor
-    this.lagTimer = setInterval(() => {
-      const now = performance.now();
-      const actual = now - this.lastLagCheck;
-      const lag = Math.max(0, actual - LAG_POLL_MS);
-      this.lastLagCheck = now;
-
-      this.lagSamples.push(lag);
-      if (this.lagSamples.length > HealthMonitorImpl.MAX_LAG_SAMPLES) {
-        this.lagSamples.shift();
-      }
-      this.currentLagMs = this.percentile(this.lagSamples, 0.9);
-    }, LAG_POLL_MS);
+    // Event loop lag monitor — CRITICAL, never throttled
+    this.lagTimer = setInterval(() => this.measureLag(), LAG_POLL_MS);
     this.lagTimer.unref();
 
-    // Health evaluation
-    this.healthTimer = setInterval(() => {
-      this.evaluate();
-    }, HEALTH_TICK_MS);
+    // Health evaluation — CRITICAL, never throttled
+    this.healthTimer = setInterval(() => this.evaluate(), HEALTH_TICK_MS);
     this.healthTimer.unref();
 
-    // History sampling
-    this.historyTimer = setInterval(() => {
-      this.recordHistorySample();
-    }, HISTORY_SAMPLE_INTERVAL_MS);
+    // History sampling — throttled in IDLE via scheduler (deferred registration)
+    this.historyTimer = setInterval(() => this.recordHistorySample(), HISTORY_SAMPLE_INTERVAL_MS);
     this.historyTimer.unref();
 
     getLogger().info('HEALTH', 'System health monitor v3 started (root-cause, adaptive, trending)');
+  }
+
+  private measureLag(): void {
+    const now = performance.now();
+    const actual = now - this.lastLagCheck;
+    const lag = Math.max(0, actual - LAG_POLL_MS);
+    this.lastLagCheck = now;
+
+    this.lagSamples.push(lag);
+    if (this.lagSamples.length > HealthMonitorImpl.MAX_LAG_SAMPLES) {
+      this.lagSamples.shift();
+    }
+    this.currentLagMs = this.percentile(this.lagSamples, 0.9);
   }
 
   get state(): HealthState {
@@ -221,21 +221,46 @@ class HealthMonitorImpl implements HealthMonitor {
 
   snapshot(): HealthSnapshot {
     const mem = process.memoryUsage();
-    // Always compute fresh causes for accurate snapshot (don't rely on timer)
     const { primary, causes } = this.analyzeCauses();
+    const lagMs = Math.round(this.currentLagMs);
+    const rssMB = Math.round(mem.rss / (1024 * 1024));
+    const errorRate = this.getErrorRate();
+    const rpcLatencyMs = this.getAvgRpcLatency();
     return {
       state: this._state,
-      eventLoopLagMs: Math.round(this.currentLagMs),
-      memoryRssMB: Math.round(mem.rss / (1024 * 1024)),
+      healthScore: this.computeHealthScore(lagMs, mem.rss, errorRate, rpcLatencyMs),
+      eventLoopLagMs: lagMs,
+      memoryRssMB: rssMB,
       heapUsedMB: Math.round(mem.heapUsed / (1024 * 1024)),
-      errorRate: this.getErrorRate(),
-      rpcLatencyMs: this.getAvgRpcLatency(),
+      errorRate,
+      rpcLatencyMs,
       uptimeSeconds: Math.floor((Date.now() - this.startTime) / 1000),
       reasons: causes.map((c) => c.label),
       primaryCause: primary,
       causes: [...causes],
       stateAge: Math.floor((Date.now() - this.lastStateChange) / 1000),
     };
+  }
+
+  /**
+   * Compute a unified 0-100 health score.
+   * 100 = perfect, 80+ = healthy, 60-80 = degraded, <60 = critical
+   *
+   * Weighted components:
+   *   - Event loop lag:  30 points (most important for CLI responsiveness)
+   *   - Error rate:      25 points
+   *   - RPC latency:     25 points
+   *   - Memory:          20 points
+   */
+  private computeHealthScore(lagMs: number, rssBytes: number, errorRate: number, rpcLatencyMs: number): number {
+    // Each component scores 0-1 (1 = perfect)
+    const lagScore = lagMs <= 50 ? 1 : lagMs >= LAG_CRITICAL_MS ? 0 : 1 - (lagMs - 50) / (LAG_CRITICAL_MS - 50);
+    const errorScore = errorRate <= 0 ? 1 : errorRate >= ERROR_RATE_CRITICAL ? 0 : 1 - errorRate / ERROR_RATE_CRITICAL;
+    const rpcScore = rpcLatencyMs <= 200 ? 1 : rpcLatencyMs >= RPC_LATENCY_CRITICAL_MS ? 0 : 1 - (rpcLatencyMs - 200) / (RPC_LATENCY_CRITICAL_MS - 200);
+    const memScore = rssBytes <= 0.8e9 ? 1 : rssBytes >= MEM_CRITICAL_BYTES ? 0 : 1 - (rssBytes - 0.8e9) / (MEM_CRITICAL_BYTES - 0.8e9);
+
+    const weighted = lagScore * 30 + errorScore * 25 + rpcScore * 25 + memScore * 20;
+    return Math.max(0, Math.min(100, Math.round(weighted)));
   }
 
   recordError(): void {

@@ -38,6 +38,8 @@ import { shutdownTpuClient } from '../network/tpu-client.js';
 
 import { loadPlugins, shutdownPlugins } from '../plugins/plugin-loader.js';
 import { initHealth, shutdownHealth, getHealth } from '../system/health.js';
+import { initRuntimeState, getRuntimeState, shutdownRuntimeState } from '../core/runtime-state.js';
+import { initScheduler, shutdownScheduler } from '../core/scheduler.js';
 import { CommandThrottle } from '../system/backpressure.js';
 import { StatusBar } from './status-bar.js';
 import { runDoctor } from '../tools/doctor.js';
@@ -527,6 +529,7 @@ export class FlashTerminal {
         // Successful failover — exit degraded mode if active
         if (this.degradedMode) {
           this.degradedMode = false;
+          getRuntimeState()?.markRecovered();
           console.log(chalk.green('\n  RPC connectivity restored. Trading commands re-enabled.'));
         }
         console.log(chalk.cyan(`\n  ℹ RPC failover triggered → ${ep.label}`));
@@ -537,19 +540,30 @@ export class FlashTerminal {
     // Defer non-critical RPC-heavy tasks to avoid 429 rate limiting on startup.
     // Each task is spaced out to prevent simultaneous RPC bursts.
     if (!this.config.simulationMode) {
-      // Health monitor — start after 5s, with degraded mode detection
-      setTimeout(() => {
+      // Health monitor — start after 5s, with degraded mode detection via scheduler
+      setTimeout(async () => {
         this.rpcManager.startMonitoring();
-        // Periodic degraded mode sync (piggyback on monitor interval)
-        this.degradedCheckTimer = setInterval(() => {
-          const wasDown = this.degradedMode;
-          this.degradedMode = this.rpcManager.allEndpointsDown;
-          if (this.degradedMode && !wasDown) {
-            console.log(chalk.red('\n  All RPC endpoints unavailable. Terminal running in read-only mode.'));
-            console.log(chalk.dim('  Trading commands disabled until connectivity is restored.\n'));
-          }
-        }, 30_000);
-        this.degradedCheckTimer.unref();
+        const { getScheduler } = await import('../core/scheduler.js');
+        const { TaskPriority } = await import('../core/runtime-state.js');
+        const sched = getScheduler();
+        if (sched) {
+          sched.register({
+            name: 'degraded-mode-check',
+            fn: () => {
+              const wasDown = this.degradedMode;
+              this.degradedMode = this.rpcManager.allEndpointsDown;
+              if (this.degradedMode && !wasDown) {
+                getRuntimeState()?.markDegraded();
+                console.log(chalk.red('\n  All RPC endpoints unavailable. Terminal in read-only mode.'));
+                console.log(chalk.dim('  Trading commands disabled until connectivity is restored.\n'));
+              } else if (!this.degradedMode && wasDown) {
+                getRuntimeState()?.markRecovered();
+              }
+            },
+            baseIntervalMs: 30_000,
+            priority: TaskPriority.CRITICAL,
+          });
+        }
       }, 5_000).unref();
 
       // Metrics HTTP server — enable via METRICS_PORT env var
@@ -605,6 +619,17 @@ export class FlashTerminal {
 
     // System health monitor — event loop lag, memory, error rate
     initHealth();
+
+    // Runtime state machine + central scheduler
+    const runtimeState = initRuntimeState();
+    runtimeState.start();
+    const scheduler = initScheduler();
+    // Wire event loop lag from health monitor into scheduler for active backpressure
+    const healthMon = getHealth();
+    if (healthMon) {
+      scheduler.setLagProvider(() => healthMon.snapshot().eventLoopLagMs);
+    }
+    scheduler.start();
 
     // RPC connection warmup — pre-establish HTTP connections to backup endpoints (12s)
     setTimeout(() => {
@@ -1395,6 +1420,75 @@ export class FlashTerminal {
     this.applyWalletFlowState(state);
   }
 
+  // ─── System Metrics ──────────────────────────────────────────────
+
+  private async handleSystemMetrics(): Promise<void> {
+    const lines: string[] = [''];
+
+    // Health score
+    const health = getHealth();
+    if (health) {
+      const snap = health.snapshot();
+      const scoreColor = snap.healthScore >= 80 ? chalk.green : snap.healthScore >= 60 ? chalk.yellow : chalk.red;
+      lines.push(chalk.bold('  SYSTEM HEALTH'));
+      lines.push(`  Score:       ${scoreColor(String(snap.healthScore) + '/100')}`);
+      lines.push(`  State:       ${snap.state}`);
+      lines.push(`  Event Loop:  ${snap.eventLoopLagMs}ms`);
+      lines.push(`  Memory RSS:  ${snap.memoryRssMB}MB`);
+      lines.push(`  Error Rate:  ${snap.errorRate}/min`);
+      lines.push(`  RPC Latency: ${snap.rpcLatencyMs}ms`);
+      lines.push('');
+    }
+
+    // Runtime state
+    const runtime = getRuntimeState();
+    if (runtime) {
+      const rs = runtime.snapshot();
+      lines.push(chalk.bold('  RUNTIME STATE'));
+      lines.push(`  State:       ${rs.state}`);
+      lines.push(`  RPC Down:    ${rs.rpcDown}`);
+      lines.push(`  Idle:        ${rs.idleDurationMs > 0 ? Math.round(rs.idleDurationMs / 1000) + 's' : 'no'}`);
+      lines.push('');
+    }
+
+    // Scheduler
+    const { getScheduler: getSched } = await import('../core/scheduler.js');
+    const sched = getSched();
+    if (sched) {
+      const tasks = sched.status();
+      lines.push(chalk.bold('  SCHEDULER'));
+      lines.push(`  Tasks:       ${tasks.length}`);
+      lines.push(`  Dropped:     ${sched.totalDroppedTicks}`);
+      for (const t of tasks) {
+        const state = t.suspended ? chalk.red('SUSPENDED') : chalk.green('ACTIVE');
+        lines.push(`    ${chalk.dim(t.name.padEnd(25))} ${t.priority.padEnd(10)} ${state} ${chalk.dim(`${t.currentMs}ms`)}`);
+      }
+      lines.push('');
+    }
+
+    // Circuit breakers
+    const { getAllBreakers } = await import('../core/circuit-breaker-service.js');
+    const breakers = getAllBreakers();
+    if (breakers.length > 0) {
+      lines.push(chalk.bold('  CIRCUIT BREAKERS'));
+      for (const cb of breakers) {
+        const s = cb.snapshot();
+        const stateColor = s.state === 'CLOSED' ? chalk.green : s.state === 'OPEN' ? chalk.red : chalk.yellow;
+        lines.push(`    ${s.name.padEnd(20)} ${stateColor(s.state.padEnd(10))} failures: ${s.consecutiveFailures}/${s.totalFailures}`);
+      }
+      lines.push('');
+    }
+
+    // Retry budget
+    const { getRetryBudgetUsage } = await import('../utils/retry.js');
+    const budget = getRetryBudgetUsage();
+    lines.push(chalk.bold('  RETRY BUDGET'));
+    lines.push(`  Used:        ${budget.used}/${budget.max} ${budget.exhausted ? chalk.red('EXHAUSTED') : chalk.green('OK')}`);
+    lines.push('');
+
+    console.log(lines.join('\n'));
+  }
+
   // ─── Update ─────────────────────────────────────────────────────
 
   /** Check for updates and install from within the terminal */
@@ -1661,6 +1755,16 @@ export class FlashTerminal {
     } catch {
       // Best-effort cleanup
     }
+    try {
+      shutdownScheduler();
+    } catch {
+      // Best-effort cleanup
+    }
+    try {
+      shutdownRuntimeState();
+    } catch {
+      // Best-effort cleanup
+    }
     // TP/SL and limit orders are on-chain — no local engine cleanup needed.
     try {
       if (this.flashClient && 'stopBlockhashRefresh' in this.flashClient) {
@@ -1685,6 +1789,9 @@ export class FlashTerminal {
   // ─── Command Handler ──────────────────────────────────────────────
 
   private async handleInput(rawInput: string): Promise<void> {
+    // Signal user activity to runtime state machine
+    getRuntimeState()?.markActive();
+
     // ── Backpressure: throttle rapid-fire commands ──
     const throttle = this.commandThrottle.check();
     if (!throttle.allowed) {
@@ -1756,6 +1863,12 @@ export class FlashTerminal {
     // ─── Update Command ──────────────────────────────────────────
     if (lower === 'update' || lower === 'flash update') {
       await this.handleUpdate();
+      return;
+    }
+
+    // ─── System Metrics ──────────────────────────────────────────
+    if (lower === 'system metrics' || lower === 'sysmetrics') {
+      await this.handleSystemMetrics();
       return;
     }
 
@@ -2675,7 +2788,8 @@ export class FlashTerminal {
     }
 
     // Degraded mode gate — block trade commands when all RPCs are down
-    if (this.degradedMode && TRADE_ACTIONS.has(intent.action)) {
+    const runtimeReadOnly = getRuntimeState()?.isReadOnly ?? false;
+    if ((this.degradedMode || runtimeReadOnly) && TRADE_ACTIONS.has(intent.action)) {
       if (flags.jsonOutput) {
         console.log(jsonStringify(jsonError(intent.action, ErrorCode.DEGRADED_MODE, 'All RPC endpoints unavailable. Terminal running in read-only mode.', { blocked_action: intent.action })));
       } else {

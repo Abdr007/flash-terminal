@@ -11,6 +11,8 @@
  */
 
 import { getLogger } from '../utils/logger.js';
+import { getScheduler } from '../core/scheduler.js';
+import { TaskPriority } from '../core/runtime-state.js';
 
 const CACHE_SWEEP_INTERVAL_MS = 5 * 60_000; // 5 minutes
 const MEMORY_CHECK_INTERVAL_MS = 5 * 60_000; // 5 minutes
@@ -26,34 +28,27 @@ export interface MaintenanceHandle {
 export function startMaintenance(): MaintenanceHandle {
   const logger = getLogger();
   const timers: ReturnType<typeof setInterval>[] = [];
+  const scheduler = getScheduler();
 
-  // ── Cache Sweep (every 5 min) ──────────────────────────────────────────
-  const cacheSweepTimer = setInterval(() => {
+  // ── Cache Sweep (every 5 min) — LOW priority, suspended in IDLE ──────
+  const cacheSweepFn = (): void => {
     try {
-      // Sweep protocol fee cache
-      try {
-        sweepFeeCacheSync();
-      } catch {
-        /* non-critical */
-      }
-
-      // Sweep expired price history entries (>24h old)
-      try {
-        sweepPriceHistorySync();
-      } catch {
-        /* non-critical */
-      }
-
+      try { sweepFeeCacheSync(); } catch { /* non-critical */ }
+      try { sweepPriceHistorySync(); } catch { /* non-critical */ }
       logger.debug('MAINTENANCE', 'Cache sweep completed');
-    } catch {
-      // Maintenance must never crash
-    }
-  }, CACHE_SWEEP_INTERVAL_MS);
-  cacheSweepTimer.unref();
-  timers.push(cacheSweepTimer);
+    } catch { /* maintenance must never crash */ }
+  };
 
-  // ── Memory Monitoring (every 5 min) ────────────────────────────────────
-  const memoryTimer = setInterval(async () => {
+  if (scheduler) {
+    scheduler.register({ name: 'maint-cache-sweep', fn: cacheSweepFn, baseIntervalMs: CACHE_SWEEP_INTERVAL_MS, priority: TaskPriority.LOW });
+  } else {
+    const t = setInterval(cacheSweepFn, CACHE_SWEEP_INTERVAL_MS);
+    t.unref();
+    timers.push(t);
+  }
+
+  // ── Memory Monitoring (every 5 min) — NORMAL priority, throttled in IDLE ──
+  const memoryFn = async (): Promise<void> => {
     try {
       const mem = process.memoryUsage();
       const rssMB = Math.round(mem.rss / (1024 * 1024));
@@ -61,17 +56,14 @@ export function startMaintenance(): MaintenanceHandle {
 
       if (mem.rss > RSS_CRITICAL_THRESHOLD) {
         logger.warn('MEMORY', `RSS ${rssMB}MB exceeds critical threshold — attempting relief`);
-        // Active memory relief: clear non-critical caches
         try {
           const { getStateCache } = await import('../core/state-cache.js');
           const cache = getStateCache();
           if (cache) {
-            // State cache will re-populate on next refresh cycle (3s)
             (cache as unknown as { accountCache: Map<string, unknown> }).accountCache?.clear();
             logger.info('MEMORY', 'Cleared state-cache account buffers');
           }
         } catch { /* non-critical */ }
-        // Hint GC if available (Node started with --expose-gc)
         if (typeof global.gc === 'function') {
           global.gc();
           logger.info('MEMORY', 'Manual GC triggered');
@@ -81,16 +73,20 @@ export function startMaintenance(): MaintenanceHandle {
       } else {
         logger.debug('MEMORY', `RSS ${rssMB}MB, heap ${heapMB}MB`);
       }
-    } catch {
-      // Maintenance must never crash
-    }
-  }, MEMORY_CHECK_INTERVAL_MS);
-  memoryTimer.unref();
-  timers.push(memoryTimer);
+    } catch { /* maintenance must never crash */ }
+  };
 
-  // ── Oracle Freshness (every 10s) ──────────────────────────────────────
+  if (scheduler) {
+    scheduler.register({ name: 'maint-memory-check', fn: memoryFn, baseIntervalMs: MEMORY_CHECK_INTERVAL_MS, priority: TaskPriority.NORMAL });
+  } else {
+    const t = setInterval(memoryFn, MEMORY_CHECK_INTERVAL_MS);
+    t.unref();
+    timers.push(t);
+  }
+
+  // ── Oracle Freshness (every 10s) — NORMAL priority, throttled in IDLE ──
   let lastOracleOk = true;
-  const oracleTimer = setInterval(async () => {
+  const oracleFn = async (): Promise<void> => {
     try {
       const { PriceService } = await import('../data/prices.js');
       const svc = new PriceService();
@@ -109,12 +105,16 @@ export function startMaintenance(): MaintenanceHandle {
           lastOracleOk = true;
         }
       }
-    } catch {
-      // Oracle check is best-effort
-    }
-  }, ORACLE_CHECK_INTERVAL_MS);
-  oracleTimer.unref();
-  timers.push(oracleTimer);
+    } catch { /* Oracle check is best-effort */ }
+  };
+
+  if (scheduler) {
+    scheduler.register({ name: 'maint-oracle-freshness', fn: oracleFn, baseIntervalMs: ORACLE_CHECK_INTERVAL_MS, priority: TaskPriority.NORMAL });
+  } else {
+    const t = setInterval(oracleFn, ORACLE_CHECK_INTERVAL_MS);
+    t.unref();
+    timers.push(t);
+  }
 
   logger.info('MAINTENANCE', 'Background maintenance started (cache sweep: 5m, memory: 5m, oracle: 10s)');
 
@@ -124,6 +124,12 @@ export function startMaintenance(): MaintenanceHandle {
         clearInterval(t);
       }
       timers.length = 0;
+      // Unregister from scheduler if registered
+      if (scheduler) {
+        scheduler.unregister('maint-cache-sweep');
+        scheduler.unregister('maint-memory-check');
+        scheduler.unregister('maint-oracle-freshness');
+      }
       logger.info('MAINTENANCE', 'Background maintenance stopped');
     },
   };

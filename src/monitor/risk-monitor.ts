@@ -3,6 +3,8 @@ import { IFlashClient, Position, TradeSide } from '../types/index.js';
 import { formatUsd, formatPrice, colorSide } from '../utils/format.js';
 import { getLogger } from '../utils/logger.js';
 import { getErrorMessage } from '../utils/retry.js';
+import { getScheduler } from '../core/scheduler.js';
+import { TaskPriority } from '../core/runtime-state.js';
 import { safeNumber } from '../utils/safe-math.js';
 import { computeSimulationLiquidationPrice } from '../utils/protocol-liq.js';
 
@@ -118,12 +120,23 @@ export class RiskMonitor {
     this.lastPositionFetch = 0;
     this.tickCount = 0;
     this.lastHeartbeat = 0;
-    this.timer = setInterval(() => {
+    const tickFn = (): void => {
       this.tick().catch((err) => {
         getLogger().warn('RISK_MONITOR', `Tick error: ${getErrorMessage(err)}`);
       });
-    }, PRICE_INTERVAL_MS);
-    this.timer.unref();
+    };
+    const scheduler = getScheduler();
+    if (scheduler) {
+      scheduler.register({
+        name: 'risk-monitor-tick',
+        fn: tickFn,
+        baseIntervalMs: PRICE_INTERVAL_MS,
+        priority: TaskPriority.NORMAL,
+      });
+    } else {
+      this.timer = setInterval(tickFn, PRICE_INTERVAL_MS);
+      this.timer.unref();
+    }
     // Run first tick immediately
     this.tick().catch((err) => {
       getLogger().warn('RISK_MONITOR', `Initial tick error: ${getErrorMessage(err)}`);
@@ -136,6 +149,8 @@ export class RiskMonitor {
       return chalk.yellow('  Risk monitor is not running.');
     }
     this._active = false;
+    const scheduler = getScheduler();
+    if (scheduler) scheduler.unregister('risk-monitor-tick');
     if (this.timer) {
       clearInterval(this.timer);
       this.timer = null;

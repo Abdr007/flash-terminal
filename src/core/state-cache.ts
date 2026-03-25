@@ -16,6 +16,8 @@ import { Connection, PublicKey, type AccountInfo } from '@solana/web3.js';
 import { PoolConfig } from 'flash-sdk';
 import { getLogger } from '../utils/logger.js';
 import { POOL_NAMES, FLASH_PROGRAM_ID } from '../config/index.js';
+import { getScheduler } from './scheduler.js';
+import { TaskPriority } from './runtime-state.js';
 
 // ─── Configuration ───────────────────────────────────────────────────────────
 
@@ -113,11 +115,21 @@ export class StateCache {
     // Immediate first refresh
     this.refresh().catch(() => {});
 
-    // Background refresh
-    this.refreshTimer = setInterval(() => {
-      this.refresh().catch(() => {});
-    }, REFRESH_INTERVAL_MS);
-    this.refreshTimer.unref();
+    // Background refresh — NORMAL priority, throttled 5x in IDLE
+    const scheduler = getScheduler();
+    if (scheduler) {
+      scheduler.register({
+        name: 'state-cache-refresh',
+        fn: () => { this.refresh().catch(() => {}); },
+        baseIntervalMs: REFRESH_INTERVAL_MS,
+        priority: TaskPriority.NORMAL,
+      });
+    } else {
+      this.refreshTimer = setInterval(() => {
+        this.refresh().catch(() => {});
+      }, REFRESH_INTERVAL_MS);
+      this.refreshTimer.unref();
+    }
 
     getLogger().info('STATE-CACHE', `Initialized — tracking ${this.poolCache.size} pools`);
   }
@@ -415,6 +427,8 @@ export class StateCache {
   // ─── Shutdown ──────────────────────────────────────────────────────────
 
   shutdown(): void {
+    const scheduler = getScheduler();
+    if (scheduler) scheduler.unregister('state-cache-refresh');
     if (this.refreshTimer) {
       clearInterval(this.refreshTimer);
       this.refreshTimer = null;
