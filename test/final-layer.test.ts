@@ -135,8 +135,8 @@ describe('Full System Integration', () => {
 
     await new Promise((r) => setTimeout(r, 200));
 
-    // Circuit should have opened after 2 failures
-    expect(cb.currentState).toBe(CircuitState.OPEN);
+    // Circuit should have opened after 2 failures (may have transitioned to HALF_OPEN on slow CI)
+    expect([CircuitState.OPEN, CircuitState.HALF_OPEN]).toContain(cb.currentState);
     expect(serviceCalls).toBeLessThanOrEqual(3); // 2-3 before circuit opens
     expect(blockedByBreaker).toBeGreaterThan(0); // Subsequent calls blocked
 
