@@ -24,7 +24,6 @@ import { WalletStore } from '../wallet/wallet-store.js';
 import { shortAddress } from '../utils/format.js';
 import { getErrorMessage } from '../utils/retry.js';
 import { initLogger, getLogger, Logger, generateRequestId } from '../utils/logger.js';
-import { setAiApiKey, getInspector, getRegimeDetector } from '../agent/agent-tools.js';
 import { formatUsd } from '../utils/format.js';
 import { MarketRegime } from '../regime/regime-types.js';
 import { initSigningGuard } from '../security/signing-guard.js';
@@ -498,7 +497,7 @@ export class FlashTerminal {
       sessionTrades,
     };
 
-    setAiApiKey(this.config.anthropicApiKey, this.config.groqApiKey);
+
     this.engine = new ToolEngine(this.context);
 
     // Initialize system diagnostics
@@ -860,7 +859,7 @@ export class FlashTerminal {
       sessionTrades: [],
     };
 
-    setAiApiKey(this.config.anthropicApiKey, this.config.groqApiKey);
+
     this.engine = new ToolEngine(this.context);
 
     // Inject --format json if jsonMode is requested but not already in command
@@ -1239,7 +1238,8 @@ export class FlashTerminal {
   }
 
   private async doFetchIntelligence(): Promise<IntelligenceData> {
-    const inspector = getInspector(this.context);
+    const { SolanaInspector } = await import('../agent/solana-inspector.js');
+    const inspector = new SolanaInspector(this.context.flashClient, this.context.dataClient);
     const snapshot = await inspector.getFullSnapshot();
 
     const data: IntelligenceData = {
@@ -1252,7 +1252,8 @@ export class FlashTerminal {
     // Regime detection
     if (snapshot.markets.length > 0) {
       try {
-        const rd = getRegimeDetector();
+        const { RegimeDetector } = await import('../regime/regime-detector.js');
+        const rd = new RegimeDetector();
         const regimes = rd.detectAll(snapshot.markets, snapshot.volume, snapshot.openInterest);
         if (regimes.size > 0) {
           const counts = new Map<string, number>();
@@ -1778,9 +1779,6 @@ export class FlashTerminal {
       uptime: Math.floor(process.uptime()),
     });
 
-    try {
-      if (this.liveAgent && typeof this.liveAgent.stop === 'function') this.liveAgent.stop();
-    } catch { /* best-effort */ }
     console.log(chalk.dim('\n  Goodbye.\n'));
     this.rl.close();
     process.exit(0);
@@ -1806,59 +1804,6 @@ export class FlashTerminal {
 
     const lower = input.toLowerCase();
 
-    // ─── Agent Commands (in-process) ───────────────────────────────
-    if (lower === 'agent start' || lower === 'agent start --dry-run' || lower === 'agent start dry-run' || lower === 'agent start dryrun') {
-      await this.handleAgentStart(true);
-      return;
-    }
-    if (lower === 'agent start --live' || lower === 'agent start live' || lower === 'agent live') {
-      await this.handleAgentStart(false);
-      return;
-    }
-    if (lower === 'agent stop') {
-      this.handleAgentStop();
-      return;
-    }
-    if (lower === 'agent status') {
-      this.handleAgentStatus();
-      return;
-    }
-    if (lower === 'agent attach') {
-      this.handleAgentAttach();
-      return;
-    }
-    if (lower === 'agent logs' || lower === 'agent tail') {
-      this.handleAgentLogs();
-      return;
-    }
-    if (lower === 'agent report' || lower === 'agent evaluate') {
-      this.handleAgentReport();
-      return;
-    }
-    if (lower === 'agent dashboard' || lower === 'agent perf' || lower === 'agent performance') {
-      this.handleAgentDashboard();
-      return;
-    }
-    if (lower === 'agent audit' || lower === 'agent log') {
-      this.handleAgentAudit();
-      return;
-    }
-    if (lower === 'agent edge' || lower === 'agent edge report') {
-      await this.handleAgentEdge();
-      return;
-    }
-    if (lower === 'agent validate' || lower === 'agent production') {
-      this.handleAgentValidation();
-      return;
-    }
-    if (lower === 'agent governor' || lower === 'agent gov') {
-      this.handleAgentGovernor();
-      return;
-    }
-    if (lower === 'agent refiner' || lower === 'agent refinements') {
-      this.handleAgentRefiner();
-      return;
-    }
 
     // ─── Update Command ──────────────────────────────────────────
     if (lower === 'update' || lower === 'flash update') {
@@ -3138,416 +3083,7 @@ export class FlashTerminal {
     return sourceVerifyView(this.getProtocolViewDeps(), market);
   }
 
-  // ─── Agent Handlers ─────────────────────────────────────────────
-
-  private liveAgent: import('../agent-builder/live-agent.js').LiveTradingAgent | null = null;
-
-  private async handleAgentStart(dryRun: boolean): Promise<void> {
-    // Check in-process agent first
-    if (this.liveAgent?.isRunning) {
-      console.log(chalk.yellow('  Agent is already running in this session. Use "agent stop" first.'));
-      return;
-    }
-    // Check external sessions — only block if another agent is ACTUALLY running
-    // (has a recent heartbeat). Just being inside a tmux session doesn't mean
-    // the agent is started — we might BE that session about to start.
-    const { getAgentStatus, formatAgentStatus } = await import('../agent/agent-runtime.js');
-    const runtime = getAgentStatus(false);
-    if (runtime.status !== 'STOPPED' && runtime.lastHeartbeatMs && !runtime.heartbeatStale) {
-      console.log(chalk.yellow(`  ${formatAgentStatus(runtime)}`));
-      console.log(chalk.dim('  Use "agent attach" to reconnect or "agent stop" to stop it first.'));
-      return;
-    }
-
-    const { LiveTradingAgent } = await import('../agent-builder/live-agent.js');
-    const { TrendContinuation, BreakoutStrategy, MeanReversionStrategy, OiSkewStrategy } = await import('../agent-builder/strategy.js');
-    const { FundingHarvester } = await import('../agent-builder/funding-harvester.js');
-    const { getAllMarkets } = await import('../config/index.js');
-
-    this.liveAgent = new LiveTradingAgent(
-      this.context,
-      [new FundingHarvester(), new OiSkewStrategy(), new TrendContinuation(), new BreakoutStrategy(), new MeanReversionStrategy()],
-      {
-        name: 'flash-agent',
-        markets: getAllMarkets(),
-        pollIntervalMs: 10_000,
-        maxIterations: 0, // Unlimited — runs until manually stopped
-        dryRun,
-        logLevel: 'verbose',
-        risk: {
-          maxPositions: 3,
-          maxLeverage: 3,
-          positionSizePct: 0.05,   // 5% of capital — meaningful PnL vs fees
-          maxDailyLossPct: 0.08,
-          cooldownAfterLossMs: 30_000,
-          minConfidence: 0.40,
-          allowedMarkets: [],
-        },
-      },
-      {
-        onDecision: (decision) => {
-          if (decision.action === 'open') {
-            console.log('');
-            console.log(chalk.cyan(`  SIGNAL: ${decision.side?.toUpperCase()} ${decision.market} | ${decision.strategy} | conf=${(decision.confidence * 100).toFixed(0)}% | risk=${decision.riskLevel}`));
-            console.log(chalk.dim(`  ${decision.reasoning}`));
-            if (decision.tp) console.log(chalk.dim(`  TP: $${decision.tp} | SL: $${decision.sl}`));
-          }
-        },
-        onTrade: (entry) => {
-          const icon = entry.outcome === 'win' ? chalk.green('W') : entry.outcome === 'loss' ? chalk.red('L') : chalk.dim('*');
-          console.log(`  [${icon}] ${entry.action} ${entry.market} ${entry.side ?? ''} | ${entry.strategy}`);
-        },
-        onSafetyStop: (reason) => {
-          console.log('');
-          console.log(chalk.red(`  SAFETY STOP: ${reason}`));
-          console.log('');
-        },
-      },
-    );
-
-    console.log('');
-    console.log(chalk.cyan(`  Agent starting (${dryRun ? 'DRY RUN' : 'LIVE'})...`));
-    console.log(chalk.dim('  Type "agent stop" to stop, "agent status" for state'));
-    console.log('');
-
-    // Run in background — don't block the REPL
-    try {
-      this.liveAgent.start().then(() => {
-        console.log('');
-        console.log(chalk.dim('  Agent finished.'));
-        this.handleAgentReport();
-        console.log('');
-        this.rl.prompt();
-      }).catch((err: Error) => {
-        console.log(chalk.red(`  Agent error: ${err.message}`));
-        this.rl.prompt();
-      });
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      console.log(chalk.red(`  Agent failed to start: ${msg}`));
-      this.rl.prompt();
-    }
-  }
-
-  private async handleAgentStop(): Promise<void> {
-    // In-process agent takes priority
-    if (this.liveAgent?.isRunning) {
-      this.liveAgent.stop();
-      console.log(chalk.yellow('  Agent stop requested.'));
-      return;
-    }
-    // Check external sessions
-    const { getAgentStatus, getActiveSession } = await import('../agent/agent-runtime.js');
-    const { execSync } = await import('child_process');
-    const runtime = getAgentStatus(false);
-    if (runtime.status === 'STOPPED') {
-      console.log(chalk.dim('  No agent running.'));
-      return;
-    }
-    // Stop external tmux session
-    const session = getActiveSession();
-    if (session) {
-      try {
-        execSync(`tmux send-keys -t ${session} "agent stop" Enter`, { stdio: 'pipe' });
-        console.log(chalk.yellow(`  Stop command sent to tmux session: ${session}`));
-        console.log(chalk.dim('  Agent will gracefully shut down and save state.'));
-      } catch {
-        console.log(chalk.red(`  Failed to send stop command to session: ${session}`));
-      }
-    } else if (runtime.pid) {
-      console.log(chalk.yellow(`  Agent process detected (PID ${runtime.pid}) but no tmux session.`));
-      console.log(chalk.dim('  Use "kill ' + runtime.pid + '" to stop manually.'));
-    }
-  }
-
-  private async handleAgentStatus(): Promise<void> {
-    // In-process agent: show full live state
-    if (this.liveAgent) {
-      const state = this.liveAgent.getState();
-      const stats = this.liveAgent.getJournal().getStats();
-      console.log('');
-      console.log(`  ${theme.accentBold('AGENT STATUS')}`);
-      console.log(`  ${theme.separator(40)}`);
-      console.log(theme.pair('Status', String(state.status)));
-      console.log(theme.pair('Mode', 'in-process (this session)'));
-      console.log(theme.pair('Iteration', String(state.iteration)));
-      console.log(theme.pair('Capital', `$${state.currentCapital.toFixed(2)}`));
-      console.log(theme.pair('Daily PnL', `$${state.dailyPnl.toFixed(2)}`));
-      console.log(theme.pair('Positions', String(state.positions.length)));
-      console.log(theme.pair('Trades', `${stats.totalTrades} (${stats.wins}W/${stats.losses}L)`));
-      console.log(theme.pair('Win Rate', `${(stats.winRate * 100).toFixed(1)}%`));
-      if (state.inCooldown) console.log(theme.pair('Cooldown', `${Math.ceil((state.cooldownUntil - Date.now()) / 1000)}s remaining`));
-      if (state.safetyStopReason) console.log(chalk.red(`  Safety Stop: ${state.safetyStopReason}`));
-      console.log('');
-      return;
-    }
-
-    // External detection: tmux, process, heartbeat
-    const { getAgentStatus, formatAgentStatus, validateRuntimeIntegrity, writeRuntimeSnapshot } = await import('../agent/agent-runtime.js');
-
-    // Run integrity check first (self-heals stale PID, orphans)
-    const integrity = validateRuntimeIntegrity();
-
-    const runtime = getAgentStatus(false);
-
-    // Write snapshot for external monitoring
-    writeRuntimeSnapshot(runtime);
-
-    console.log('');
-    console.log(`  ${theme.accentBold('AGENT STATUS')}`);
-    console.log(`  ${theme.separator(40)}`);
-
-    // Status line with color
-    const statusColor = runtime.status === 'RUNNING' ? chalk.green
-      : runtime.status === 'DEGRADED' ? chalk.yellow
-      : chalk.dim;
-    console.log(theme.pair('Status', statusColor(formatAgentStatus(runtime))));
-
-    if (runtime.session) {
-      console.log(theme.pair('Session', runtime.session));
-    }
-    if (runtime.pid) {
-      console.log(theme.pair('PID', String(runtime.pid)));
-    }
-    if (runtime.lastHeartbeatMs) {
-      const ago = Math.round((Date.now() - runtime.lastHeartbeatMs) / 1000);
-      const heartbeatText = `${ago}s ago${runtime.heartbeatStale ? chalk.yellow(' (STALE)') : ''}`;
-      console.log(theme.pair('Heartbeat', heartbeatText));
-    }
-    if (runtime.stateFileBytes) {
-      console.log(theme.pair('State File', `${(runtime.stateFileBytes / 1024).toFixed(1)} KB`));
-    }
-    if (runtime.lastStateUpdateMs) {
-      const stateAgo = Math.round((Date.now() - runtime.lastStateUpdateMs) / 1000);
-      console.log(theme.pair('State Updated', `${stateAgo}s ago`));
-    }
-
-    // Integrity report
-    if (integrity.actions.length > 0) {
-      console.log('');
-      for (const action of integrity.actions) {
-        console.log(chalk.cyan(`  [auto-heal] ${action}`));
-      }
-    }
-    if (integrity.warnings.length > 0) {
-      for (const warn of integrity.warnings) {
-        console.log(chalk.yellow(`  [warning] ${warn}`));
-      }
-    }
-
-    // Helpful hints
-    if (runtime.status === 'STOPPED') {
-      console.log('');
-      console.log(chalk.dim('  Start: "agent start" or "agent start --live"'));
-    } else if (runtime.mode === 'tmux') {
-      console.log('');
-      console.log(chalk.dim(`  Attach: "agent attach" | Logs: "agent logs" | Stop: "agent stop"`));
-    }
-    console.log('');
-  }
-
-  private async handleAgentAttach(): Promise<void> {
-    const { getActiveSession } = await import('../agent/agent-runtime.js');
-    const session = getActiveSession();
-    if (!session) {
-      console.log(chalk.dim('  No agent tmux session running.'));
-      return;
-    }
-    console.log(chalk.cyan(`  Attaching to tmux session: ${session}`));
-    console.log(chalk.dim('  Press Ctrl+B then D to detach back to this terminal.'));
-    const { execSync } = await import('child_process');
-    try {
-      execSync(`tmux attach -t ${session}`, { stdio: 'inherit' });
-    } catch {
-      console.log(chalk.dim('  Detached from agent session.'));
-    }
-  }
-
-  private async handleAgentLogs(): Promise<void> {
-    const { getAgentLogs, getActiveSession } = await import('../agent/agent-runtime.js');
-    const session = getActiveSession();
-    if (!session) {
-      console.log(chalk.dim('  No agent tmux session running.'));
-      return;
-    }
-    const logs = getAgentLogs(100);
-    if (!logs || logs.trim().length === 0) {
-      console.log(chalk.dim('  No recent logs captured.'));
-      return;
-    }
-    console.log('');
-    console.log(`  ${theme.accentBold(`AGENT LOGS (${session})`)}`);
-    console.log(`  ${theme.separator(50)}`);
-    // Show last 40 non-empty lines
-    const lines = logs.split('\n').filter((l: string) => l.trim().length > 0).slice(-40);
-    for (const line of lines) {
-      console.log(`  ${chalk.dim(line)}`);
-    }
-    console.log('');
-  }
-
-  private async handleAgentReport(): Promise<void> {
-    if (!this.liveAgent) {
-      console.log(chalk.dim('  No agent session to evaluate.'));
-      return;
-    }
-    try {
-      const { SessionEvaluator } = await import('../agent-builder/session-evaluator.js');
-      const evaluator = new SessionEvaluator();
-      const report = evaluator.evaluate(this.liveAgent.getJournal(), this.liveAgent.getState());
-      console.log('');
-      console.log('  ' + evaluator.formatReport(report).split('\n').join('\n  '));
-      console.log('');
-    } catch {
-      // Fallback: just print journal stats
-      console.log('');
-      console.log('  ' + this.liveAgent.getJournal().formatStats().split('\n').join('\n  '));
-      console.log('');
-    }
-  }
-
-  private handleAgentDashboard(): void {
-    if (!this.liveAgent) {
-      console.log(chalk.dim('  No agent session.'));
-      return;
-    }
-    const db = this.liveAgent.getDashboard();
-    const report = db.getReport();
-    console.log('');
-    console.log('  ' + db.formatReport(report).split('\n').join('\n  '));
-    console.log('');
-  }
-
-  private handleAgentAudit(): void {
-    if (!this.liveAgent) {
-      console.log(chalk.dim('  No agent session.'));
-      return;
-    }
-    const entries = this.liveAgent.getDashboard().getAuditLog(15);
-    if (entries.length === 0) {
-      console.log(chalk.dim('  No audit entries yet.'));
-      return;
-    }
-    console.log('');
-    console.log(`  ${theme.accentBold('AUDIT LOG')} (last ${entries.length})`);
-    console.log(`  ${theme.separator(60)}`);
-    for (const e of entries) {
-      const icon = e.outcome === 'executed' ? chalk.green('EX') : e.outcome === 'skipped' ? chalk.dim('SK') : chalk.yellow('BL');
-      const pnlStr = e.pnl !== undefined ? ` PnL=$${e.pnl.toFixed(2)}` : '';
-      console.log(`  [${icon}] T${e.tick} ${e.market} ${e.action} score=${e.score}${pnlStr}`);
-      console.log(chalk.dim(`       ${e.reasoning.slice(0, 80)}`));
-    }
-    console.log('');
-  }
-
-  private handleAgentRefiner(): void {
-    if (!this.liveAgent) {
-      console.log(chalk.dim('  No agent session.'));
-      return;
-    }
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- LiveTradingAgent internal field access for diagnostics
-    const refiner = (this.liveAgent as any).edgeRefiner;
-    if (!refiner) {
-      console.log(chalk.dim('  Edge refiner not available.'));
-      return;
-    }
-    const summary = refiner.getSummary();
-    const log = refiner.getLog();
-
-    console.log('');
-    console.log(`  ${theme.accentBold('Edge Refiner V2')}`);
-    console.log(`  ${theme.separator(45)}`);
-    console.log(`  Refinement cycles: ${summary.refinementCount}`);
-    console.log(`  Size multiplier:   ${(summary.sizeMultiplier * 100).toFixed(0)}%`);
-    console.log(`  Status:            ${summary.frozen ? chalk.red('FROZEN') : chalk.green('ACTIVE')}`);
-    if (summary.consecutiveNegative > 0) {
-      console.log(`  Negative cycles:   ${summary.consecutiveNegative}/${2}`);
-    }
-    if (summary.scaledRegimes.length > 0) {
-      console.log(`  Scaled regimes:    ${summary.scaledRegimes.map((r: { regime: string; multiplier: number }) => `${r.regime}→${(r.multiplier * 100).toFixed(0)}%`).join(', ')}`);
-    }
-    if (summary.disabledStrategies.length > 0) {
-      console.log(`  Disabled strats:   ${summary.disabledStrategies.join(', ')}`);
-    }
-    if (log.length > 0) {
-      console.log('');
-      console.log(`  ${theme.accentBold('Recent Actions')}`);
-      for (const entry of log.slice(-10)) {
-        const icon = entry.action.type === 'no_action' ? chalk.dim('—') :
-          entry.action.type === 'revert' ? chalk.magenta('↩') :
-          entry.action.type === 'freeze' ? chalk.red('⊘') :
-          entry.action.type === 'tune_exits' ? chalk.cyan('↕') :
-          entry.action.type === 'advisory' ? chalk.yellow('!') : chalk.red('*');
-        console.log(`  ${icon} [${entry.tradeCount}t] ${entry.action.type}: ${entry.action.reason.slice(0, 70)}`);
-      }
-    }
-    console.log('');
-  }
-
-  private async handleAgentEdge(): Promise<void> {
-    if (!this.liveAgent) {
-      console.log(chalk.dim('  No agent session. Start with: agent start'));
-      return;
-    }
-    const { EdgeAnalyzer } = await import('../agent-builder/edge-analyzer.js');
-    const analyzer = new EdgeAnalyzer();
-    const journal = this.liveAgent.getJournal();
-    const stats = journal.getStats();
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- LiveTradingAgent internal field access for diagnostics
-    const policyMetrics = (this.liveAgent as any).policyLearner?.getMetrics?.();
-
-    const report = analyzer.analyze(journal.getEntries(), stats, policyMetrics);
-    console.log('');
-    console.log('  ' + analyzer.formatReport(report).split('\n').join('\n  '));
-    console.log('');
-  }
-
-  private handleAgentValidation(): void {
-    if (!this.liveAgent) {
-      console.log(chalk.dim('  No agent session. Start with: agent start'));
-      return;
-    }
-    const validator = this.liveAgent.getValidator();
-    if (!validator.isActive()) {
-      this.liveAgent.startValidation();
-      console.log('');
-      console.log(chalk.cyan('  Production validation mode activated.'));
-      console.log(chalk.dim('  Architecture frozen. Pure measurement for 200 trades.'));
-      console.log(chalk.dim('  Use "agent report" to check progress.'));
-      console.log('');
-    } else {
-      // Show current report
-      console.log('');
-      console.log('  ' + this.liveAgent.getValidationReport().split('\n').join('\n  '));
-      console.log('');
-    }
-  }
-
-  private handleAgentGovernor(): void {
-    if (!this.liveAgent) {
-      console.log(chalk.dim('  No agent session. Start with: agent start'));
-      return;
-    }
-    const gov = this.liveAgent.getGovernor();
-    const transparency = gov.getTransparencyReport();
-    console.log('');
-    console.log(chalk.bold('  System Governor Status'));
-    console.log(chalk.dim('  ─────────────────────────────────────────'));
-    console.log(`  Execution Lane:    ${transparency.executionLane === 'fast' ? chalk.yellow('FAST') : chalk.green('SAFE')}`);
-    console.log(`  Frozen:            ${transparency.frozen ? chalk.red('YES') : chalk.green('NO')}${transparency.freezeReason ? ` (${transparency.freezeReason})` : ''}`);
-    console.log(`  Clamp Frequency:   ${(transparency.clampAnalytics.clampFrequency * 100).toFixed(0)}%${transparency.clampAnalytics.dominantFactor !== 'none' ? ` (dominant: ${transparency.clampAnalytics.dominantFactor})` : ''}`);
-    console.log(`  Utilization:       ${(transparency.utilizationState.deployedPct * 100).toFixed(0)}%${transparency.utilizationState.relaxationReason ? ` — ${transparency.utilizationState.relaxationReason}` : ''}`);
-    console.log(`  Shadow vs Live:    ${transparency.shadowDelta.shadowBetter ? chalk.yellow('Shadow better') : chalk.green('Live OK')}`);
-    console.log(`  Exec Stability:    ${transparency.metaStabilityComponents.executionStability}/20`);
-    if (transparency.activeRestrictions.length > 0) {
-      console.log('');
-      console.log(chalk.bold('  Active Restrictions'));
-      for (const r of transparency.activeRestrictions) {
-        console.log(`  ${chalk.yellow('•')} ${r}`);
-      }
-    }
-    console.log('');
-  }
+  // Agent removed — see flash-agent repo
 
   private async handlePositionDebug(market: string): Promise<void> {
     return positionDebugView(this.getProtocolViewDeps(), market);

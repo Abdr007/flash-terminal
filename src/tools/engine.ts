@@ -1,7 +1,7 @@
 import { ActionType, ParsedIntent, ToolContext, ToolDefinition, ToolResult } from '../types/index.js';
 import { ToolRegistry } from './registry.js';
 import { allFlashTools } from './flash-tools.js';
-import { allAgentTools } from '../agent/agent-tools.js';
+
 import { allSwapTools } from './swap-tools.js';
 import { allEarnTools } from './earn-tools.js';
 import { allEngineTools } from './engine-tools.js';
@@ -26,9 +26,7 @@ export class ToolEngine {
     for (const tool of allFlashTools) {
       this.registry.register(tool);
     }
-    for (const tool of allAgentTools) {
-      this.registry.register(tool);
-    }
+
     for (const tool of allSwapTools) {
       this.registry.register(tool);
     }
@@ -208,24 +206,18 @@ export class ToolEngine {
       case ActionType.Help:
         return null;
 
-      // AI Agent
+      // Analysis tools (formerly in agent-tools, now handled by protocol-tools)
       case ActionType.Analyze:
-        return {
-          toolName: 'ai_analyze',
-          params: { market: intent.market },
-        };
+        return { toolName: 'inspect_market', params: { market: intent.market } };
 
       case ActionType.RiskReport:
-        return { toolName: 'ai_risk_report', params: {} };
+        return { toolName: 'portfolio_exposure', params: {} };
 
       case ActionType.Dashboard:
-        return { toolName: 'ai_dashboard', params: {} };
+        return { toolName: 'system_status', params: {} };
 
       case ActionType.WhaleActivity:
-        return {
-          toolName: 'ai_whale_activity',
-          params: { market: intent.market },
-        };
+        return { toolName: 'protocol_health', params: {} };
 
       // Portfolio Intelligence
       case ActionType.PortfolioState:

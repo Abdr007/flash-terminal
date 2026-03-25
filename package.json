@@ -1,6 +1,6 @@
 {
   "name": "flash-terminal",
-  "version": "1.1.7",
+  "version": "1.2.0",
   "description": "Deterministic on-chain trading infrastructure for Solana perpetual futures",
   "homepage": "https://flash-terminal-docs.vercel.app",
   "repository": {
@@ -18,9 +18,7 @@
   "exports": {
     ".": "./dist/index.js",
     "./sdk": "./dist/sdk/index.js",
-    "./sdk/*": "./dist/sdk/*.js",
-    "./agent-builder": "./dist/agent-builder/index.js",
-    "./agent-builder/*": "./dist/agent-builder/*.js"
+    "./sdk/*": "./dist/sdk/*.js"
   },
   "scripts": {
     "build": "sh scripts/generate-build-info.sh && tsc && chmod +x dist/index.js",
