@@ -1448,10 +1448,13 @@ export class LiveTradingAgent {
     // Phase 1: HARD FLOOR BY MODE — non-negotiable minimums
     // V_ADAPTIVE_CONFIDENCE: Mode floors scale with experience
     const learningPhase = stats.totalTrades < 30;
-    const modeFloor = metaDecision.mode === 'AGGRESSIVE' ? (learningPhase ? 42 : 50)
-      : metaDecision.mode === 'CONSERVATIVE' ? (learningPhase ? 48 : 60)
-      : (learningPhase ? 45 : 55); // NORMAL
-    const effectiveBaseThreshold = inColdStart ? Math.min(42, modeFloor) : Math.max(modeFloor, metaDecision.scoreThreshold);
+    // PROFIT_EDGE: Raised floors — only high-conviction trades pass.
+    // Previous: 42/48/45 learning, 50/60/55 mature → let score-38 garbage through
+    // Now: 50/55/52 learning, 58/65/60 mature → only real signals execute
+    const modeFloor = metaDecision.mode === 'AGGRESSIVE' ? (learningPhase ? 50 : 58)
+      : metaDecision.mode === 'CONSERVATIVE' ? (learningPhase ? 55 : 65)
+      : (learningPhase ? 52 : 60); // NORMAL
+    const effectiveBaseThreshold = inColdStart ? Math.min(50, modeFloor) : Math.max(modeFloor, metaDecision.scoreThreshold);
     let effectiveScoreThreshold = effectiveBaseThreshold;
 
     // Adaptive threshold (if scores cluster near threshold with few trades)
@@ -1479,39 +1482,46 @@ export class LiveTradingAgent {
     // During learning phase, decision threshold is relaxed (0.75x) to allow data collection
     const decisionThreshold = learningPhase ? effectiveScoreThreshold * 0.75 : effectiveScoreThreshold * 0.85;
 
-    // V_CONTROLLED_ACCELERATION: Fast-learning mode (until 50 trades, then revert)
-    const fastLearning = stats.totalTrades < 50;
+    // PROFIT_EDGE: Strict trade gating — no more weak-signal loopholes.
+    // Exploration/nearMiss/micro bypasses ONLY during first 30 trades (true cold start).
+    // After 30 trades: score must meet threshold. Period.
+    const fastLearning = stats.totalTrades < 30; // was 50 — tighter window
 
-    // Phase 3: Time-based minimum activity — if no trade in 90 min, relax gates
+    // Phase 3: Time-based minimum activity — if no trade in 90 min AND in cold start, relax
     const msSinceLastTrade = this.state.lastTradeTimestamp > 0 ? Date.now() - this.state.lastTradeTimestamp : 0;
     const tradeDrought = msSinceLastTrade > 90 * 60_000 && fastLearning;
-    const droughtRelax = tradeDrought ? 0.05 : 0; // -5% confidence floor during drought
+    const droughtRelax = tradeDrought ? 0.03 : 0; // -3% confidence floor (was 5%)
 
-    // Phase 1: Expanded exploration (score ≥42 for first 50 trades, 0.4x size)
+    // Exploration: ONLY during first 30 trades, score ≥50 (was 42), requires 2+ factors
     let explorationTrade = false;
-    if (fastLearning && amplifiedScore >= 42 && amplifiedScore < effectiveScoreThreshold && tradeEV >= 0) {
+    if (fastLearning && amplifiedScore >= 50 && amplifiedScore < effectiveScoreThreshold
+        && tradeEV >= 0 && composite.confirmedFactors >= 2) {
       explorationTrade = true;
     }
 
-    // Phase 2: Near-miss promotion boost (score ≥42, confidence ≥45%, EV>0 → 0.6x size)
+    // Near-miss promotion: ONLY during first 30 trades, score ≥50, higher confidence
     let nearMissPromoted = false;
-    if (amplifiedScore >= 42 && amplifiedScore < effectiveScoreThreshold
-        && effectiveConfidence >= (coldStartConfFloor - droughtRelax - 0.05)
-        && tradeEV > 0) {
+    if (fastLearning && amplifiedScore >= 50 && amplifiedScore < effectiveScoreThreshold
+        && effectiveConfidence >= (coldStartConfFloor - droughtRelax)
+        && tradeEV > 0 && composite.confirmedFactors >= 2) {
       nearMissPromoted = true;
     }
 
-    // Phase 4: Partial signal execution — if 2 strong factors agree but full pipeline fails
-    let microTrade = false;
-    if (fastLearning && !explorationTrade && !nearMissPromoted
-        && strongFactors >= 2 && amplifiedScore >= 38 && amplifiedScore < 42) {
-      microTrade = true; // 0.3x size — feeds learning loop
+    // Micro trades: ELIMINATED — these were the #1 source of garbage trades
+    const microTrade = false;
+
+    // Drought override: only if truly stuck AND signal is decent (score ≥50)
+    if (tradeDrought && !explorationTrade && !nearMissPromoted
+        && amplifiedScore >= 50 && effectiveConfidence >= (coldStartConfFloor - 0.05)
+        && composite.confirmedFactors >= 2) {
+      nearMissPromoted = true;
     }
 
-    // Phase 3 continued: Allow best near-miss during drought
-    if (tradeDrought && !explorationTrade && !nearMissPromoted && !microTrade
-        && amplifiedScore >= 38 && effectiveConfidence >= (coldStartConfFloor - 0.10)) {
-      nearMissPromoted = true; // Drought override
+    // PROFIT_EDGE: Multi-confluence gate — require ≥2 confirmed factors for ALL trades (not just exploration)
+    if (!fastLearning && composite.confirmedFactors < 2) {
+      this.signalPressure.recordSignal(snapshot.market, amplifiedScore, composite.confidence, true, 'low_confidence');
+      this.counterfactual.recordSkip(snapshot.market, side, snapshot.price, amplifiedScore, 'confluence<2', primaryStrategy);
+      return null;
     }
 
     const scorePassesRaw = (amplifiedScore >= effectiveScoreThreshold && decisionScore >= decisionThreshold) || nearMissPromoted || explorationTrade || microTrade;
@@ -1819,27 +1829,32 @@ export class LiveTradingAgent {
       const currentPeakR = Math.max(prevPeakR, rMultiple);
       (this.activeTradeStates as Map<string, unknown>).set(peakKey, currentPeakR);
 
-      // V_PROFIT_EXPANSION Phase 1: WINNER EXPANSION — let strong trades run
-      // If R≥0.30 + momentum accelerating + no reversal → extend TP, do NOT exit
-      const isWinnerExpanding = rMultiple >= 0.30 && momentum === 'accelerating';
+      // PROFIT_EDGE: WINNER EXPANSION — let winners develop before exiting.
+      // Previous: exit at any R>0 on momentum decay → tiny $0.01 wins
+      // Now: require R≥0.10 minimum profit before ANY profit-taking exit
+      const isWinnerExpanding = rMultiple >= 0.15 && momentum === 'accelerating';
       if (isWinnerExpanding) {
         this.log('verbose', `WINNER RUN: ${pos.market} ${pos.side} R=${rMultiple.toFixed(2)} momentum=${momentum} — letting it run`);
         // Fall through to trailing stop — do NOT exit early
       }
 
-      // Priority 2: MOMENTUM REVERSAL EXIT — but only if NOT in winner expansion
-      if (!isWinnerExpanding && (momentum === 'decaying' || momentum === 'reversing') && rMultiple > 0) {
-        this.log('normal', `MOMENTUM EXIT: ${pos.market} ${pos.side} R=${rMultiple.toFixed(2)} momentum=${momentum} — closing to protect profit`);
+      // PROFIT_EDGE: MOMENTUM EXIT — only on CLEAR reversal with MEANINGFUL profit (R≥0.10)
+      // Previous: exit at R>0 on any decay → captured $0.01 profits
+      // Now: require R≥0.10 → captures $0.05-0.50+ profits
+      if (!isWinnerExpanding && momentum === 'reversing' && rMultiple >= 0.10) {
+        this.log('normal', `MOMENTUM EXIT: ${pos.market} ${pos.side} R=${rMultiple.toFixed(2)} momentum=${momentum} — locking profit`);
         await this.closeWithReason(pos, 'momentum_exit', `Momentum ${momentum} at R=${rMultiple.toFixed(2)}`);
         this.positionMgr.untrack(pos.market, pos.side);
         continue;
       }
+      // Decaying momentum with smaller profit: hold — don't exit yet, give it a chance
+      // (stagnation early exit will catch it if it turns negative)
 
-      // V_PROFIT_EXPANSION Phase 3: DYNAMIC TRAILING PROFIT LOCK (replaces static give-back)
-      // R ≥ 0.20 → trail at peakR × 0.60
-      // R ≥ 0.40 → trail at peakR × 0.70 (tighter trailing for big winners)
-      if (currentPeakR >= 0.20) {
-        const trailFactor = currentPeakR >= 0.40 ? 0.70 : 0.60;
+      // PROFIT_EDGE: TRAILING LOCK — wider trail to let winners run
+      // Previous: trail at peakR × 0.60/0.70 → locked tiny gains
+      // Now: trail at peakR × 0.50/0.60 → allows deeper pullbacks, bigger wins
+      if (currentPeakR >= 0.25) {
+        const trailFactor = currentPeakR >= 0.50 ? 0.60 : 0.50;
         const trailStop = currentPeakR * trailFactor;
         if (rMultiple < trailStop) {
           this.log('normal', `TRAIL LOCK: ${pos.market} ${pos.side} R=${rMultiple.toFixed(2)} < trail ${trailStop.toFixed(2)} (peak=${currentPeakR.toFixed(2)}×${trailFactor}) — closing`);
@@ -1849,10 +1864,10 @@ export class LiveTradingAgent {
         }
       }
 
-      // V_PROFIT_EXPANSION Phase 2: PARTIAL TP at R ≥ 0.25 — close 30% (not 50%), let 70% run
-      if (rMultiple >= 0.25 && !managed?.action?.includes('partial')) {
-        this.log('normal', `PARTIAL TP: ${pos.market} ${pos.side} R=${rMultiple.toFixed(2)} — closing 30%, letting 70% run`);
-        await this.closeWithReason(pos, 'partial_tp', `R=${rMultiple.toFixed(2)} partial take profit`, 30);
+      // PROFIT_EDGE: PARTIAL TP at R ≥ 0.40 (was 0.25) — close 25% (was 30%), let 75% run
+      if (rMultiple >= 0.40 && !managed?.action?.includes('partial')) {
+        this.log('normal', `PARTIAL TP: ${pos.market} ${pos.side} R=${rMultiple.toFixed(2)} — closing 25%, letting 75% run`);
+        await this.closeWithReason(pos, 'partial_tp', `R=${rMultiple.toFixed(2)} partial take profit`, 25);
         continue;
       }
 

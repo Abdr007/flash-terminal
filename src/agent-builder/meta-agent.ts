@@ -36,26 +36,26 @@ export interface MetaDecision {
 const MODE_PARAMS: Record<AggressionMode, Omit<MetaDecision, 'reason'>> = {
   AGGRESSIVE: {
     mode: 'AGGRESSIVE',
-    scoreThreshold: 55,
-    sizeMultiplier: 1.3,
-    maxPositions: 3,
-    minConfidence: 0.55,
-    minRR: 1.5,
-  },
-  NORMAL: {
-    mode: 'NORMAL',
-    scoreThreshold: 65,
-    sizeMultiplier: 1.0,
+    scoreThreshold: 58,
+    sizeMultiplier: 1.2,
     maxPositions: 2,
     minConfidence: 0.60,
     minRR: 1.5,
   },
+  NORMAL: {
+    mode: 'NORMAL',
+    scoreThreshold: 62,
+    sizeMultiplier: 1.0,
+    maxPositions: 2,
+    minConfidence: 0.60,
+    minRR: 2.0,
+  },
   CONSERVATIVE: {
     mode: 'CONSERVATIVE',
-    scoreThreshold: 75,
-    sizeMultiplier: 0.5,
+    scoreThreshold: 65,  // was 75 — unreachable, caused permanent lockout
+    sizeMultiplier: 0.6,
     maxPositions: 1,
-    minConfidence: 0.70,
+    minConfidence: 0.65,
     minRR: 2.0,
   },
   HALT: {
@@ -126,10 +126,12 @@ export class MetaAgent {
       }
     }
 
-    // 2. Recent win rate
-    if (recentTradeCount >= 5) {
-      if (recentWinRate >= 0.6) { score += 15; reasons.push(`WR=${(recentWinRate * 100).toFixed(0)}%↑`); }
-      else if (recentWinRate < 0.35) { score -= 20; reasons.push(`WR=${(recentWinRate * 100).toFixed(0)}%↓`); }
+    // 2. Recent win rate — require larger sample before penalizing
+    // Previous: penalize at 5 trades → 2 losses = 40% WR = -20 penalty (too harsh)
+    // Now: penalize at 10 trades → more statistically meaningful
+    if (recentTradeCount >= 10) {
+      if (recentWinRate >= 0.5) { score += 15; reasons.push(`WR=${(recentWinRate * 100).toFixed(0)}%↑`); }
+      else if (recentWinRate < 0.30) { score -= 15; reasons.push(`WR=${(recentWinRate * 100).toFixed(0)}%↓`); }
     }
 
     // 3. Drawdown state
