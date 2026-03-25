@@ -174,6 +174,38 @@ export async function runMarketMonitor(deps: MarketMonitorDeps, filterMarket?: s
       priceSvc.getPrices(allSymbols).catch(() => new Map()),
       deps.fstats.getOpenInterest().catch(() => ({ markets: [] })),
     ]);
+
+    // Fallback: for markets missing from Pyth (e.g. Lazer-only), read on-chain internal oracle
+    if (deps.rpcManager) {
+      const missingSymbols = allSymbols.filter((s) => !priceMap.has(s));
+      if (missingSymbols.length > 0) {
+        try {
+          const { PoolConfig } = await import('flash-sdk');
+          const { POOL_MARKETS } = await import('../config/index.js');
+          for (const [poolName, markets] of Object.entries(POOL_MARKETS)) {
+            const missing = missingSymbols.filter((s) => markets.includes(s));
+            if (missing.length === 0) continue;
+            try {
+              const pc = PoolConfig.fromIdsByName(poolName, 'mainnet-beta');
+              for (const sym of missing) {
+                const custody = pc.custodies.find((c: { symbol: string }) => c.symbol === sym);
+                if (!custody?.intOracleAccount) continue;
+                const info = await deps.rpcManager.connection.getAccountInfo(custody.intOracleAccount);
+                if (info && info.data.length >= 28) {
+                  const rawPrice = info.data.readBigInt64LE(8);
+                  const exponent = info.data.readInt32LE(16);
+                  const price = Number(rawPrice) * Math.pow(10, exponent);
+                  if (Number.isFinite(price) && price > 0) {
+                    priceMap.set(sym, { symbol: sym, price, priceChange24h: 0, timestamp: Date.now(), isFallback: true });
+                  }
+                }
+              }
+            } catch { /* best-effort */ }
+          }
+        } catch { /* best-effort */ }
+      }
+    }
+
     telemetry.oracleLatencyMs = Math.round(performance.now() - oracleStart);
 
     // Measure RPC latency + get slot (lightweight — reuses cached values)
@@ -213,7 +245,7 @@ export async function runMarketMonitor(deps: MarketMonitorDeps, filterMarket?: s
       }
       const totalOi = longOi + shortOi;
 
-      if (!filterMarket && totalOi <= 0) continue;
+      // Show all markets — new markets may not have OI data yet
 
       const longPct = totalOi > 0 ? Math.round((longOi / totalOi) * 100) : 50;
       const shortPct = totalOi > 0 ? 100 - longPct : 50;
