@@ -115,7 +115,7 @@ function classifyMarket(symbol: string, pythTicker: string, poolName: string): M
     // Virtual.1 contains metals, forex, commodities
     if (['XAU', 'XAG'].includes(symbol)) return MarketType.COMMODITY;
     if (['EUR', 'GBP', 'USDJPY', 'USDCNH'].includes(symbol)) return MarketType.FOREX;
-    if (['CRUDEOIL'].includes(symbol)) return MarketType.COMMODITY;
+    if (['CRUDEOIL', 'NATGAS'].includes(symbol)) return MarketType.COMMODITY;
   }
 
   return MarketType.UNKNOWN;
@@ -260,6 +260,7 @@ const KNOWN_ALIASES: Record<string, string[]> = {
   XAU: ['gold'],
   XAG: ['silver'],
   CRUDEOIL: ['crude', 'oil', 'crude oil', 'crudeoil'],
+  NATGAS: ['natural gas', 'nat gas', 'gas'],
   EUR: ['euro'],
   GBP: ['pound', 'sterling'],
   USDJPY: ['yen'],

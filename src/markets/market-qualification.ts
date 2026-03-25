@@ -93,7 +93,7 @@ export interface QualificationStats {
 /** Core markets that start as Tier 1 (always eligible for real trading). */
 const TIER_1_MARKETS = new Set([
   'SOL', 'BTC', 'ETH', 'BNB', 'ZEC',
-  'XAU', 'XAG', 'CRUDEOIL',
+  'XAU', 'XAG', 'CRUDEOIL', 'NATGAS',
   'EUR', 'GBP', 'USDJPY', 'USDCNH',
 ]);
 

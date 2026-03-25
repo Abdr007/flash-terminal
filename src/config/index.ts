@@ -304,7 +304,7 @@ function discoverPoolsFromSdk(): { names: string[]; markets: Record<string, stri
     names: ['Crypto.1', 'Virtual.1', 'Governance.1', 'Community.1', 'Community.2', 'Trump.1', 'Ore.1', 'Ondo.1'],
     markets: {
       'Crypto.1': ['SOL', 'BTC', 'ETH', 'ZEC', 'BNB'],
-      'Virtual.1': ['XAG', 'XAU', 'CRUDEOIL', 'EUR', 'GBP', 'USDJPY', 'USDCNH'],
+      'Virtual.1': ['XAG', 'XAU', 'CRUDEOIL', 'NATGAS', 'EUR', 'GBP', 'USDJPY', 'USDCNH'],
       'Governance.1': ['JTO', 'JUP', 'PYTH', 'RAY', 'HYPE', 'MET', 'KMNO'],
       'Community.1': ['PUMP', 'BONK', 'PENGU'],
       'Community.2': ['WIF'],
