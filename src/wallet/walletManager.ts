@@ -288,6 +288,23 @@ export class WalletManager {
       FAFxVxnkzZHMCodkWyoccgUNgVScqMw2mhhQBYDFjFAF: 'FAF',
       KMNo3nJsBXfcpJTVhZcXLW7RmTwTt4GVFE7suUBo9sS: 'KMNO',
       '98sMhvDwXj1RQi5c5Mndm3vPe9cBqPrbLaufMXFNMh5g': 'HYPE',
+      '2wMe8SNFQo768SvTCCxJcpYhKZrawHYVmCHbBhFGKCoJ': 'MET',
+      '27G8MtK7VtTcCHkpASjSDdkWWYfoqT6ggEuKidVJidD4': 'JLP',
+      mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So: 'mSOL',
+      J1toso1uCk3RLmjorhTtrVwY9HJ7X8V9yYac6Y7kGCPn: 'JitoSOL',
+      bSo13r4TkiE4KumL71LsHTPpL2euBYLFx6h9HP3piy1: 'bSOL',
+      '7vfCXTUXx5WJV5JADk17DUJ4ksgau7utNKj4b963voxs': 'ETH',
+      '3NZ9JMVBmGAqocybic2c7LQCJScmgsAZ6vQqTDzcqmJh': 'WBTC',
+      PENGUdRFKyGbMx6s3KcAMR7G4k26hAciRmvMKsKKBuv: 'PENGU',
+      A8C3xuqscfmyLrte3VVY3lGbmkyYZbQ5Lg3JgLJPump: 'PUMP',
+      FARTCuNRGY2rjZjGbGqJWbVBiL4CZUEVBq6xtJwMWYF: 'FARTCOIN',
+      orcaEKTdK7LKz57vaAYr9QeNsVEPfiu6QeMU1kektZE: 'ORCA',
+      rndrizKT3MK1iimdxRdWabcF7Zg7AR5T4nud4EkHBof: 'RNDR',
+      TNSRxcUxoT9xBG3de7PiJyTDYu7kskLqcpddxnEJAS6: 'TNSR',
+      '7dHbWXmci3dT8UFYWYZweBLXgycu7Y3iL6trKn1Y7ARj': 'stSOL',
+      HeLp6NuQkmYB4pYWo2zYs22mESHXPQYzXbB8n4V98jwC: 'AI16Z',
+      // Flash Trade LP tokens
+      NUZ3oov2tMkRBMjUvZuy8FMo4ZTQ7SgFLSfP8Rjpump: 'FLP',
     };
 
     const TOKEN_PROGRAM_ID = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA');
@@ -319,7 +336,44 @@ export class WalletManager {
       const uiAmount: number = info.tokenAmount?.uiAmount ?? 0;
       if (uiAmount === 0) continue;
 
-      const symbol = KNOWN_MINTS[mint] ?? mint.slice(0, 4) + '...';
+      let symbol = KNOWN_MINTS[mint];
+
+      // Try on-chain token metadata for unknown mints
+      if (!symbol) {
+        try {
+          const mintPk = new PublicKey(mint);
+          // Metaplex Token Metadata PDA: ['metadata', programId, mint]
+          const METADATA_PROGRAM = new PublicKey('metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s');
+          const [metadataPDA] = PublicKey.findProgramAddressSync(
+            [Buffer.from('metadata'), METADATA_PROGRAM.toBuffer(), mintPk.toBuffer()],
+            METADATA_PROGRAM,
+          );
+          const metaAccount = await this.connection.getAccountInfo(metadataPDA);
+          if (metaAccount && metaAccount.data.length > 65) {
+            // Metadata layout: [1 key, 32 update_auth, 32 mint, 4+name, 4+symbol, 4+uri]
+            // Name starts at offset 65 (1+32+32), length-prefixed (4 bytes LE)
+            const nameLen = metaAccount.data.readUInt32LE(65);
+            const safeName = nameLen > 0 && nameLen <= 32 ? metaAccount.data.subarray(69, 69 + nameLen).toString('utf8').replace(/\0/g, '').trim() : '';
+            // Symbol starts after name
+            const symOffset = 69 + nameLen;
+            if (symOffset + 4 < metaAccount.data.length) {
+              const symLen = metaAccount.data.readUInt32LE(symOffset);
+              if (symLen > 0 && symLen <= 10) {
+                const rawSym = metaAccount.data.subarray(symOffset + 4, symOffset + 4 + symLen).toString('utf8').replace(/\0/g, '').trim();
+                if (rawSym.length > 0 && rawSym.length <= 8 && /^[A-Za-z0-9]+$/.test(rawSym)) {
+                  symbol = rawSym.toUpperCase();
+                } else if (safeName.length > 0 && safeName.length <= 12) {
+                  symbol = safeName.toUpperCase().slice(0, 8);
+                }
+              }
+            }
+          }
+        } catch {
+          // Metadata lookup is best-effort
+        }
+      }
+
+      if (!symbol) symbol = 'UNKNOWN';
       tokens.push({ symbol, mint, amount: uiAmount });
     }
 

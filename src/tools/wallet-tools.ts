@@ -323,7 +323,8 @@ export const walletBalance: ToolDefinition = {
       ];
       for (const t of tokens) {
         const decimals = t.symbol === 'USDC' || t.symbol === 'USDT' ? 2 : t.amount >= 1000 ? 2 : 4;
-        lines.push(theme.pair(t.symbol, theme.positive(`${t.amount.toFixed(decimals)} ${t.symbol}`)));
+        const label = t.symbol === 'UNKNOWN' ? `UNKNOWN (${t.mint.slice(0, 6)}...)` : t.symbol;
+        lines.push(theme.pair(label, theme.positive(`${t.amount.toFixed(decimals)} ${t.symbol}`)));
       }
       if (tokens.length === 0) {
         lines.push(theme.dim('  No SPL tokens found'));
@@ -365,7 +366,8 @@ export const walletTokens: ToolDefinition = {
       const lines = [theme.titleBlock('TOKENS IN WALLET'), '', theme.pair('SOL', theme.positive(sol.toFixed(4)))];
       for (const t of tokens) {
         const decimals = t.symbol === 'USDC' || t.symbol === 'USDT' ? 2 : 4;
-        lines.push(theme.pair(t.symbol, theme.positive(t.amount.toFixed(decimals))));
+        const label = t.symbol === 'UNKNOWN' ? `UNKNOWN (${t.mint.slice(0, 6)}...)` : t.symbol;
+        lines.push(theme.pair(label, theme.positive(t.amount.toFixed(decimals))));
       }
       if (tokens.length === 0) {
         lines.push(theme.dim('  No SPL tokens found'));
