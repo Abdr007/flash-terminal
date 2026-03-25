@@ -40,8 +40,6 @@ export enum ActionType {
   Dashboard = 'dashboard',
   WhaleActivity = 'whale_activity',
 
-  // Market Scanner
-  ScanMarkets = 'scan_markets',
 
   // Portfolio Intelligence
   PortfolioState = 'portfolio_state',
@@ -288,10 +286,6 @@ export const WhaleActivitySchema = z.object({
 });
 
 // Market Scanner Schema
-export const ScanMarketsSchema = z.object({
-  action: z.literal(ActionType.ScanMarkets),
-});
-
 // Portfolio Intelligence Schemas
 export const PortfolioStateSchema = z.object({
   action: z.literal(ActionType.PortfolioState),
@@ -578,7 +572,6 @@ export const ParsedIntentSchema = z.discriminatedUnion('action', [
   RiskReportSchema,
   DashboardSchema,
   WhaleActivitySchema,
-  ScanMarketsSchema,
   PortfolioStateSchema,
   PortfolioExposureSchema,
   PortfolioRebalanceSchema,

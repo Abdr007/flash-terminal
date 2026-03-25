@@ -54,7 +54,7 @@ const READ_ONLY_ALLOWED = new Set<ActionType>([
   ActionType.RiskReport,
   ActionType.Dashboard,
   ActionType.WhaleActivity,
-  ActionType.ScanMarkets,
+
   ActionType.PortfolioState,
   ActionType.PortfolioExposure,
   ActionType.PortfolioRebalance,

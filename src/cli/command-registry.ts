@@ -184,13 +184,6 @@ export const COMMAND_REGISTRY: CommandEntry[] = [
     category: 'Market Data & Analytics',
     description: 'Protocol health overview',
   },
-  {
-    name: 'scan',
-    action: null,
-    category: 'Market Data & Analytics',
-    description: 'Scan market conditions',
-    hidden: true, // CLI must not suggest trades
-  },
 
   // ── Portfolio & Risk ────────────────────────────────────────────────────
   {
