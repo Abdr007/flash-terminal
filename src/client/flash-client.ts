@@ -818,37 +818,34 @@ export class FlashClient implements IFlashClient {
     }));
     const priceMap = await this.priceService.getPrices(tokens);
 
-    // Fallback: read on-chain internal oracle for tokens missing from Pyth
+    // Fallback: for any token missing from Pyth, read on-chain internal oracle (Lazer).
+    // Virtual markets (NATGAS, etc.) may only have Lazer oracles without traditional Pyth feeds.
     const custodies = poolConfig.custodies as Array<{
       symbol: string;
       intOracleAccount: PublicKey;
+      isVirtual?: boolean;
     }>;
-    const missing = tokens.filter((t) => !priceMap.has(t.symbol) && !['USDC', 'WSOL'].includes(t.symbol));
-    if (missing.length > 0) {
-      const logger = getLogger();
-      for (const token of missing) {
-        const custody = custodies.find((c) => c.symbol === token.symbol);
-        if (!custody?.intOracleAccount) continue;
-        try {
-          const info = await this.connection.getAccountInfo(custody.intOracleAccount);
-          if (info && info.data.length >= 28) {
-            const rawPrice = info.data.readBigInt64LE(8);
-            const exponent = info.data.readInt32LE(16);
-            const uiPrice = Number(rawPrice) * Math.pow(10, exponent);
-            if (Number.isFinite(uiPrice) && uiPrice > 0) {
-              const oraclePrice = new OraclePrice({
-                price: new BN(rawPrice.toString()),
-                exponent: new BN(exponent.toString()),
-                confidence: new BN(info.data.readBigUInt64LE(20).toString()),
-                timestamp: new BN(Math.floor(Date.now() / 1000).toString()),
-              });
-              priceMap.set(token.symbol, { price: oraclePrice, emaPrice: oraclePrice, uiPrice, timestamp: Date.now() });
-              logger.info('PRICE', `${token.symbol}: using on-chain internal oracle ($${uiPrice.toFixed(4)})`);
-            }
-          }
-        } catch {
-          // Best-effort fallback — if internal oracle read fails, skip
-        }
+    for (const custody of custodies) {
+      if (priceMap.has(custody.symbol)) continue; // already have price
+      if (['USDC', 'WSOL'].includes(custody.symbol)) continue;
+      if (!custody.intOracleAccount) continue;
+      try {
+        const info = await this.connection.getAccountInfo(custody.intOracleAccount);
+        if (!info || info.data.length < 28) continue;
+        const rawPrice = info.data.readBigInt64LE(8);
+        const exponent = info.data.readInt32LE(16);
+        const uiPrice = Number(rawPrice) * Math.pow(10, exponent);
+        if (!Number.isFinite(uiPrice) || uiPrice <= 0) continue;
+        const oraclePrice = new OraclePrice({
+          price: new BN(rawPrice.toString()),
+          exponent: new BN(exponent.toString()),
+          confidence: new BN(info.data.readBigUInt64LE(20).toString()),
+          timestamp: new BN(Math.floor(Date.now() / 1000).toString()),
+        });
+        priceMap.set(custody.symbol, { price: oraclePrice, emaPrice: oraclePrice, uiPrice, timestamp: Date.now() });
+        getLogger().info('PRICE', `${custody.symbol}: on-chain oracle $${uiPrice.toFixed(4)}`);
+      } catch (err) {
+        getLogger().debug('PRICE', `${custody.symbol}: internal oracle read failed: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
     return priceMap;
