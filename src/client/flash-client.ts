@@ -816,7 +816,42 @@ export class FlashClient implements IFlashClient {
       symbol: t.symbol,
       pythTicker: t.pythTicker,
     }));
-    return this.priceService.getPrices(tokens);
+    const priceMap = await this.priceService.getPrices(tokens);
+
+    // Fallback: read on-chain internal oracle for tokens missing from Pyth
+    const custodies = poolConfig.custodies as Array<{
+      symbol: string;
+      intOracleAccount: PublicKey;
+    }>;
+    const missing = tokens.filter((t) => !priceMap.has(t.symbol) && !['USDC', 'WSOL'].includes(t.symbol));
+    if (missing.length > 0) {
+      const logger = getLogger();
+      for (const token of missing) {
+        const custody = custodies.find((c) => c.symbol === token.symbol);
+        if (!custody?.intOracleAccount) continue;
+        try {
+          const info = await this.connection.getAccountInfo(custody.intOracleAccount);
+          if (info && info.data.length >= 28) {
+            const rawPrice = info.data.readBigInt64LE(8);
+            const exponent = info.data.readInt32LE(16);
+            const uiPrice = Number(rawPrice) * Math.pow(10, exponent);
+            if (Number.isFinite(uiPrice) && uiPrice > 0) {
+              const oraclePrice = new OraclePrice({
+                price: new BN(rawPrice.toString()),
+                exponent: new BN(exponent.toString()),
+                confidence: new BN(info.data.readBigUInt64LE(20).toString()),
+                timestamp: new BN(Math.floor(Date.now() / 1000).toString()),
+              });
+              priceMap.set(token.symbol, { price: oraclePrice, emaPrice: oraclePrice, uiPrice, timestamp: Date.now() });
+              logger.info('PRICE', `${token.symbol}: using on-chain internal oracle ($${uiPrice.toFixed(4)})`);
+            }
+          }
+        } catch {
+          // Best-effort fallback — if internal oracle read fails, skip
+        }
+      }
+    }
+    return priceMap;
   }
 
   private findToken(poolConfig: PoolConfig, symbol: string) {
