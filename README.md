@@ -10,7 +10,7 @@
 
 <p align="center">
   Not a wrapper. Not a dashboard. A full execution engine —<br/>
-  with autonomous agents, real-time risk systems, and every parameter derived from chain state.
+  with real-time risk systems and every parameter derived from chain state.
 </p>
 
 <p align="center">
@@ -18,7 +18,7 @@
   <a href="https://www.typescriptlang.org"><img src="https://img.shields.io/badge/TypeScript-Strict-3178C6?style=flat-square&logo=typescript&logoColor=white" alt="TypeScript" /></a>&nbsp;
   <a href="https://www.flash.trade"><img src="https://img.shields.io/badge/Flash_Trade-SDK-26d97f?style=flat-square" alt="Flash SDK" /></a>&nbsp;
   <a href="https://github.com/Abdr007/flash-terminal/actions"><img src="https://img.shields.io/github/actions/workflow/status/Abdr007/flash-terminal/ci.yml?branch=main&style=flat-square&label=CI" alt="CI" /></a>&nbsp;
-  <img src="https://img.shields.io/badge/Tests-1985_passing-brightgreen?style=flat-square" alt="Tests" />&nbsp;
+  <img src="https://img.shields.io/badge/Tests-1718_passing-brightgreen?style=flat-square" alt="Tests" />&nbsp;
   <a href="https://github.com/Abdr007/flash-terminal/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue?style=flat-square" alt="MIT License" /></a>
 </p>
 
@@ -60,7 +60,7 @@ Flash Terminal takes the opposite approach:
 | **Prices** | Pyth Hermes oracle (same feed as protocol) | Exchange APIs, delayed feeds |
 | **Parameters** | Read from chain every request | Cached, approximated, or hardcoded |
 | **Risk controls** | 10-layer safety stack, always on | Optional, usually client-side |
-| **Automation** | Autonomous agent with Q-learning | Bots with static rules |
+| **Automation** | Deterministic execution with safety gates | Bots with static rules |
 | **Data integrity** | Zero fabricated values — verified or absent | Estimated, interpolated |
 | **Transparency** | Full audit trail, every signing logged | Limited or no logging |
 
@@ -77,7 +77,7 @@ Crypto  ·  Commodities  ·  Forex  ·  Equities  ·  Meme  ·  Governance
 |:-----------|:------------|
 | **Live Trading** | Open, close, and manage leveraged perp positions on Solana mainnet |
 | **Simulation Mode** | Paper trading with real oracle prices. No transactions, no risk. |
-| **Autonomous Agent** | Self-learning trading agent with policy optimization and edge validation |
+| **Risk Engine** | Circuit breakers, runtime state machine, health monitoring, and backpressure |
 | **Limit Orders** | On-chain limit order placement, editing, and cancellation |
 | **TP/SL Automation** | Take-profit and stop-loss with 2-tick spike protection |
 | **Liquidity (Earn)** | Deposit, stake, and manage FLP/sFLP across all Flash pools |
@@ -90,21 +90,18 @@ Crypto  ·  Commodities  ·  Forex  ·  Equities  ·  Meme  ·  Governance
 
 ## Architecture Overview
 
-Seven isolated layers, strict downward communication. The risk layer sits between every decision and every transaction — no bypass path exists. Market data flows up through caches, execution flows down through safety gates, and the agent's learning loop closes through on-chain state reconciliation.
+Seven isolated layers, strict downward communication. The risk layer sits between every decision and every transaction — no bypass path exists. Market data flows up through caches, execution flows down through safety gates, and state reconciliation keeps the CLI in sync with on-chain reality.
 
 ```mermaid
 graph TB
     subgraph INTERFACE["&nbsp; INTERFACE &nbsp;"]
         CLI["CLI REPL"]
-        NLP["AI Interpreter<br/><sub>regex primary · NLP fallback</sub>"]
     end
 
     subgraph INTELLIGENCE["&nbsp; INTELLIGENCE &nbsp;"]
-        AGENT["Live Agent<br/><sub>tick loop · adaptive 2–30s</sub>"]
         SCAN["Scanner<br/><sub>32 markets · parallel</sub>"]
         STRAT["Signal Fusion<br/><sub>momentum · mean-rev · whale</sub>"]
         REGIME["Regime Detector<br/><sub>trend · range · vol · compression</sub>"]
-        LEARN["Learning System<br/><sub>Q-tables · edge profiler · EV tracking</sub>"]
     end
 
     subgraph DECISION["&nbsp; DECISION ENGINE &nbsp;"]
@@ -140,13 +137,7 @@ graph TB
         SOL["Solana Network"]
     end
 
-    CLI --> NLP
-    NLP --> AGENT
-    NLP --> ORDER
 
-    PYTH -.->|"market data"| AGENT
-    CACHE -.->|"positions"| AGENT
-    AGENT --> SCAN
     SCAN --> STRAT
     STRAT --> REGIME
     REGIME --> SCORE
@@ -169,89 +160,13 @@ graph TB
     FLASH --> SOL
 
     SOL -.->|"confirmation + state"| CACHE
-    CACHE -.->|"reconciliation"| LEARN
-    LEARN -.->|"policy update"| AGENT
+    CACHE -.->|"reconciliation"| SCAN
 
     style RISK fill:#1a1a2e,stroke:#e94560,stroke-width:2px,color:#fff
     style INTELLIGENCE fill:#1a1a2e,stroke:#0f3460,stroke-width:2px,color:#fff
     style EXECUTION fill:#1a1a2e,stroke:#16213e,stroke-width:2px,color:#fff
     style CHAIN fill:#1a1a2e,stroke:#9945FF,stroke-width:2px,color:#fff
 ```
-
-### Agent Decision Loop
-
-The agent operates a closed-loop cycle: observe market state, generate and score signals, filter through risk gates, execute on-chain, then update policy weights based on realized outcomes. Every cycle feeds the next.
-
-```mermaid
-graph LR
-    subgraph OBSERVE["&nbsp; OBSERVE &nbsp;"]
-        MKT["Fetch Prices<br/><sub>Pyth · cached 5s</sub>"]
-        POS["Fetch Positions<br/><sub>on-chain · cached 20s</sub>"]
-        EVT["Event Triggers<br/><sub>price spike · OI shift · funding flip</sub>"]
-    end
-
-    subgraph ANALYZE["&nbsp; ANALYZE &nbsp;"]
-        SIG["Signal Fusion<br/><sub>6 strategies · Bayesian</sub>"]
-        REG["Regime Classification<br/><sub>per-market state</sub>"]
-    end
-
-    subgraph SCORE_FILTER["&nbsp; SCORE & FILTER &nbsp;"]
-        OPP["Opportunity Scorer<br/><sub>strength · regime fit · R:R</sub>"]
-        EV["EV Validation<br/><sub>≥ 20 bps after costs</sub>"]
-        POL["Policy Decision<br/><sub>trade · skip · scale</sub>"]
-    end
-
-    subgraph EXECUTE_LEARN["&nbsp; EXECUTE & LEARN &nbsp;"]
-        EXEC["Execute Trade<br/><sub>full safety stack</sub>"]
-        RESULT["Observe Outcome<br/><sub>PnL · slippage · fill time</sub>"]
-        UPDATE["Update Policy<br/><sub>Q-learning · reward shaping</sub>"]
-        EDGE["Edge Profiler<br/><sub>real EV · cost drag · Sharpe</sub>"]
-    end
-
-    MKT --> SIG
-    POS --> SIG
-    EVT -->|"fast path"| SIG
-    SIG --> REG
-    REG --> OPP
-    OPP --> EV
-    EV --> POL
-
-    POL -->|"approved"| EXEC
-    POL -.->|"skip"| MKT
-
-    EXEC --> RESULT
-    RESULT --> UPDATE
-    RESULT --> EDGE
-    UPDATE -.->|"policy weights"| POL
-    EDGE -.->|"strategy disable"| SIG
-
-    style SCORE_FILTER fill:#1a1a2e,stroke:#e94560,stroke-width:2px,color:#fff
-    style EXECUTE_LEARN fill:#1a1a2e,stroke:#0f3460,stroke-width:2px,color:#fff
-```
-
----
-
-## Execution Philosophy
-
-Flash Terminal is built on a simple principle: **you should know exactly what happens when you press enter.**
-
-- **No prediction engines.** The system does not guess where price is going.
-- **No black-box AI in the trade path.** AI assists with command parsing, never with execution decisions.
-- **No hidden modifications.** The transaction you confirm is the transaction that's signed.
-- **No fabricated data.** If a value can't be read from chain or oracle, it's absent — not estimated.
-- **Protocol parameters are law.** Fees, margins, leverage limits, and liquidation math come from `CustodyAccount` state. The terminal reads them. It never overrides them.
-
-When you type `open 5x long SOL $100`, here is what happens:
-
-1. Regex parser extracts market, side, leverage, and collateral.
-2. Pool is resolved from on-chain `PoolConfig` (SDK-driven, zero hardcoding).
-3. Oracle price is fetched from Pyth Hermes with staleness (<30s), confidence (<2%), and deviation checks.
-4. Signing guard validates against your configured limits.
-5. Transaction is simulated on-chain. Program errors abort before broadcast.
-6. Instructions are frozen (`Object.freeze`), validated against the program whitelist.
-7. You see the full summary. You confirm. It signs. It broadcasts.
-
-No step is hidden. No step is skippable.
 
 ---
 
@@ -275,7 +190,7 @@ Trading systems fail when they're slow. Flash Terminal is engineered for low-lat
 |:-----|:----|:--------|
 | Oracle prices | 5s | Reduce RPC load, consistent pricing |
 | Market snapshots | 15s | Feed technical analysis, reduce fetches |
-| Decision signals | 10s | LRU cache for agent signal fusion |
+| Decision signals | 10s | LRU cache for signal fusion |
 | Regime classification | 30s | Per-market condition state |
 | Priority fees | 5s | Network congestion tracking |
 | Wallet balances | 30s | Invalidated post-trade |
@@ -294,7 +209,7 @@ Multi-endpoint failover with health monitoring every 30s. Automatic switching on
 
 This is the most important section. Trading systems without safety systems aren't trading systems — they're liabilities.
 
-Flash Terminal has **10 independent safety layers**. They're always active. They can't be bypassed by the agent or by command input.
+Flash Terminal has **10 independent safety layers**. They're always active. They can't be bypassed by any command input.
 
 | Layer | What It Does | Trigger |
 |:------|:-------------|:--------|
@@ -318,76 +233,6 @@ MAX_PORTFOLIO_EXPOSURE=10000    # Max total exposure
 ```
 
 When any threshold is hit, trading stops. No exceptions. No overrides. Reset requires a new session.
-
----
-
-## Autonomous Agent
-
-The agent is Flash Terminal's most advanced subsystem. It's not a bot with static rules — it's a learning system that adapts to market conditions, validates its own edge, and disables strategies that stop working.
-
-**Start it:**
-
-```
-agent start              # Dry-run mode (default)
-agent start --live       # Live execution
-agent stop               # Halt and save state
-agent status             # Current performance
-```
-
-### How It Works
-
-The agent runs a tick-based loop (default 10s, adaptive 2s–30s based on volatility). Each tick:
-
-1. **Observe** — Fetch prices, positions, OI, funding, volatility across 32 markets.
-2. **Classify** — Detect market regime per asset (trending, ranging, volatile, compressing).
-3. **Score** — Rank opportunities by signal strength, regime fit, risk-adjusted return, and capital efficiency.
-4. **Decide** — Policy learner selects action: trade aggressive, trade normal, trade conservative, or skip.
-5. **Execute** — Route through the full safety stack. No shortcuts.
-6. **Learn** — Update Q-tables based on realized outcome. Reward winning patterns. Penalize stagnation.
-
-### Learning Systems
-
-| System | States | Purpose |
-|:-------|:-------|:--------|
-| **Entry Policy (Q-Learning)** | 36 states (regime x signal x condition) | Learns when to trade and how aggressively |
-| **Exit Policy (Q-Learning V2)** | 540 states (PnL x time x vol x TP/SL x momentum) | Learns optimal exit timing |
-| **Edge Profiler** | Continuous | Decomposes PnL into signal quality, execution loss, and cost drag |
-| **Opportunity Learner** | 200 events | Analyzes missed trades to improve capture rate |
-
-**Learning rate:** 0.15 initial, decays to 0.03. **Exploration:** 12% initial, decays to 2.5%. Exploration is disabled during drawdown. State is persisted to disk every 50 ticks and restored across sessions.
-
-### Edge Validation
-
-The agent doesn't trust itself. Before scaling any strategy:
-
-- **Production Validator** freezes the architecture for 200 trades and measures real Sharpe ratio, profit factor, drawdown, and win rate.
-- **EV floor** rejects any signal with expected value below 0.2 (20 bps).
-- **Cost drag tracking** decomposes gross PnL vs. net PnL to identify fee/slippage erosion.
-- Strategies that lose edge are automatically disabled. No manual intervention required.
-
-### Loss Protection
-
-| Mechanism | Trigger | Action |
-|:----------|:--------|:-------|
-| **Stagnation Early Exit** | Position flat (< 0.3% PnL change) for 40 ticks | Force close. Penalize entry signal in policy. |
-| **Max Hold Time** | Position open > 60 ticks (~10 min) | Force close regardless of PnL. |
-| **ATR Trailing Stop** | Price retraces 4x ATR from peak | Close position, lock profits. |
-| **Scale-Out** | PnL hits 1R, 2R, 3R milestones | Partial close: 30%, 30%, 40%. |
-| **Consecutive Loss Cooldown** | 3+ losses in a row | Pause trading, re-evaluate conditions. |
-| **Sharpe Degradation** | 7-day Sharpe drops below -0.5 | Reduce position sizes by 20%. |
-| **Drawdown Gate** | Peak-to-trough > 10% | Disable scale-outs, tighten filters. |
-
-The agent's first priority is capital preservation. Profit is secondary.
-
-### System Governor
-
-Adaptive systems can spiral. The governor prevents it:
-
-- **Size multiplier** clamped to [0.4x, 1.5x]. No runaway scaling.
-- **Learning rate** bounded [0.03, 0.15]. No overfitting.
-- **Max 3 policy changes per 100 trades.** Stability over optimization.
-- **50-trade freeze after shock.** No knee-jerk parameter changes.
-- **Meta-stability score (0-100).** Below 20 = all adaptive systems disabled.
 
 ---
 
@@ -724,7 +569,7 @@ FLASH_LOG_FORMAT=text             # text or json
 ```bash
 FLASH_STRICT_PROTOCOL=false       # Throw on liq price divergence
 SHADOW_TRADING=false              # Mirror trades to risk engine
-NO_DNA=1                          # Agent mode (structured JSON output)
+NO_DNA=1                          # Programmatic mode (structured JSON output)
 ```
 
 </details>
@@ -743,11 +588,9 @@ src/
 ├── cli/               Interactive REPL, command dispatch, tab completion, market monitor
 ├── ai/                NLP intent parser with deterministic regex primary path
 │
-│  ── Agent & Intelligence ───────────────────────────────────
+│  ── Intelligence ───────────────────────────────────
 │
-├── agent-builder/     ★ Autonomous trading agent — Q-learning, edge profiler,
 │                        exit intelligence, production validator, system governor
-├── agent/             Agent tools: analysis, dashboard, observability commands
 ├── scanner/           Parallel market scanner — 32 markets, opportunity scoring
 ├── strategies/        Signal generators: momentum, mean reversion, whale follow
 ├── regime/            Market condition classifier: trend, range, volatility, compression
@@ -818,7 +661,7 @@ Contributions welcome. See **[CONTRIBUTING.md](CONTRIBUTING.md)** for developmen
 
 ## Disclaimer
 
-Flash Terminal executes real blockchain transactions on Solana mainnet in live mode. Leveraged perpetual futures trading carries significant risk of total loss. Past performance of the autonomous agent does not guarantee future results.
+Flash Terminal executes real blockchain transactions on Solana mainnet in live mode. Leveraged perpetual futures trading carries significant risk of total loss. Past performance does not guarantee future results.
 
 Users are solely responsible for understanding the risks of leveraged trading, configuring appropriate risk limits, and verifying protocol state before executing high-value trades.
 

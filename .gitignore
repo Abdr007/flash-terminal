@@ -52,3 +52,5 @@ coverage/
 # Generated PDFs (rebuild from markdown source)
 docs/*.pdf
 *.log.old
+*.log.old.*
+flash-debug.*
