@@ -363,6 +363,7 @@ export class RpcManager {
         this.failoverCount++;
         this.lastFailoverTime = Date.now();
         this._allEndpointsDown = false;
+        this._allDownSince = 0;
 
         // Notify FlashClient of connection change
         if (this.onConnectionChange) {
@@ -373,16 +374,38 @@ export class RpcManager {
       }
     }
 
-    logger.error('RPC', 'No healthy backup RPC found');
+    // Before declaring all down, re-check the ACTIVE endpoint —
+    // it may have recovered while we were testing backups
+    const activeRecheck = await this.checkHealth(this.activeEndpoint);
+    if (activeRecheck.healthy) {
+      logger.info('RPC', `Active endpoint ${this.activeEndpoint.label} recovered during failover — staying connected`);
+      this._allEndpointsDown = false;
+      this.consecutiveMonitorFailures = 0;
+      return true;
+    }
+
+    logger.error('RPC', 'No healthy RPC endpoint found');
     this._allEndpointsDown = true;
+    this._allDownSince = Date.now();
     return false;
   }
 
   /** True when the last failover attempt found no healthy endpoints */
   private _allEndpointsDown = false;
+  private _allDownSince = 0;
 
-  /** Whether all RPC endpoints are currently unreachable */
+  /** Whether all RPC endpoints are currently unreachable.
+   *  Auto-clears after 60s to prevent permanent read-only lockout. */
   get allEndpointsDown(): boolean {
+    if (this._allEndpointsDown && this._allDownSince > 0) {
+      // Auto-expire after 60s — force re-evaluation on next health check
+      if (Date.now() - this._allDownSince > 60_000) {
+        this._allEndpointsDown = false;
+        this._allDownSince = 0;
+        this._allDownSince = 0;
+        getLogger().info('RPC', 'Read-only mode auto-expired — re-evaluating endpoint health');
+      }
+    }
     return this._allEndpointsDown;
   }
 
@@ -479,6 +502,7 @@ export class RpcManager {
           }
           this.consecutiveMonitorFailures = 0;
           this._allEndpointsDown = false;
+        this._allDownSince = 0;
         }
 
         this.detectPartition();
