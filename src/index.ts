@@ -258,21 +258,11 @@ program
       checks.push({ name: 'flash_trade_data', status: 'fail', detail: 'Unable to reach fstats.io' });
     }
 
-    // 5. AI provider
-    const hasPrimaryAi = !!config.anthropicApiKey && config.anthropicApiKey !== 'sk-ant-...';
-    const hasGroq = !!config.groqApiKey;
-    const aiDetail =
-      hasPrimaryAi && hasGroq
-        ? 'Primary + Groq'
-        : hasPrimaryAi
-          ? 'Primary'
-          : hasGroq
-            ? 'Groq'
-            : 'None (local parsing only)';
+    // 5. Command parser
     checks.push({
-      name: 'ai_provider',
-      status: hasPrimaryAi || hasGroq ? 'ok' : 'warn',
-      detail: aiDetail,
+      name: 'command_parser',
+      status: 'ok',
+      detail: 'Deterministic (local regex)',
     });
 
     // 6. Wallet
@@ -323,7 +313,7 @@ program
       rpc: 'RPC connection',
       market_data: 'Market data',
       flash_trade_data: 'Flash Trade data',
-      ai_provider: 'AI provider',
+      command_parser: 'Command parser',
       wallet: 'Wallet',
     };
 

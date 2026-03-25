@@ -1,6 +1,6 @@
 {
   "name": "flash-terminal",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Deterministic on-chain trading infrastructure for Solana perpetual futures",
   "homepage": "https://flash-terminal-docs.vercel.app",
   "repository": {
@@ -60,7 +60,6 @@
   },
   "license": "MIT",
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.39.0",
     "@coral-xyz/anchor": "0.32.1",
     "@pythnetwork/client": "2.22.1",
     "@solana/spl-token": "0.4.14",
@@ -70,7 +69,6 @@
     "commander": "^13.1.0",
     "dotenv": "^16.4.7",
     "flash-sdk": "^15.9.0",
-    "openai": "^6.29.0",
     "ora": "^8.2.0",
     "zod": "^3.24.2"
   },

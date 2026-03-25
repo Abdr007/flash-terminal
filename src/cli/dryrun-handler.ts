@@ -1,5 +1,5 @@
 import chalk from 'chalk';
-import { AIInterpreter, OfflineInterpreter } from '../ai/interpreter.js';
+import { OfflineInterpreter } from '../ai/interpreter.js';
 import { ActionType, ParsedIntent, DryRunPreview, TradeSide, IFlashClient, FlashConfig } from '../types/index.js';
 import { resolveMarket } from '../utils/market-resolver.js';
 import { humanizeSdkError } from '../utils/format.js';
@@ -34,7 +34,7 @@ function resolveMarketAlias(input: string): string {
 }
 
 export interface DryRunDeps {
-  interpreter: AIInterpreter | OfflineInterpreter;
+  interpreter: OfflineInterpreter;
   flashClient: IFlashClient;
   config: FlashConfig;
 }

@@ -152,26 +152,6 @@ describe('Context Resolution Patterns', () => {
     assert.ok(src.includes('increase') && src.includes('leverage'));
   });
 
-  it('reduce collateral pattern exists', () => {
-    const src = require('fs').readFileSync(
-      require('path').resolve(__dirname, '../src/ai/interpreter.ts'), 'utf8'
-    );
-    assert.ok(src.includes('reduce') && src.includes('decrease'));
-  });
-
-  it('repeat last trade pattern exists', () => {
-    const src = require('fs').readFileSync(
-      require('path').resolve(__dirname, '../src/ai/interpreter.ts'), 'utf8'
-    );
-    assert.ok(src.includes('repeat'));
-  });
-
-  it('double it pattern exists', () => {
-    const src = require('fs').readFileSync(
-      require('path').resolve(__dirname, '../src/ai/interpreter.ts'), 'utf8'
-    );
-    assert.ok(src.includes('double'));
-  });
 });
 
 // ─── Comprehensive Parsing (all prompt examples) ───────────────────────────

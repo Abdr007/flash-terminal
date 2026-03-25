@@ -4,7 +4,7 @@ import { readFileSync, writeFileSync } from 'fs';
 import { homedir } from 'os';
 import { join } from 'path';
 import chalk from 'chalk';
-import { AIInterpreter, OfflineInterpreter, localParse } from '../ai/interpreter.js';
+import { OfflineInterpreter, localParse } from '../ai/interpreter.js';
 import { ToolEngine } from '../tools/engine.js';
 import {
   ToolContext,
@@ -194,7 +194,7 @@ interface IntelligenceData {
 
 export class FlashTerminal {
   private config: FlashConfig;
-  private interpreter: AIInterpreter | OfflineInterpreter;
+  private interpreter: OfflineInterpreter;
   private engine!: ToolEngine;
   private context!: ToolContext;
   private rl!: Interface;
@@ -250,19 +250,7 @@ export class FlashTerminal {
       minDelayBetweenTradesMs: config.minDelayBetweenTradesMs,
     });
 
-    const hasAiKey = config.anthropicApiKey && config.anthropicApiKey !== 'sk-ant-...';
-    const hasGroqKey = !!config.groqApiKey;
-
-    if (hasAiKey || hasGroqKey) {
-      this.interpreter = new AIInterpreter(
-        hasAiKey ? config.anthropicApiKey : '',
-        hasGroqKey ? config.groqApiKey : undefined,
-      );
-    } else {
-      console.log(chalk.yellow('\n  AI features disabled — no API key configured.'));
-      console.log(chalk.dim('  Set ANTHROPIC_API_KEY or GROQ_API_KEY in .env to enable AI analysis.'));
-      this.interpreter = new OfflineInterpreter();
-    }
+    this.interpreter = new OfflineInterpreter();
   }
 
   async start(): Promise<void> {

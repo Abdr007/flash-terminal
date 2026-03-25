@@ -1,1 +1,1 @@
-export { AIInterpreter, OfflineInterpreter } from './interpreter.js';
+export { OfflineInterpreter, localParse } from './interpreter.js';
