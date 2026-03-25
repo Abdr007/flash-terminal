@@ -88,18 +88,6 @@ describe('ConfigValidator', () => {
     expect(warnings.find(w => w.code === 'RPC_NOT_HTTPS')).toBeUndefined();
   });
 
-  it('warns when no AI API key is configured', () => {
-    delete process.env.ANTHROPIC_API_KEY;
-    delete process.env.GROQ_API_KEY;
-    const warnings = validateConfig();
-    expect(warnings.find(w => w.code === 'NO_AI_KEY')).toBeDefined();
-  });
-
-  it('does not warn when Anthropic key is set', () => {
-    process.env.ANTHROPIC_API_KEY = 'sk-ant-test';
-    const warnings = validateConfig();
-    expect(warnings.find(w => w.code === 'NO_AI_KEY')).toBeUndefined();
-  });
 
   it('warns when session loss > daily loss', () => {
     process.env.MAX_SESSION_LOSS_USD = '500';

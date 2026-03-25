@@ -70,15 +70,6 @@ export function validateConfig(): ConfigWarning[] {
     });
   }
 
-  // ── No API key configured ──
-  if (!process.env.ANTHROPIC_API_KEY && !process.env.GROQ_API_KEY) {
-    warnings.push({
-      level: 'warning',
-      code: 'NO_AI_KEY',
-      message: 'No ANTHROPIC_API_KEY or GROQ_API_KEY configured. AI command parsing will be unavailable.',
-    });
-  }
-
   // ── Session loss > daily loss conflict ──
   const sessionLoss = parseFloat(process.env.MAX_SESSION_LOSS_USD ?? '0');
   const dailyLoss = parseFloat(process.env.MAX_DAILY_LOSS_USD ?? '0');

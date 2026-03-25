@@ -1138,8 +1138,6 @@ export interface FlashConfig {
   backupRpcUrls: string[];
   pythnetUrl: string;
   walletPath: string;
-  anthropicApiKey: string;
-  groqApiKey: string;
   defaultPool: string;
   network: Network;
   simulationMode: boolean;
