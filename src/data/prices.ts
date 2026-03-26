@@ -1,9 +1,10 @@
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
+import { existsSync, readFileSync, mkdirSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
 import { getLogger } from '../utils/logger.js';
 import { getErrorMessage } from '../utils/retry.js';
 import { getServiceBreaker } from '../core/circuit-breaker-service.js';
+import { atomicWriteFileSync } from '../system/safe-file.js';
 
 export interface TokenPrice {
   symbol: string;
@@ -408,6 +409,7 @@ export class PriceService {
       const json = JSON.stringify(data);
 
       // Safety: don't write if too large
+      let toWrite = json;
       if (json.length > MAX_HISTORY_FILE_BYTES) {
         getLogger().warn('PRICE', `Price history too large to save (${json.length} bytes), trimming`);
         // Keep only the most recent half of entries per symbol
@@ -416,11 +418,11 @@ export class PriceService {
             snaps.splice(0, snaps.length - Math.floor(MAX_HISTORY_PER_SYMBOL / 2));
           }
         }
-        const trimmed = JSON.stringify({ ...data, symbols });
-        writeFileSync(HISTORY_FILE, trimmed, { mode: 0o600 });
-      } else {
-        writeFileSync(HISTORY_FILE, json, { mode: 0o600 });
+        toWrite = JSON.stringify({ ...data, symbols });
       }
+
+      // Atomic write: temp file → rename (original untouched on failure)
+      atomicWriteFileSync(HISTORY_FILE, toWrite);
 
       getLogger().debug('PRICE', `Saved price history for ${Object.keys(symbols).length} markets to disk`);
     } catch (error: unknown) {

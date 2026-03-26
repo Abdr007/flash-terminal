@@ -623,6 +623,16 @@ export class FlashTerminal {
       this.rpcManager.warmupConnections().catch(() => {});
     }, 12_000).unref();
 
+    // Silent version check — runs ONCE, 15s after startup, never spams
+    setTimeout(async () => {
+      try {
+        const { silentVersionCheck } = await import('../system/update-checker.js');
+        await silentVersionCheck();
+      } catch {
+        // Must never break the terminal
+      }
+    }, 15_000).unref();
+
     // Load plugins and register their tools
     if (this.config.noPlugins) {
       console.log(chalk.dim('  Plugins disabled (--no-plugins).'));
