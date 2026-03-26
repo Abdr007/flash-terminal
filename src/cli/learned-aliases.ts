@@ -58,7 +58,7 @@ const RESERVED = new Set([
   'close', 'open', 'long', 'short', 'dryrun', 'exit', 'quit',
   'dashboard', 'scan', 'analyze', 'risk', 'monitor', 'history',
   'trades', 'volume', 'funding', 'depth', 'inspect', 'earn',
-  'degen', 'config', 'status', 'fees', 'agent', 'autopilot',
+  'degen', 'config', 'status', 'fees',
 ]);
 
 /** Set a custom alias. */
