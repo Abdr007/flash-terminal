@@ -23,7 +23,7 @@
 </p>
 
 <p align="center">
-  <a href="https://flash-terminal-docs.vercel.app">Docs</a>&nbsp;&nbsp;·&nbsp;&nbsp;<a href="https://flash-terminal-docs.vercel.app/guide/getting-started">Quick Start</a>&nbsp;&nbsp;·&nbsp;&nbsp;<a href="https://flash-terminal-docs.vercel.app/reference/trading-commands">Commands</a>&nbsp;&nbsp;·&nbsp;&nbsp;<a href="https://github.com/Abdr007/flash-terminal/releases">Releases</a>&nbsp;&nbsp;·&nbsp;&nbsp;<a href="CONTRIBUTING.md">Contributing</a>
+  <a href="https://flash-terminal-docs.vercel.app">Docs</a>&nbsp;&nbsp;·&nbsp;&nbsp;<a href="https://flash-terminal-docs.vercel.app/guide/quick-start">Quick Start</a>&nbsp;&nbsp;·&nbsp;&nbsp;<a href="https://flash-terminal-docs.vercel.app/reference/trading-commands">Commands</a>&nbsp;&nbsp;·&nbsp;&nbsp;<a href="https://github.com/Abdr007/flash-terminal/releases">Releases</a>&nbsp;&nbsp;·&nbsp;&nbsp;<a href="CONTRIBUTING.md">Contributing</a>
 </p>
 
 ---
@@ -35,7 +35,7 @@ npm install -g flash-terminal
 flash
 ```
 
-Requires Node.js 20+. See [Getting Started](https://flash-terminal-docs.vercel.app/guide/getting-started) for full setup.
+Requires Node.js 20+. See [Quick Start](https://flash-terminal-docs.vercel.app/guide/quick-start) for full setup.
 
 ---
 
