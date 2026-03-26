@@ -1,5 +1,6 @@
 import { Connection } from '@solana/web3.js';
 import chalk from 'chalk';
+import { theme } from '../cli/theme.js';
 import { getLogger } from '../utils/logger.js';
 import { createConnection } from '../wallet/connection.js';
 import { getScheduler } from '../core/scheduler.js';
@@ -714,8 +715,7 @@ export class RpcManager {
     const active = this.activeEndpoint;
     const lines = [
       '',
-      chalk.bold('  RPC STATUS'),
-      chalk.dim('  ────────────────────────────'),
+      theme.titleBlock('RPC STATUS'),
       '',
       `  Active RPC:    ${chalk.cyan(active.label)}`,
       `  Endpoint:      ${chalk.dim(this.maskUrl(active.url))}`,
@@ -738,8 +738,8 @@ export class RpcManager {
 
     if (this.endpoints.length > 1) {
       lines.push('');
-      lines.push(chalk.bold('  All Endpoints'));
-      lines.push(chalk.dim('  ─────────────────────────'));
+      lines.push(`  ${theme.section('All Endpoints')}`);
+      lines.push(`  ${theme.separator(25)}`);
       for (let i = 0; i < this.endpoints.length; i++) {
         const ep = this.endpoints[i];
         const isActive = i === this.activeIndex;

@@ -199,7 +199,7 @@ export const tpSlStatusTool: ToolDefinition = {
         };
       }
 
-      const lines = ['', `  ${chalk.bold('ON-CHAIN TP/SL TARGETS')}`, chalk.dim(`  ${'─'.repeat(44)}`), ''];
+      const lines = [theme.titleBlock('ON-CHAIN TP/SL TARGETS'), ''];
 
       // Group by market-side
       const grouped = new Map<string, typeof triggerOrders>();
@@ -450,7 +450,7 @@ export const limitOrderListTool: ToolDefinition = {
         };
       }
 
-      const lines = ['', `  ${chalk.bold('ON-CHAIN ORDERS')}`, chalk.dim(`  ${'─'.repeat(60)}`), ''];
+      const lines = [theme.titleBlock('ON-CHAIN ORDERS'), ''];
 
       // Separate by type
       const limitOrders = orders.filter((o) => o.type === 'limit');

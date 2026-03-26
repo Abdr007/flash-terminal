@@ -642,11 +642,11 @@ export const flashClosePosition: ToolDefinition = {
         ? chalk.red.bold(`  CONFIRM TRANSACTION — ${titleLabel}`)
         : chalk.yellow(`  CONFIRM TRANSACTION — ${titleLabel}`),
       chalk.dim('  ─────────────────────────────────'),
-      `  Market:  ${chalk.bold(market)} ${colorSide(side)}`,
-      `  Pool:    ${chalk.cyan(pool)}`,
-      `  Action:  ${chalk.bold(closeDesc)}`,
+      `  Market:      ${chalk.bold(market)} ${colorSide(side)}`,
+      `  Pool:        ${chalk.cyan(pool)}`,
+      `  Action:      ${chalk.bold(closeDesc)}`,
       ...posLines,
-      `  Wallet:  ${chalk.dim(walletAddr)}`,
+      `  Wallet:      ${chalk.dim(walletAddr)}`,
       isLive ? `\n${chalk.red('  This will execute a REAL on-chain transaction.')}` : '',
       '',
     ];
@@ -722,16 +722,16 @@ export const flashClosePosition: ToolDefinition = {
             if (result.isPartial) {
               outputLines.push(chalk.green('  Partial Close Executed'));
               outputLines.push(chalk.dim('  ─────────────────'));
-              outputLines.push(`  Market:     ${chalk.bold(market)} ${colorSide(side)}`);
-              outputLines.push(`  Closed:     ${formatUsd(result.closedSizeUsd ?? 0)}`);
-              outputLines.push(`  Remaining:  ${formatUsd(result.remainingSizeUsd ?? 0)}`);
-              outputLines.push(`  Exit Price: ${formatPrice(result.exitPrice)}`);
+              outputLines.push(`  Market:            ${chalk.bold(market)} ${colorSide(side)}`);
+              outputLines.push(`  Closed:            ${formatUsd(result.closedSizeUsd ?? 0)}`);
+              outputLines.push(`  Remaining:         ${formatUsd(result.remainingSizeUsd ?? 0)}`);
+              outputLines.push(`  Exit Price:        ${formatPrice(result.exitPrice)}`);
               if (pnlStr) outputLines.push(pnlStr.trimEnd());
               outputLines.push(`  TX: ${chalk.dim(txLink)}`);
             } else {
               outputLines.push(chalk.green('  Position Closed'));
               outputLines.push(chalk.dim('  ─────────────────'));
-              outputLines.push(`  Exit Price: ${formatPrice(result.exitPrice)}`);
+              outputLines.push(`  Exit Price:        ${formatPrice(result.exitPrice)}`);
               if (pnlStr) outputLines.push(pnlStr.trimEnd());
               outputLines.push(`  TX: ${chalk.dim(txLink)}`);
             }
@@ -853,10 +853,10 @@ export const flashAddCollateral: ToolDefinition = {
           ? chalk.red.bold('  CONFIRM TRANSACTION — Add Collateral')
           : chalk.yellow('  CONFIRM TRANSACTION — Add Collateral'),
         chalk.dim('  ─────────────────────────────────'),
-        `  Market: ${chalk.bold(market)} ${colorSide(side)}`,
+        `  Market:      ${chalk.bold(market)} ${colorSide(side)}`,
         ...addPosLines,
-        `  Add:    ${formatUsd(amount)} ${chalk.dim('USDC')}`,
-        `  Wallet: ${chalk.dim(walletAddr)}`,
+        `  Add:         ${formatUsd(amount)} ${chalk.dim('USDC')}`,
+        `  Wallet:      ${chalk.dim(walletAddr)}`,
         '',
       ].join('\n'),
       requiresConfirmation: true,
@@ -1035,10 +1035,10 @@ export const flashRemoveCollateral: ToolDefinition = {
           ? chalk.red.bold('  CONFIRM TRANSACTION — Remove Collateral')
           : chalk.yellow('  CONFIRM TRANSACTION — Remove Collateral'),
         chalk.dim('  ─────────────────────────────────'),
-        `  Market:  ${chalk.bold(market)} ${colorSide(side)}`,
+        `  Market:      ${chalk.bold(market)} ${colorSide(side)}`,
         ...rmPosLines,
-        `  Remove:  ${formatUsd(amount)}`,
-        `  Wallet:  ${chalk.dim(walletAddr)}`,
+        `  Remove:      ${formatUsd(amount)}`,
+        `  Wallet:      ${chalk.dim(walletAddr)}`,
         '',
       ].join('\n'),
       requiresConfirmation: true,

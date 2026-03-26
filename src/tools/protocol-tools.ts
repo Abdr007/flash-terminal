@@ -78,9 +78,7 @@ export const protocolStatusTool: ToolDefinition = {
   parameters: z.object({}),
   execute: async (_params, context): Promise<ToolResult> => {
     const lines: string[] = [
-      '',
-      chalk.bold('  PROTOCOL STATUS'),
-      chalk.dim('  ────────────────────────────────────────'),
+      theme.titleBlock('PROTOCOL STATUS'),
       '',
     ];
 
@@ -219,7 +217,7 @@ export const rpcListTool: ToolDefinition = {
     }
     const endpoints = mgr.getEndpoints();
     const active = mgr.activeEndpoint;
-    const lines: string[] = ['', chalk.bold('  RPC Endpoints'), ''];
+    const lines: string[] = [theme.titleBlock('RPC ENDPOINTS'), ''];
     for (const ep of endpoints) {
       const isActive = ep.url === active.url;
       const marker = isActive ? chalk.green(' ● ') : chalk.dim(' ○ ');

@@ -25,9 +25,7 @@ export const walletImport: ToolDefinition = {
       return {
         success: true,
         message: [
-          '',
-          chalk.bold('  Import Wallet'),
-          chalk.dim('  ─────────────────'),
+          theme.titleBlock('IMPORT WALLET'),
           '',
           `  ${chalk.cyan('wallet import <name> <path>')}`,
           chalk.dim('  wallet import main ~/.config/solana/id.json'),
@@ -106,7 +104,7 @@ export const walletList: ToolDefinition = {
       };
     }
 
-    const lines = ['', chalk.bold('  Registered Wallets'), chalk.dim('  ─────────────────')];
+    const lines = [theme.titleBlock('REGISTERED WALLETS')];
 
     for (const name of wallets) {
       const isDefault = name === defaultName;

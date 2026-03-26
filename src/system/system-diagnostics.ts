@@ -35,7 +35,7 @@ export class SystemDiagnostics {
    * Full system status report.
    */
   async systemStatus(): Promise<string> {
-    const lines: string[] = ['', chalk.bold('  SYSTEM STATUS'), chalk.dim('  ────────────────────────────'), ''];
+    const lines: string[] = [theme.titleBlock('SYSTEM STATUS'), ''];
 
     // Build
     lines.push(chalk.bold('  Build'));
@@ -122,9 +122,7 @@ export class SystemDiagnostics {
   async rpcTest(): Promise<string> {
     const results = await this.rpcManager.checkAllHealth();
     const lines: string[] = [
-      '',
-      chalk.bold('  RPC DIAGNOSTIC TEST'),
-      chalk.dim('  ────────────────────────────────────────'),
+      theme.titleBlock('RPC DIAGNOSTIC TEST'),
       '',
     ];
 
