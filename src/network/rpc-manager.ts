@@ -403,7 +403,6 @@ export class RpcManager {
       if (Date.now() - this._allDownSince > 60_000) {
         this._allEndpointsDown = false;
         this._allDownSince = 0;
-        this._allDownSince = 0;
         getLogger().info('RPC', 'Read-only mode auto-expired — re-evaluating endpoint health');
       }
     }

@@ -231,6 +231,10 @@ export class FlashTerminal {
   private lastCommandMs = 0;
   /** True when all RPC endpoints are unreachable — blocks trade commands */
   private degradedMode = false;
+  /** Tracks whether the degraded-mode entry banner has been shown (prevents spam) */
+  private degradedBannerShown = false;
+  /** Timestamp when degraded mode was entered */
+  private degradedSince = 0;
 
   constructor(config: FlashConfig) {
     this.config = config;
@@ -517,9 +521,16 @@ export class FlashTerminal {
         if (this.degradedMode) {
           this.degradedMode = false;
           getRuntimeState()?.markRecovered();
-          console.log(chalk.green('\n  RPC connectivity restored. Trading commands re-enabled.'));
+          if (this.degradedBannerShown) {
+            const downDuration = this.degradedSince > 0
+              ? ` (down for ${Math.round((Date.now() - this.degradedSince) / 1000)}s)`
+              : '';
+            console.log(chalk.green(`\n  ✔ Connection restored${downDuration} — trading re-enabled`));
+            this.degradedBannerShown = false;
+            this.degradedSince = 0;
+          }
         }
-        console.log(chalk.cyan(`\n  ℹ RPC failover triggered → ${ep.label}`));
+        console.log(chalk.cyan(`\n  ℹ RPC failover → ${ep.label}`));
       });
     }
 
@@ -541,10 +552,39 @@ export class FlashTerminal {
               this.degradedMode = this.rpcManager.allEndpointsDown;
               if (this.degradedMode && !wasDown) {
                 getRuntimeState()?.markDegraded();
-                console.log(chalk.red('\n  All RPC endpoints unavailable. Terminal in read-only mode.'));
-                console.log(chalk.dim('  Trading commands disabled until connectivity is restored.\n'));
+                this.degradedSince = Date.now();
+                // Show comprehensive banner ONCE per failure event
+                if (!this.degradedBannerShown) {
+                  this.degradedBannerShown = true;
+                  console.log('');
+                  console.log(chalk.yellow('  ─────────────────────────────────────────'));
+                  console.log(chalk.yellow.bold('  NETWORK ISSUE — RPC UNAVAILABLE'));
+                  console.log(chalk.yellow('  ─────────────────────────────────────────'));
+                  console.log('');
+                  console.log(chalk.dim('  Unable to reach the blockchain (all RPC endpoints failed).'));
+                  console.log('');
+                  console.log(`  ${chalk.green('✔')} Trading is temporarily disabled`);
+                  console.log(`  ${chalk.green('✔')} Terminal is running in read-only mode`);
+                  console.log('');
+                  console.log(chalk.dim('  The system is retrying every ~15 seconds.'));
+                  console.log(chalk.dim('  Trading will automatically resume once connection is restored.'));
+                  console.log('');
+                  console.log(chalk.dim('  If this persists: check your internet or update RPC_URL in .env'));
+                  console.log('');
+                }
               } else if (!this.degradedMode && wasDown) {
                 getRuntimeState()?.markRecovered();
+                // Show recovery message ONCE
+                if (this.degradedBannerShown) {
+                  const downDuration = this.degradedSince > 0
+                    ? ` (down for ${Math.round((Date.now() - this.degradedSince) / 1000)}s)`
+                    : '';
+                  console.log('');
+                  console.log(chalk.green(`  ✔ Connection restored${downDuration} — trading re-enabled`));
+                  console.log('');
+                  this.degradedBannerShown = false;
+                  this.degradedSince = 0;
+                }
               }
             },
             baseIntervalMs: 30_000,
@@ -2737,9 +2777,8 @@ export class FlashTerminal {
         console.log(jsonStringify(jsonError(intent.action, ErrorCode.DEGRADED_MODE, 'All RPC endpoints unavailable. Terminal running in read-only mode.', { blocked_action: intent.action })));
       } else {
         console.log('');
-        console.log(chalk.red('  All RPC endpoints unavailable. Terminal running in read-only mode.'));
-        console.log(chalk.dim('  Trading commands are disabled until RPC connectivity is restored.'));
-        console.log(chalk.dim('  Read-only commands (prices, markets, portfolio, help) still work.'));
+        console.log(chalk.yellow('  Trading unavailable — RPC connection down.'));
+        console.log(chalk.dim('  The system is retrying automatically. Read-only commands still work.'));
         console.log('');
       }
       this.restoreWallet(walletRestoreData);
