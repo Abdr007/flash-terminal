@@ -735,6 +735,33 @@ export class FlashClient implements IFlashClient {
       if (!acctInfo) {
         logger.info('REFERRAL', 'User referral PDA not found on-chain. Auto-creating...');
         await this.autoCreateReferralAccount(params.userReferralAccount);
+      } else {
+        // PDA exists — verify it's linked to the correct referrer
+        // The referral account data contains the referrer's token stake account
+        // at a known offset. If it doesn't match, warn the user.
+        try {
+          const expectedReferrer = new PublicKey(this.config.referrerAddress!);
+          const [expectedStake] = PublicKey.findProgramAddressSync(
+            [Buffer.from('token_stake'), expectedReferrer.toBuffer()],
+            this.poolConfig.programId,
+          );
+          // Referral account layout: 8 bytes discriminator, then referrer stake account (32 bytes)
+          if (acctInfo.data.length >= 40) {
+            const storedStake = new PublicKey(acctInfo.data.subarray(8, 40));
+            if (!storedStake.equals(expectedStake)) {
+              logger.warn(
+                'REFERRAL',
+                `Referral PDA exists but is linked to wrong referrer. ` +
+                `Expected ${expectedStake.toBase58().slice(0, 8)}... but found ${storedStake.toBase58().slice(0, 8)}... ` +
+                `This user's referral cannot be updated on-chain. Contact Flash Trade support.`,
+              );
+            } else {
+              logger.info('REFERRAL', 'Referral PDA verified — correctly linked to configured referrer.');
+            }
+          }
+        } catch {
+          // Best-effort verification — don't block trading
+        }
       }
     } catch {
       // RPC failure — keep referral params, let the trade attempt decide
