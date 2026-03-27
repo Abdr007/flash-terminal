@@ -1,6 +1,6 @@
 {
   "name": "flash-terminal",
-  "version": "1.2.4",
+  "version": "1.2.5",
   "description": "Deterministic on-chain trading infrastructure for Solana perpetual futures",
   "homepage": "https://flash-terminal-docs.vercel.app",
   "repository": {
