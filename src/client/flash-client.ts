@@ -752,22 +752,28 @@ export class FlashClient implements IFlashClient {
       const userPk = this.wallet.publicKey;
       const programId = this.poolConfig.programId;
 
-      // Ensure token stake account exists (required by addReferral)
-      const [tokenStakeAccount] = PublicKey.findProgramAddressSync(
+      // Ensure the USER's token stake account exists (required by addReferral)
+      const [userTokenStakeAccount] = PublicKey.findProgramAddressSync(
         [Buffer.from('token_stake'), userPk.toBuffer()],
         programId,
       );
 
-      // Check if token stake account exists; if not, create it with 0 deposit
-      const stakeAcctInfo = await this.connection.getAccountInfo(tokenStakeAccount);
+      const stakeAcctInfo = await this.connection.getAccountInfo(userTokenStakeAccount);
       if (!stakeAcctInfo) {
-        logger.info('REFERRAL', 'Creating token stake account for referral setup...');
+        logger.info('REFERRAL', 'Creating user token stake account for referral setup...');
         const depositResult = await this.perpClient.depositTokenStake(userPk, userPk, BN_ZERO, this.poolConfig);
         await this.sendTx(depositResult.instructions, depositResult.additionalSigners, this.poolConfig);
       }
 
-      // Create the referral account
-      const result = await this.perpClient.addReferral(tokenStakeAccount, referralPDA);
+      // Derive the REFERRER's token stake account — this links the user to the referrer on-chain
+      const referrerPk = new PublicKey(this.config.referrerAddress!);
+      const [referrerTokenStakeAccount] = PublicKey.findProgramAddressSync(
+        [Buffer.from('token_stake'), referrerPk.toBuffer()],
+        programId,
+      );
+
+      // Create the referral link: associates user's referral PDA with the referrer's stake account
+      const result = await this.perpClient.addReferral(referrerTokenStakeAccount, referralPDA);
       await this.sendTx(result.instructions, result.additionalSigners, this.poolConfig);
 
       logger.info('REFERRAL', `Referral account created: ${referralPDA.toBase58().slice(0, 8)}...`);
