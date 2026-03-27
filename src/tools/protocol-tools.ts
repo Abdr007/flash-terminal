@@ -225,7 +225,8 @@ export const rpcListTool: ToolDefinition = {
       const latency = mgr.getEndpointLatency(ep.url);
       const latStr = latency > 0 ? chalk.dim(` (${latency}ms)`) : '';
       lines.push(`  ${marker} ${label}${latStr}`);
-      lines.push(chalk.dim(`      ${ep.url}`));
+      const maskedUrl = ep.url.replace(/([?&])(api[-_]?key|key|token|secret)=([^&]+)/gi, (_, prefix, param) => `${prefix}${param}=${'*'.repeat(8)}`);
+      lines.push(chalk.dim(`      ${maskedUrl}`));
     }
     lines.push('');
     lines.push(chalk.dim('  Commands: rpc set <url> | rpc add <url> | rpc remove <url>'));

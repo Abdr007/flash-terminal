@@ -1598,7 +1598,8 @@ export class FlashTerminal {
       saveConfigField('rpc_url', validUrl);
       // Update config in memory
       this.config.rpcUrl = validUrl;
-      console.log(chalk.green(`\n  Primary RPC set to: ${validUrl}\n`));
+      const masked = validUrl.replace(/([?&])(api[-_]?key|key|token|secret)=([^&]+)/gi, (_, prefix, param, _val) => `${prefix}${param}=${'*'.repeat(8)}`);
+      console.log(chalk.green(`\n  Primary RPC set to: ${masked}\n`));
     } catch (err) {
       console.log(chalk.red(`  Invalid RPC URL: ${getErrorMessage(err)}`));
     }
@@ -1629,7 +1630,8 @@ export class FlashTerminal {
       currentBackups.push(validUrl);
       this.config.backupRpcUrls = currentBackups;
       saveConfigField('backup_rpc_urls', currentBackups);
-      console.log(chalk.green(`\n  Backup RPC added: ${validUrl}`));
+      const masked = validUrl.replace(/([?&])(api[-_]?key|key|token|secret)=([^&]+)/gi, (_, prefix, param, _val) => `${prefix}${param}=${'*'.repeat(8)}`);
+      console.log(chalk.green(`\n  Backup RPC added: ${masked}`));
       console.log(chalk.dim(`  Total endpoints: ${mgr.totalEndpoints}\n`));
     } catch (err) {
       console.log(chalk.red(`  Invalid RPC URL: ${getErrorMessage(err)}`));
