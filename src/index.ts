@@ -18,6 +18,11 @@ console.error = (...args: unknown[]) => {
     // and interleave with the user's CLI prompt making it unreadable.
     return;
   }
+  if (msg.startsWith('ws error:') || msg.includes('ECONNRESET') || msg.includes('ETIMEDOUT')) {
+    // Drop WebSocket reconnect noise — happens when laptop sleeps or network drops.
+    // The RPC manager handles failover automatically.
+    return;
+  }
   _origConsoleError(...args);
 };
 
