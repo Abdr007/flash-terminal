@@ -53,6 +53,14 @@ function parseLimitOrder(input: string): ParsedIntent | null {
   // Strip "limit" or "limit order" prefix
   let body = input.replace(/^limit\s+(?:order\s+)?/, '');
 
+  // Split off TP/SL suffix before main parse (e.g. "... tp 100000 sl 25000")
+  let tpSlPart = '';
+  const tpSlSplit = body.match(/^(.*?)\b((?:set\s+)?(?:tp|sl)\b.*)$/);
+  if (tpSlSplit) {
+    body = tpSlSplit[1].trim();
+    tpSlPart = tpSlSplit[2];
+  }
+
   // Extract price: "@ $82" or "at $82" or "at 82" — must be present
   const priceMatch = body.match(/(?:@|at)\s+\$?(\d+(?:\.\d+)?)\s*$/);
   if (!priceMatch) return null;
@@ -95,14 +103,21 @@ function parseLimitOrder(input: string): ParsedIntent | null {
   if (!Number.isFinite(collateral) || collateral <= 0) return null;
   if (!Number.isFinite(leverage) || leverage < 1) return null;
 
-  return {
+  const result: Record<string, unknown> = {
     action: ActionType.LimitOrder,
     market: resolveMarket(market),
     side,
     leverage,
     collateral,
     limitPrice,
-  } as ParsedIntent;
+  };
+
+  // Parse TP/SL suffix if present
+  if (tpSlPart) {
+    parseTpSlSuffix(tpSlPart, result);
+  }
+
+  return result as ParsedIntent;
 }
 
 /** Levenshtein edit distance (max 3 for performance). */

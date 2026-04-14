@@ -431,6 +431,8 @@ export const LimitOrderSchema = z.object({
   leverage: z.number().min(1).max(100),
   collateral: z.number().positive().max(10_000_000),
   limitPrice: z.number().positive(),
+  takeProfit: z.number().positive().optional(),
+  stopLoss: z.number().positive().optional(),
 });
 
 export const CancelOrderSchema = z.object({
@@ -906,6 +908,33 @@ export interface DryRunPreview {
   simulationUnitsConsumed?: number;
 }
 
+// ─── Built Transaction (unsigned, ready for signing) ─────────────────────
+
+export interface BuiltTradeTransaction {
+  /** Serialized unsigned VersionedTransaction (base64). Decode, sign, send. */
+  serializedTransaction: string;
+  /** Additional signers required beyond the wallet (e.g. position keypair). */
+  additionalSignerPubkeys: string[];
+  /** Trade metadata for UI display — all values computed by the CLI engine. */
+  metadata: {
+    market: string;
+    side: TradeSide;
+    collateral: number;
+    leverage: number;
+    positionSize: number;
+    entryPrice: number;
+    liquidationPrice: number;
+    estimatedFee: number;
+    computeUnits: number;
+    priorityFee: number;
+    instructionCount: number;
+    accountCount: number;
+    transactionSize: number;
+    programId: string;
+    isSwapAndOpen: boolean;
+  };
+}
+
 // ─── Client Interfaces ───────────────────────────────────────────────────────
 
 export interface IFlashClient {
@@ -958,6 +987,18 @@ export interface IFlashClient {
     leverage: number,
     collateralToken?: string,
   ): Promise<DryRunPreview>;
+
+  /**
+   * Build an unsigned trade transaction using the CLI engine — ONE builder, ONE output.
+   * UI consumers call this and sign externally. No duplicate logic allowed.
+   */
+  buildTradeTransaction?(
+    market: string,
+    side: TradeSide,
+    collateralAmount: number,
+    leverage: number,
+    collateralToken?: string,
+  ): Promise<BuiltTradeTransaction>;
 
   // ─── On-Chain Order Methods ─────────────────────────────────────────────
 

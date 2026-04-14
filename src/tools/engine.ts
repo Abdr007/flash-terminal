@@ -307,6 +307,8 @@ export class ToolEngine {
             leverage: intent.leverage,
             collateral: intent.collateral,
             limitPrice: intent.limitPrice,
+            ...(intent.takeProfit != null && { takeProfit: intent.takeProfit }),
+            ...(intent.stopLoss != null && { stopLoss: intent.stopLoss }),
           },
         };
 

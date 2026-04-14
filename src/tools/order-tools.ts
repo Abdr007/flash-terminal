@@ -231,21 +231,25 @@ export const tpSlStatusTool: ToolDefinition = {
 
 export const limitOrderPlaceTool: ToolDefinition = {
   name: 'limit_order_place',
-  description: 'Place a limit order (on-chain)',
+  description: 'Place a limit order (on-chain), optionally with TP/SL',
   parameters: z.object({
     market: z.string(),
     side: z.nativeEnum(TradeSide),
     leverage: z.number().min(1).max(100),
     collateral: z.number().positive(),
     limitPrice: z.number().positive(),
+    takeProfit: z.number().positive().optional(),
+    stopLoss: z.number().positive().optional(),
   }),
   async execute(params: Record<string, unknown>, context: ToolContext): Promise<ToolResult> {
-    const { market, side, leverage, collateral, limitPrice } = params as {
+    const { market, side, leverage, collateral, limitPrice, takeProfit, stopLoss } = params as {
       market: string;
       side: TradeSide;
       leverage: number;
       collateral: number;
       limitPrice: number;
+      takeProfit?: number;
+      stopLoss?: number;
     };
 
     if (context.simulationMode) {
@@ -263,28 +267,133 @@ export const limitOrderPlaceTool: ToolDefinition = {
       return { success: false, message: '  Limit orders are not supported by the current client.' };
     }
 
+    // ── Client-side limit price direction validation ──
+    // LONG limit = buy the dip → limitPrice must be below current price
+    // SHORT limit = sell the rally → limitPrice must be above current price
     try {
-      const result = await client.placeLimitOrder(market, side, collateral, leverage, limitPrice);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- getPrices/getPoolConfigForMarket are on FlashClient but not IFlashClient
+      const clientAny = client as Record<string, any>;
+      if (typeof clientAny.getPrices === 'function' && typeof clientAny.getPoolConfigForMarket === 'function') {
+        const poolConfig = clientAny.getPoolConfigForMarket(market) as { tokens: { symbol: string; pythTicker?: string }[] } | undefined;
+        if (poolConfig) {
+          const tokens = poolConfig.tokens.map((t) => ({ symbol: t.symbol, pythTicker: t.pythTicker ?? '' }));
+          const priceMap: Map<string, { uiPrice: number }> = await clientAny.getPrices(tokens);
+          const targetSymbol = market.toUpperCase() === 'SOL' ? 'SOL' : market.toUpperCase();
+          const currentPriceData = priceMap.get(targetSymbol);
+          if (currentPriceData && currentPriceData.uiPrice > 0) {
+            const currentPrice = currentPriceData.uiPrice;
+            if (side === TradeSide.Long && limitPrice > currentPrice) {
+              return {
+                success: false,
+                message: [
+                  '',
+                  chalk.red('  Invalid limit price for LONG order.'),
+                  '',
+                  `  Current ${market.toUpperCase()} price: $${currentPrice.toFixed(2)}`,
+                  `  Your limit price:   $${limitPrice.toFixed(2)}`,
+                  '',
+                  chalk.yellow('  LONG limit orders trigger when price drops TO or BELOW the limit.'),
+                  chalk.yellow('  Set a price below the current market price.'),
+                  '',
+                  chalk.dim(`  Example: limit long ${market} at ${(currentPrice * 0.95).toFixed(0)} ${leverage}x $${collateral}`),
+                  '',
+                ].join('\n'),
+              };
+            }
+            if (side === TradeSide.Short && limitPrice < currentPrice) {
+              return {
+                success: false,
+                message: [
+                  '',
+                  chalk.red('  Invalid limit price for SHORT order.'),
+                  '',
+                  `  Current ${market.toUpperCase()} price: $${currentPrice.toFixed(2)}`,
+                  `  Your limit price:   $${limitPrice.toFixed(2)}`,
+                  '',
+                  chalk.yellow('  SHORT limit orders trigger when price rises TO or ABOVE the limit.'),
+                  chalk.yellow('  Set a price above the current market price.'),
+                  '',
+                  chalk.dim(`  Example: limit short ${market} at ${(currentPrice * 1.05).toFixed(0)} ${leverage}x $${collateral}`),
+                  '',
+                ].join('\n'),
+              };
+            }
+
+            // Validate TP/SL direction relative to limit price
+            if (takeProfit != null) {
+              if (side === TradeSide.Long && takeProfit <= limitPrice) {
+                return {
+                  success: false,
+                  message: chalk.red(`  Take-profit ($${takeProfit}) must be above limit price ($${limitPrice}) for LONG orders.`),
+                };
+              }
+              if (side === TradeSide.Short && takeProfit >= limitPrice) {
+                return {
+                  success: false,
+                  message: chalk.red(`  Take-profit ($${takeProfit}) must be below limit price ($${limitPrice}) for SHORT orders.`),
+                };
+              }
+            }
+            if (stopLoss != null) {
+              if (side === TradeSide.Long && stopLoss >= limitPrice) {
+                return {
+                  success: false,
+                  message: chalk.red(`  Stop-loss ($${stopLoss}) must be below limit price ($${limitPrice}) for LONG orders.`),
+                };
+              }
+              if (side === TradeSide.Short && stopLoss <= limitPrice) {
+                return {
+                  success: false,
+                  message: chalk.red(`  Stop-loss ($${stopLoss}) must be above limit price ($${limitPrice}) for SHORT orders.`),
+                };
+              }
+            }
+          }
+        }
+      }
+    } catch {
+      // Price fetch failed — continue without client-side validation, let on-chain validate
+    }
+
+    try {
+      const result = await client.placeLimitOrder(market, side, collateral, leverage, limitPrice, stopLoss, takeProfit);
       const txLink = `https://solscan.io/tx/${result.txSignature}`;
-      return {
-        success: true,
-        message: [
-          '',
-          chalk.green('  Limit Order Placed (On-Chain)'),
-          chalk.dim('  ─────────────────────────────'),
-          `  Market:       ${result.market} ${result.side.toUpperCase()}`,
-          `  Leverage:     ${leverage}x`,
-          `  Collateral:   $${collateral.toFixed(2)}`,
-          `  Size:         $${result.sizeUsd.toFixed(2)}`,
-          `  Limit Price:  $${limitPrice.toFixed(2)}`,
-          chalk.dim(`  TX: ${txLink}`),
-          '',
-          chalk.dim('  This order is on-chain and visible on flash.trade'),
-          '',
-        ].join('\n'),
-      };
+      const lines = [
+        '',
+        chalk.green('  Limit Order Placed (On-Chain)'),
+        chalk.dim('  ─────────────────────────────'),
+        `  Market:       ${result.market} ${result.side.toUpperCase()}`,
+        `  Leverage:     ${leverage}x`,
+        `  Collateral:   $${collateral.toFixed(2)}`,
+        `  Size:         $${result.sizeUsd.toFixed(2)}`,
+        `  Limit Price:  $${limitPrice.toFixed(2)}`,
+      ];
+      if (takeProfit != null) lines.push(`  Take-Profit:  $${takeProfit.toFixed(2)}`);
+      if (stopLoss != null) lines.push(`  Stop-Loss:    $${stopLoss.toFixed(2)}`);
+      lines.push(
+        chalk.dim(`  TX: ${txLink}`),
+        '',
+        chalk.dim('  This order is on-chain and visible on flash.trade'),
+        '',
+      );
+      return { success: true, message: lines.join('\n') };
     } catch (err: unknown) {
       const errMsg = getErrorMessage(err);
+      // Custom:6056 = InvalidLimitPrice — protocol rejected the limit price
+      if (errMsg.includes('6056') || errMsg.includes('InvalidLimitPrice')) {
+        return {
+          success: false,
+          message: [
+            '',
+            chalk.red('  Limit order failed: invalid limit price.'),
+            '',
+            chalk.yellow('  The Flash Trade protocol rejected the price.'),
+            chalk.dim('  For LONG limits: price must be below the current market price.'),
+            chalk.dim('  For SHORT limits: price must be above the current market price.'),
+            '',
+          ].join('\n'),
+        };
+      }
       // Custom:2003 = ConstraintRaw on oracle account — oracle price update may have failed
       if (errMsg.includes('2003') || errMsg.includes('ConstraintRaw') || errMsg.includes('InvalidArgument')) {
         return {
